@@ -42,12 +42,12 @@ router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 class AgentRunRequest(BaseModel):
     """Request para ejecutar agente"""
-    input: str | Dict[str, Any] = Field(..., description="Input para el agente")
+    input: str | Dict[str, Any] = Field(..., max_length=10000, description="Input para el agente")
     session_id: str | None = Field(None, description="ID de sesión existente")
     user_id: str = Field(..., description="ID de usuario")
     tenant_id: str = Field(..., description="ID de tenant")
     stream: bool = Field(default=False, description="Streaming response")
-    max_iterations: int | None = Field(None, ge=1, description="Máximo de iteraciones")
+    max_iterations: int | None = Field(None, ge=1, le=100, description="Máximo de iteraciones")
 
 class AgentRunResponse(BaseModel):
     """Response de ejecución de agente"""
@@ -156,6 +156,87 @@ async def readiness() -> ReadinessResponse:
         status="ready" if all_ready else "not_ready",
         checks=checks
     )
+```
+
+### 1.4 Rate Limiting
+
+```python
+# yaml-agno/src/api/middleware/rate_limit.py
+
+from fastapi import Request, HTTPException
+from typing import Dict
+import time
+
+class RateLimiter:
+    """
+    Rate limiter por tenant e IP.
+    
+    Límites:
+    - Por tenant: 100 requests/minuto
+    - Por IP: 20 requests/minuto
+    """
+    
+    def __init__(self):
+        # tenant_id -> {timestamp, count}
+        self.tenant_buckets: Dict[str, Dict[str, int]] = {}
+        # ip -> {timestamp, count}
+        self.ip_buckets: Dict[str, Dict[str, int]] = {}
+        
+        self.tenant_limit = 100  # requests per minute
+        self.ip_limit = 20  # requests per minute
+        self.window = 60  # seconds
+    
+    async def check_rate_limit(
+        self,
+        tenant_id: str,
+        client_ip: str
+    ) -> None:
+        """
+        Verifica rate limits.
+        
+        Raises:
+            HTTPException: 429 Too Many Requests
+        """
+        now = int(time.time())
+        
+        # Check tenant limit
+        if not self._check_bucket(self.tenant_buckets, tenant_id, now, self.tenant_limit):
+            raise HTTPException(
+                status_code=429,
+                detail=f"Tenant rate limit exceeded: {self.tenant_limit} req/min"
+            )
+        
+        # Check IP limit
+        if not self._check_bucket(self.ip_buckets, client_ip, now, self.ip_limit):
+            raise HTTPException(
+                status_code=429,
+                detail=f"IP rate limit exceeded: {self.ip_limit} req/min"
+            )
+    
+    def _check_bucket(
+        self,
+        buckets: Dict[str, Dict[str, int]],
+        key: str,
+        now: int,
+        limit: int
+    ) -> bool:
+        """Verifica si bucket permite request"""
+        if key not in buckets:
+            buckets[key] = {"timestamp": now, "count": 0}
+        
+        bucket = buckets[key]
+        
+        # Reset si window expiró
+        if now - bucket["timestamp"] >= self.window:
+            bucket = {"timestamp": now, "count": 0}
+            buckets[key] = bucket
+        
+        # Verificar límite
+        if bucket["count"] >= limit:
+            return False
+        
+        bucket["count"] += 1
+        return True
 ```
 
 ---
