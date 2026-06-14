@@ -294,14 +294,28 @@ import re
 from typing import Any, Dict
 
 class PIISanitizer:
-    """Sanitiza PII antes de persistir"""
+    """
+    Sanitiza PII antes de persistir.
     
-    # Patterns para detectar PII
+    NOTE: Considerar migrar a presidio (Microsoft Presidio) para producción:
+    - Soporta más de 50 tipos de PII
+    - better detection con NLP
+    - Reducir false positives
+    - https://github.com/microsoft/presidio
+    """
+    
+    # Patterns para detectar PII (formatos internacionales) (formatos internacionales)
     PATTERNS = {
         "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
         "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
         "credit_card": r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b",
         "phone": r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b",
+        # Internacional - Documentos de identidad
+        "dni_ar": r"\b\d{7,8}\b",  # DNI Argentina: 7-8 dígitos
+        "rfc_mx": r"\b[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]\d\b",  # RFC México
+        "cpf_br": r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b",  # CPF Brasil
+        # Internacional - Teléfonos
+        "phone_intl": r"\b\+?\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b",
     }
     
     def sanitize(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -352,6 +366,48 @@ class PIISanitizer:
 ### 3.3 Enmascaramiento de Secretos
 
 **Estrategia**: Detectar y enmascarar secretos antes de persistir
+
+**SecretManager Integration**:
+```python
+# yaml-agno/src/memory/secret_manager_integration.py
+
+from typing import Protocol
+
+class SecretManager(Protocol):
+    """Abstracción Zero-Trust para gestión de credenciales"""
+    async def get_secret(self, key: str) -> str: ...
+    async def get_secret_json(self, key: str) -> dict: ...
+
+class SecureMemoryManager:
+    def __init__(self, secret_manager: SecretManager):
+        self.secrets = secret_manager
+    
+    async def mask_secrets_in_memory(self, memory_data: dict) -> dict:
+        """Enmascara secretos antes de persistir en memoria"""
+        
+        # Patrones de secretos a detectar
+        secret_patterns = ["api_key", "secret", "token", "password"]
+        
+        sanitized = {}
+        for key, value in memory_data.items():
+            if any(pattern in key.lower() for pattern in secret_patterns):
+                # Obtener valor seguro desde SecretManager
+                if isinstance(value, str) and len(value) > 8:
+                    # Mostrar solo primeros 4 y últimos 4 caracteres
+                    sanitized[key] = f"{value[:4]}...{value[-4:]}"
+                else:
+                    sanitized[key] = "***"
+            else:
+                sanitized[key] = value
+        
+        return sanitized
+```
+
+**Do's & Don'ts**:
+- ✅ Rotación automática con TTL corto
+- ✅ Auditoría de accesos a secretos
+- ❌ NO persistir secretos en variables de entorno
+- ❌ NO listar todos los secretos
 
 ```python
 # yaml-agno/src/memory/secret_sanitizer.py
