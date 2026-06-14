@@ -59,6 +59,13 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Dict, Any, Literal
 from enum import Enum
 
+# Type aliases PEP 695
+type Instructions = str
+type ModelReference = str
+type ToolConfiguration = Dict[str, Any]
+type ToolkitName = str
+type Tag = str
+
 class ModelProvider(str, Enum):
     """Proveedores de modelos soportados"""
     OPENAI = "openai"
@@ -88,12 +95,12 @@ class AgentConfig(BaseModel):
     model: str = Field(..., pattern=r"^[a-z_]+/[a-z0-9_-]+$", description="Model ID (ej: openai/gpt-4o)")
     
     # Comportamiento
-    instructions: str | None = Field(None, description="System prompt del agente")
+    instructions: str | None = Field(None, max_length=50000, description="System prompt del agente")
     response_model: Dict[str, Any] | None = Field(None, description="Schema de salida estructurada")
     
     # Herramientas
-    tools: list[Dict[str, Any]] = Field(default_factory=list, description="Configuración de tools")
-    toolkits: list[str] = Field(default_factory=list, description="Nombres de toolkits predefinidos")
+    tools: list[Dict[str, Any]] = Field(default_factory=list, max_length=50, description="Configuración de tools")
+    toolkits: list[str] = Field(default_factory=list, max_length=20, description="Nombres de toolkits predefinidos")
     
     # Conocimiento
     knowledge: list[Dict[str, Any]] | None = Field(None, description="Fuentes de conocimiento")
@@ -106,7 +113,7 @@ class AgentConfig(BaseModel):
     
     # Metadata
     description: str | None = Field(None, description="Descripción del agente")
-    tags: list[str] = Field(default_factory=list, description="Tags para organización")
+    tags: list[str] = Field(default_factory=list, max_length=20, description="Tags para organización")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Metadata adicional")
     
     @field_validator("model")
