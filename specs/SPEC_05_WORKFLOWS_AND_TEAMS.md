@@ -184,9 +184,185 @@ class TeamMessage(BaseModel):
 
 ---
 
-## 3. ERROR RECOVERY STATE MACHINE
+## 3. CORE INFRA MANAGER INTEGRATION
 
-### 3.1 Máquina de Estados para Recovery
+### 3.1 ErrorHandlingManager Integration
+
+**Responsabilidad**: Clasificación, reporte y decisión técnica sobre fallos.
+
+**Port (Protocol)**:
+```python
+from typing import Protocol
+from enum import Enum
+
+class ErrorCategory(str, Enum):
+    TRANSIENT = "transient"      # Retry posible
+    PERMANENT = "permanent"      # Fail-fast
+    VALIDATION = "validation"    # Input error
+    AUTH = "auth"                # Authentication/authorization
+    RATE_LIMIT = "rate_limit"    # Backoff requerido
+    CRITICAL = "critical"        # Manual review
+
+class ErrorHandlingManager(Protocol):
+    def categorize_error(self, error: Exception) -> ErrorCategory: ...
+    def should_retry(self, error: Exception) -> bool: ...
+    async def report_error(self, error: Exception, context: dict) -> None: ...
+```
+
+**Uso en yaml-agno**:
+```python
+# yaml-agno/src/workflows/error_aware_executor.py
+
+class ErrorAwareWorkflowExecutor:
+    def __init__(self, error_manager: ErrorHandlingManager):
+        self.error_manager = error_manager
+    
+    async def execute_workflow_step(
+        self,
+        step: WorkflowStep,
+        retry_policy: RetryPolicy
+    ) -> Result:
+        """Ejecuta step con clasificación de errores"""
+        
+        last_error = None
+        
+        for attempt in range(retry_policy.max_retries + 1):
+            try:
+                return await step.execute()
+            
+            except Exception as e:
+                last_error = e
+                
+                # Clasificar error
+                category = self.error_manager.categorize_error(e)
+                
+                # Reportar error
+                await self.error_manager.report_error(e, {
+                    "step_name": step.name,
+                    "attempt": attempt,
+                    "category": category
+                })
+                
+                # Decidir retry
+                if not self.error_manager.should_retry(e):
+                    raise  # Fail-fast para permanent errors
+                
+                if attempt < retry_policy.max_retries:
+                    delay = retry_policy.calculate_delay(attempt)
+                    await asyncio.sleep(delay)
+        
+        raise last_error  # Exhausted retries
+```
+
+**Implementación de Clasificación**:
+```python
+# yaml-agno/src/workflows/error_classifier.py
+
+class DefaultErrorHandlingManager:
+    """Implementación por defecto de ErrorHandlingManager"""
+    
+    def categorize_error(self, error: Exception) -> ErrorCategory:
+        """Clasifica error según tipo"""
+        error_type = type(error).__name__
+        
+        # Transient errors (retry posible)
+        if error_type in ["TimeoutError", "ConnectionError", "RateLimitError"]:
+            return ErrorCategory.TRANSIENT
+        
+        # Permanent errors (fail-fast)
+        elif error_type in ["ValueError", "ValidationError", "AuthenticationError"]:
+            return ErrorCategory.PERMANENT
+        
+        # Validation errors
+        elif error_type in ["ValidationError", "SchemaError"]:
+            return ErrorCategory.VALIDATION
+        
+        # Auth errors
+        elif error_type in ["UnauthorizedError", "ForbiddenError"]:
+            return ErrorCategory.AUTH
+        
+        # Rate limit errors
+        elif error_type == "RateLimitError":
+            return ErrorCategory.RATE_LIMIT
+        
+        # Critical errors (manual review)
+        elif error_type in ["DatabaseConnectionError", "SystemFailure"]:
+            return ErrorCategory.CRITICAL
+        
+        return ErrorCategory.PERMANENT  # Default conservador
+    
+    def should_retry(self, error: Exception) -> bool:
+        """Decide si error es retryable"""
+        category = self.categorize_error(error)
+        return category in [
+            ErrorCategory.TRANSIENT,
+            ErrorCategory.RATE_LIMIT
+        ]
+    
+    async def report_error(self, error: Exception, context: dict) -> None:
+        """Reporta error a sistema de alertas"""
+        # TODO: Integrar con ObservabilityManager para métricas
+        pass
+```
+
+**ExceptionGroup Handling (PEP 654)**:
+```python
+# yaml-agno/src/workflows/exception_group_handler.py
+
+class ExceptionGroupHandler:
+    """Maneja ExceptionGroup de forma recursiva"""
+    
+    def __init__(self, error_manager: ErrorHandlingManager):
+        self.error_manager = error_manager
+    
+    def flatten_exception_group(self, error: ExceptionGroup) -> list[Exception]:
+        """Desempaquetar ExceptionGroup recursivamente"""
+        exceptions = []
+        
+        for exc in error.exceptions:
+            if isinstance(exc, ExceptionGroup):
+                # Recursión para grupos anidados
+                exceptions.extend(self.flatten_exception_group(exc))
+            else:
+                exceptions.append(exc)
+        
+        return exceptions
+    
+    def categorize_group(self, error: ExceptionGroup) -> ErrorCategory:
+        """Clasifica grupo basado en peor error"""
+        exceptions = self.flatten_exception_group(error)
+        
+        categories = [self.error_manager.categorize_error(e) for e in exceptions]
+        
+        # Si algún error es CRITICAL, todo el grupo es CRITICAL
+        if ErrorCategory.CRITICAL in categories:
+            return ErrorCategory.CRITICAL
+        
+        # Si algún error es PERMANENT, todo el grupo es PERMANENT
+        if ErrorCategory.PERMANENT in categories:
+            return ErrorCategory.PERMANENT
+        
+        # Si todos son TRANSIENT, retry es posible
+        if all(c == ErrorCategory.TRANSIENT for c in categories):
+            return ErrorCategory.TRANSIENT
+        
+        return ErrorCategory.PERMANENT  # Default conservador
+```
+
+**Do's & Don'ts**:
+- ✅ Clasificar errores: transient, permanent, validation, auth, rate_limit
+- ✅ Desempaquetar ExceptionGroup recursivamente
+- ✅ Integrar con alertas externas
+- ❌ NO tragar errores sin reportar
+- ❌ NO decidir reintentos de negocio (solo técnicos)
+
+**Dependencias**: ConfigManager, LoggerManager, ObservabilityManager
+
+---
+
+## 4. ERROR RECOVERY STATE MACHINE
+
+### 4.1 Máquina de Estados para Recovery
 
 ```mermaid
 stateDiagram-v2
@@ -206,7 +382,7 @@ stateDiagram-v2
     Failed --> [*]
 ```
 
-### 3.2 Error Categories
+### 4.2 Error Categories
 
 | Error Type | Category | Recovery Strategy | Max Retries |
 |------------|----------|-------------------|-------------|
@@ -217,7 +393,7 @@ stateDiagram-v2
 | **Database timeout** | Transient | Retry with new connection | 2 |
 | **Configuration error** | Permanent | Fail fast, alert admin | 0 |
 
-### 3.3 Retry Policy Implementation
+### 4.3 Retry Policy Implementation
 
 ```python
 # yaml-agno/src/workflows/retry_policy.py
@@ -409,7 +585,7 @@ AND the correlation_id matches the request
       )
       assert result.merge_strategy == "all"
   ```
-- **GREEN**: Implementar `execute_parallel_step()` con asyncio.gather
+- **GREEN**: Implementar `execute_parallel_step()` con asyncio.TaskGroup
 - **Commit**: `feat: add parallel step execution`
 
 #### TASK_004: Implement Condition Evaluator
