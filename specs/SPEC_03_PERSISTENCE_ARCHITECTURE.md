@@ -462,7 +462,162 @@ LIMIT 100;
 
 ---
 
-## 4. TRANSACTION MANAGER CONTRACT
+## 4. CORE INFRA MANAGER INTEGRATION
+
+### 4.1 ConfigManager Integration
+
+**Responsabilidad**: Configuración de conexión y pooling de bases de datos.
+
+**Uso en yaml-agno**:
+```python
+# yaml-agno/src/db/bootstrap.py
+
+class DatabaseBootstrap:
+    def __init__(self, config_manager: ConfigManager):
+        self.config = config_manager
+    
+    async def create_engine(self) -> AsyncEngine:
+        """Crea engine de SQLAlchemy desde ConfigManager"""
+        
+        # Obtener configuración desde ConfigManager
+        db_url = self.config.get_string("database.url")
+        pool_size = self.config.get_number("database.pool_size", default=10)
+        max_overflow = self.config.get_number("database.max_overflow", default=20)
+        
+        # Crear engine con pooling
+        engine = create_async_engine(
+            db_url,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+            pool_pre_ping=True  # Verificar conexiones
+        )
+        
+        return engine
+```
+
+### 4.2 SecretManager Integration
+
+**Responsabilidad**: Gestión segura de credenciales de base de datos (Zero-Trust).
+
+**Port (Protocol)**:
+```python
+from typing import Protocol
+
+class SecretManager(Protocol):
+    async def get_secret(self, key: str) -> str: ...
+    async def get_secret_json(self, key: str) -> dict: ...
+```
+
+**Uso en yaml-agno**:
+```python
+# yaml-agno/src/db/bootstrap.py
+
+class DatabaseBootstrap:
+    def __init__(
+        self,
+        config_manager: ConfigManager,
+        secret_manager: SecretManager
+    ):
+        self.config = config_manager
+        self.secrets = secret_manager
+    
+    async def get_db_credentials(self) -> dict:
+        """Obtiene credenciales desde SecretManager"""
+        
+        # NO usar variables de entorno directamente
+        password = await self.secrets.get_secret("database.password")
+        
+        return {
+            "username": self.config.get_string("database.username"),
+            "password": password,  # Desde SecretManager
+            "host": self.config.get_string("database.host"),
+            "port": self.config.get_number("database.port")
+        }
+```
+
+**Do's & Don'ts**:
+- ✅ Rotación automática con TTL corto
+- ✅ Auditoría de accesos
+- ❌ NO persistir secretos en env vars
+- ❌ NO listar todos los secretos
+
+### 4.3 DatabaseManager Integration
+
+**Responsabilidad**: Pooling resiliente y factoría de Repositorios Abstractos.
+
+**Port (Protocol)**:
+```python
+from typing import Protocol, TypeVar
+from contextlib import AbstractAsyncContextManager
+
+T = TypeVar('T')
+
+class TransactionScope(Protocol):
+    async def commit(self) -> None: ...
+    async def rollback(self) -> None: ...
+
+class GenericRepository(Protocol[T]):
+    async def find_by_id(self, id: str) -> T | None: ...
+    async def insert(self, entity: T) -> None: ...
+
+class DatabaseManager(Protocol):
+    def transaction(self, tenant_id: UUID | None = None) -> AbstractAsyncContextManager[TransactionScope]: ...
+    def get_repository(self, name: str) -> GenericRepository: ...
+```
+
+**Uso en yaml-agno con Repository Pattern**:
+```python
+# yaml-agno/src/repositories/base_repository.py
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import UUID
+
+class BaseRepository:
+    """Repositorio base con transacciones gestionadas por DatabaseManager"""
+    
+    def __init__(self, db_manager: DatabaseManager, tenant_id: UUID):
+        self.db = db_manager
+        self.tenant_id = tenant_id
+    
+    async def create(self, entity_data: dict) -> UUID:
+        """Crea entidad con transacción automática"""
+        
+        async with self.db.transaction(tenant_id=self.tenant_id) as session:
+            # Boundary validation con Pydantic
+            validated = self._validate(entity_data)
+            
+            # Insertar con SQLAlchemy
+            result = await session.execute(
+                insert(self.model).values(**validated).returning(self.model.id)
+            )
+            return result.scalar_one()
+    
+    async def find_by_id(self, entity_id: UUID) -> dict | None:
+        """Busca entidad por ID"""
+        
+        async with self.db.transaction(tenant_id=self.tenant_id) as session:
+            result = await session.execute(
+                select(self.model).where(
+                    self.model.id == entity_id,
+                    self.model.tenant_id == self.tenant_id
+                )
+            )
+            row = result.fetchone()
+            return dict(row._mapping) if row else None
+```
+
+**Do's & Don'ts**:
+- ✅ Gestionar transacciones vía Async Context Managers
+- ✅ Boundary Validation con Pydantic en adaptadores
+- ✅ Ocultar detalles del driver (SQLAlchemy)
+- ❌ NO exponer sesiones crudas al dominio
+- ❌ NO admitir SQL dinámico desde el dominio
+
+**Dependencias**: ConfigManager, SecretManager, LoggerManager, ObservabilityManager, ErrorHandlingManager
+
+---
+
+## 5. TRANSACTION MANAGER CONTRACT
 
 ### 4.1 Async Context Manager
 
