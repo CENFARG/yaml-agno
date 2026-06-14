@@ -16,7 +16,143 @@ Last_Updated: "2026-06-13"
 
 ---
 
-## 1. OPENTELEMETRY STANDARD METRICS
+## 1. CORE INFRA MANAGER INTEGRATION
+
+### 1.1 LoggerManager Integration
+
+**Responsabilidad**: Registro de eventos base con control de verbosidad (dev/test/prod).
+
+**Port (Protocol)**:
+```python
+from typing import Protocol
+
+class LoggerManager(Protocol):
+    def debug(self, message: str) -> None: ...
+    def info(self, message: str) -> None: ...
+    def warn(self, message: str) -> None: ...
+    def error(self, message: str, error: Exception | None = None) -> None: ...
+```
+
+**Perfiles de Verbosidad**:
+| Perfil | Formato | Colores | Stack Traces | Uso |
+|-------|---------|---------|---------------|-----|
+| **dev** | Texto | ✅ | ✅ | Desarrollo local |
+| **test** | Silencioso | ❌ | ❌ | Tests automatizados |
+| **prod** | JSON estructurado | ❌ | ❌ | Producción |
+
+**Uso en yaml-agno**:
+```python
+# yaml-agno/src/agents/agent_executor.py
+
+class AgentExecutor:
+    def __init__(self, logger_manager: LoggerManager):
+        self.logger = logger_manager
+    
+    async def execute_agent(self, agent: Agent) -> Result:
+        self.logger.info(f"Starting agent: {agent.name}")
+        
+        try:
+            result = await agent.run()
+            self.logger.info(f"Agent completed: {agent.name}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(
+                f"Agent failed: {agent.name}",
+                error=e
+            )
+            raise
+```
+
+**Propagación de Contexto Implícito**:
+```python
+import contextvars
+
+# Context variables para propagación
+tenant_id_var = contextvars.ContextVar("tenant_id")
+correlation_id_var = contextvars.ContextVar("correlation_id")
+
+class ContextAwareLogger:
+    def __init__(self, logger_manager: LoggerManager):
+        self.logger = logger_manager
+    
+    def _inject_context(self, message: str) -> str:
+        """Injeta tenant_id y correlation_id automáticamente"""
+        tenant_id = tenant_id_var.get("unknown")
+        correlation_id = correlation_id_var.get("unknown")
+        return f"[{tenant_id}/{correlation_id}] {message}"
+    
+    def info(self, message: str) -> None:
+        enriched = self._inject_context(message)
+        self.logger.info(enriched)
+```
+
+### 1.2 ObservabilityManager Integration
+
+**Responsabilidad**: Telemetría avanzada (RED Metrics, Tracing).
+
+**Port (Protocol)**:
+```python
+from typing import Protocol, Any
+
+class ObservabilityManager(Protocol):
+    def increment_counter(self, name: str, value: float = 1.0, labels: dict[str, Any] | None = None) -> None: ...
+    def start_span[T](self, name: str) -> T: ...
+```
+
+**Uso en yaml-agno**:
+```python
+# yaml-agno/src/agents/agent_executor.py
+
+class AgentExecutor:
+    def __init__(
+        self,
+        logger_manager: LoggerManager,
+        observability_manager: ObservabilityManager
+    ):
+        self.logger = logger_manager
+        self.obs = observability_manager
+    
+    async def execute_agent(self, agent: Agent, tenant_id: str) -> Result:
+        # Iniciar span de tracing
+        with self.obs.start_span("agent_execution") as span:
+            # Inyectar atributos
+            span.set_attribute("agent_name", agent.name)
+            span.set_attribute("tenant_id", tenant_id)
+            
+            try:
+                result = await agent.run()
+                
+                # Métrica de éxito
+                self.obs.increment_counter(
+                    "agent_execution_total",
+                    value=1.0,
+                    labels={
+                        "agent_name": agent.name,
+                        "tenant_id": tenant_id,
+                        "status": "success"
+                    }
+                )
+                return result
+                
+            except Exception as e:
+                # Métrica de error
+                self.obs.increment_counter(
+                    "agent_execution_errors_total",
+                    value=1.0,
+                    labels={
+                        "agent_name": agent.name,
+                        "tenant_id": tenant_id,
+                        "error_type": type(e).__name__
+                    }
+                )
+                span.record_exception(e)
+                raise
+```
+
+---
+
+## 2. OPENTELEMETRY STANDARD METRICS
 
 ### 1.1 Métricas Requeridas
 
@@ -252,6 +388,26 @@ class CircuitBreaker:
         except Exception as e:
             self.record_failure()
             raise
+    
+    def get_state_metrics(self) -> Dict[str, Any]:
+        """
+        Retorna métricas de estado para observabilidad.
+        
+        Returns:
+            Dict con: state, failure_rate, total_requests, success_count, failure_count
+        """
+        failure_rate = 0.0
+        if self.total_requests > 0:
+            failure_rate = (self.failure_count / self.total_requests) * 100
+        
+        return {
+            "state": self.state.value,
+            "failure_rate": round(failure_rate, 2),
+            "total_requests": self.total_requests,
+            "success_count": self.success_count,
+            "failure_count": self.failure_count,
+            "last_failure_time": self.last_failure_time,
+        }
 ```
 
 ### 3.2 Constantes de Retry
@@ -318,27 +474,92 @@ class RetryConfig:
 # yaml-agno/src/resilience/resilient_executor.py
 
 class ResilientExecutor:
-    """Ejecutor con circuit breaker + retry"""
+    """
+    Ejecutor con circuit breaker + retry.
     
-    def __init__(self, circuit_breaker: CircuitBreaker):
-        self.circuit_breaker = circuit_breaker
+    Estrategia:
+    1. Circuit breaker permite/deniega request
+    2. Si permitido, ejecuta con retry policy
+    3. Cada intento registra success/failure en circuit breaker
+    """
+    
+    def __init__(
+        self,
+        circuit_breaker: CircuitBreaker | None = None,
+        retry_config: RetryConfig | None = None
+    ):
+        self.circuit_breaker = circuit_breaker or CircuitBreaker()
+        self.retry_config = retry_config or RetryConfig()
     
     async def execute(self, func: Callable[..., Any], *args, **kwargs) -> Any:
-        """Ejecuta con circuit breaker + retry"""
+        """
+        Ejecuta con circuit breaker + retry.
         
+        Proceso:
+        1. Verifica circuit breaker state
+        2. Ejecuta con retries (cada intento afecta circuit breaker)
+        3. Retorna resultado o raise excepción final
+        """
         # Circuit breaker check
         if not self.circuit_breaker.allow_request():
-            raise CircuitBreakerOpenError("Circuit breaker is OPEN")
+            raise CircuitBreakerOpenError(
+                f"Circuit breaker is OPEN. Metrics: {self.circuit_breaker.get_state_metrics()}"
+            )
         
-        try:
-            # Retry logic
-            result = await RetryConfig.execute_with_retry(func, *args, **kwargs)
-            self.circuit_breaker.record_success()
-            return result
+        last_error = None
         
-        except Exception as e:
-            self.circuit_breaker.record_failure()
-            raise
+        # Retry loop - cada intento registra en circuit breaker
+        for attempt in range(self.retry_config.MAX_RETRIES + 1):
+            try:
+                result = await func(*args, **kwargs)
+                self.circuit_breaker.record_success()
+                return result
+            
+            except Exception as e:
+                last_error = e
+                self.circuit_breaker.record_failure()
+                
+                # Verificar si es error recuperable
+                category = self._categorize_error(e)
+                
+                if category == ErrorCategory.PERMANENT:
+                    # No reintentar errores permanentes
+                    break
+                
+                if attempt < self.retry_config.MAX_RETRIES:
+                    delay = self.retry_config.calculate_delay(attempt)
+                    await asyncio.sleep(delay)
+        
+        raise last_error  # Exhausted retries o permanent error
+    
+    def _categorize_error(self, error: Exception) -> ErrorCategory:
+        """Categoriza error para decidir retry"""
+        error_type = type(error).__name__
+        
+        # Transient errors
+        if error_type in ["TimeoutError", "ConnectionError", "RateLimitError"]:
+            return ErrorCategory.TRANSIENT
+        
+        # Permanent errors
+        elif error_type in ["ValueError", "ValidationError", "AuthenticationError"]:
+            return ErrorCategory.PERMANENT
+        
+        # Critical errors
+        elif error_type in ["DatabaseConnectionError", "SystemFailure"]:
+            return ErrorCategory.CRITICAL
+        
+        return ErrorCategory.PERMANENT  # Default
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Retorna métricas combinadas de circuit breaker y retry"""
+        return {
+            "circuit_breaker": self.circuit_breaker.get_state_metrics(),
+            "retry_config": {
+                "max_retries": self.retry_config.MAX_RETRIES,
+                "base_delay": self.retry_config.BASE_DELAY,
+                "max_delay": self.retry_config.MAX_DELAY,
+            }
+        }
 ```
 
 ---
@@ -409,7 +630,7 @@ AND the result is returned
 
 ---
 
-## 5. TDD MICRO-TASK EXECUTION PROTOCOL
+## 3. TDD MICRO-TASK EXECUTION PROTOCOL
 
 ### 5.1 Cascading Task Checklist
 
@@ -563,7 +784,7 @@ AND the result is returned
 
 ---
 
-## 6. SUPUESTOS TÉCNICOS ADOPTADOS
+## 4. SUPUESTOS TÉCNICOS ADOPTADOS
 
 ### [Decisión 1] OpenTelemetry para Observabilidad
 
@@ -588,7 +809,7 @@ AND the result is returned
 
 ---
 
-## 7. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
+## 5. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
 
 ### [Pregunta 1] Sampling Rate para Spans
 
@@ -621,7 +842,7 @@ Implica:
 
 ---
 
-## 8. CALIBRACIÓN FINAL
+## 6. CALIBRACIÓN FINAL
 
 ### 8.1 Resumen de Especificación
 
