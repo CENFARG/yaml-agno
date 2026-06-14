@@ -207,7 +207,59 @@ Semilla (Ahora) → Estándar (6 meses) → Élite (12 meses) → Futuro (18 mes
 
 ---
 
-## 9. SUPUESTOS TÉCNICOS ADOPTADOS
+## 9. CORE INFRA MANAGER INTEGRATION
+
+### 9.1 ConfigManager Integration
+
+**Responsabilidad**: Fuente única de verdad para configuración inmutable de entorno.
+
+**Port (Protocol)**:
+```python
+from __future__ import annotations
+from typing import Protocol, Literal
+
+Env = Literal['local', 'dev', 'staging', 'prod']
+
+class ConfigManager(Protocol):
+    """@ai-directive: No accedas a os.environ directamente; siempre usa ConfigManager."""
+    def get_env(self) -> Env: ...
+    def get_string(self, key: str, default_value: str | None = None) -> str: ...
+    def get_number(self, key: str, default_value: float | None = None) -> float: ...
+    def get_boolean(self, key: str, default_value: bool | None = None) -> bool: ...
+    def get_json[T](self, key: str, default_value: T | None = None) -> T: ...
+    def get_section[T: dict](self, namespace: str) -> T: ...
+    async def reload(self) -> None: ...
+```
+
+**Uso en yaml-agno**:
+```python
+# yaml-agno/src/config/agent_factory.py
+
+class AgentFactory:
+    def __init__(self, config_manager: ConfigManager):
+        self.config = config_manager
+    
+    async def create_agent(self, yaml_path: str) -> Agent:
+        # Obtener configuración de tenant desde ConfigManager
+        tenant_id = self.config.get_string("tenant_id")
+        env = self.config.get_env()
+        
+        # Cargar YAML con variables DI resueltas
+        yaml_content = await self._load_yaml(yaml_path)
+        resolved = await self._resolve_di_variables(yaml_content)
+        
+        return Agent(**resolved)
+```
+
+**Do's & Don'ts**:
+- ✅ Resolver precedencia: Env vars > Remoto > Ficheros > Defaults
+- ✅ Validar con Pydantic V2 en bootstrap
+- ❌ NO leer secretos (usar SecretManager)
+- ❌ NO escribir configuración (read-only)
+
+---
+
+## 10. SUPUESTOS TÉCNICOS ADOPTADOS
 
 ### [Decisión 1] YAML-First como Arquitectura Core
 
