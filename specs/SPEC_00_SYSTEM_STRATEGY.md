@@ -171,7 +171,7 @@ Semilla (Ahora) → Estándar (6 meses) → Élite (12 meses) → Futuro (18 mes
 - **PostgreSQL 16+**: Para producción
 - **Pydantic V2**: Para validación
 - **SQLAlchemy 2.0**: Para DB ORM
-- **FastAPI 0.110+**: Para API
+-  Para API
 
 ### 7.2 Assumptions de Agno
 
@@ -275,7 +275,7 @@ class AgentFactory:
 
 ---
 
-## 10. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
+## 11. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
 
 ### [Pregunta 1] Escalabilidad de Templates
 
@@ -298,12 +298,3 @@ Implica:
 ### [Pregunta 3] Multi-tenant desde Día 1
 
 **¿Debemos implementar multi-tenant desde Week 1 o postergar a Week 7?**
-
-Implica:
-- **Día 1**: Arquitectura más compleja desde el inicio
-- **Week 7**: Más simple inicialmente, refactor después
-- **Trade-off**: Complejidad upfront vs deuda técnica
-
----
-
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente específico o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
