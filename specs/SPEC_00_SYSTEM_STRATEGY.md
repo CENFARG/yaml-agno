@@ -50,15 +50,13 @@ Revision_Note: "Iteración 1 - correcciones de revisión estratégica del usuari
 
 ### 2.2 Fase 2: Ambots-Hs (Futuro)
 
-- Sistema agéntico open-source
-- Marketplace de templates
-- Multi-language support
-- Community contributions
+- Sistema agéntico open-source basado en agno que busca resolver problemas a traves de bajar nivels de abtraccion de usuarios no expertos hasta la Ia a traves de la hyperpesonalizacion de usuario y sus procesos. Se definen en un conjunto de agentes de IA sincronicos y asincronicos que analizan al usuario y sus proceosso para poder automatizarlos mediante nuevos equipos agenticos de manera recursiva.
+- Community contributions: El sistema permite que usuarios inexpertos compartan su knowhow ocn su agente y que luego este mismo sea compartido con otros agentes de otros usaurios. Cada usuario en su nivel de abtraccion puede mejorar el sistema en diferentes partes. 
 
 ### 2.3 Evolución del Producto
 
 ```
-Semilla (Ahora) → Estándar (6 meses) → Élite (12 meses) → Futuro (18 meses)
+Semilla (Ahora) → Estándar (3 meses) → Élite (8 meses) → Futuro (12 meses)
 ```
 
 ---
@@ -209,9 +207,9 @@ Casos internos de prueba (a definir orden/prioridad):
 
 **Responsabilidad**: Apoyar a usuarios finales a crear configs sin conocimiento profundo de Agno.
 
-- **Agno Docs Expert**: Búsqueda en docs de Agno
-- **Prompting Expert**: Mejora de prompts
-- **Code Expert**: CodeGraph integration
+- **Agno Docs Expert**: Es un equipo agentico, que tambien se hara con agno como base, que permite a un agente de programacion (opencode, claudecode, gemini-cli, antigravity, etc) definir estrategias en conjunto sobre como funciona agno. El equipo agentico AgBúsqueda en docs de **Agno Docs Expert** tiene dos mcp de busqueda semantica a traves de FTS5 para encontrar patrones de diseño, logicas de porgramación, features, funcionalidades, etc de agno y poder dialogar con el agente de programación sobre que el agente o equipo agentico a contruir para resolver un problema. No siempre, pero normalmente se basara en yaml-agno para desrrollarlo.
+- **Prompting Expert**: Es un equipo agentico, que tambien se hara con agno como base, que permite a un agente de programacion (opencode, claudecode, gemini-cli, antigravity, etc) definir estrategias en conjunto sobre cuales son las mejores estrategias de prompts, ingeniería de contexto, ingeiería de arnes y ingeniría de loops para los agentes o equipo agentico a contruir para resolver un problema.
+- **Code Expert**: CodeGraph integration es una herramienta externa de codigo abierto que permite desarrollar grafos de conocimiento de codigo fuente. El repositorio original es https://github.com/colbymchenry/codegraph. Esto ayudara a los agentes de programación (opencode, claudecode, gemini-cli, antigravity, etc), y al **Agno Docs Expert** a tener mucha mas claridad de como funciona, como esta desarrollado, etc agno. Pero ademas en el desarrollo de yaml-agno iremos creando un grafo que lo explique como herramienta de documentacion extra del propio proyecto. Así los agentes de programacion tendran mas conocimiento y contexto de como usarlo.
 
 **Objetivo de producto**: El fin último de yaml-agno es, primero, **ayudarnos a nosotros (CENF)** a generar equipos agénticos nuevos reduciendo ~50% del esfuerzo mediante agentes de programación de IA (Claude Code / OpenCode) soportados sobre Agno + AgentOS; y luego, **integrarse a amBotHs** para que cualquier usuario pueda crear equipos agénticos sin conocimiento profundo de Agno ni de equipos agénticos.
 
@@ -221,10 +219,10 @@ Casos internos de prueba (a definir orden/prioridad):
 
 ### 6.1 Constraints de Desarrollo
 
-- **Strict TDD**: 100%+ coverage (protocolo RED/GREEN/REFACTOR)
-- **Feature-Branch-Chain**: Git workflow con commits granulares (work-unit commits)
-- **Code Review (Multi-LLM)**: En vez de un único modelo, **N modelos distintos revisan el mismo diff en paralelo** (diversidad de providers para reducir puntos ciegos), luego **un modelo unificador** consolida todas las correcciones en un único patch. Configurable en CI (ver SPEC_22). Los reviewers pueden especializarse (correctness / edge-cases / patterns)
-- **PR Budget (tejado flexible)**: PR ≤ **600 líneas por defecto**, con **excepciones justificadas** para features que lo requieran. La granularidad de rollback es la **feature atómica**, no el micro-paso. Fundamento: trabajamos con agentes de programación (Claude Code/OpenCode) que manejan contextos grandes; los PRs de 200 líneas eran para revisiones humanas manuales. Requiere disciplina: cada PR cubre una funcionalidad completa y verificable
+- **Strict TDD**: 100%+ coverage (protocolo RED/GREEN/REFACTOR). Se deberan hacer todos los test unitarios, integrados y E2E, asi como tambien todos los text y evaluaciones (usando evals de agno también) para verficar el codigo generado en cad auno de los pasos y elementos que contituyen yaml-agno.
+- **Feature-Branch-Chain**: Git workflow con commits granulares para maxima trazabilidad y rollback posible (work-unit commits).
+- **Code Review (Multi-LLM)**: Para el desarrollo utilizaremos la metodologia integrada de subagentes delegados de SDD y TDD que trae gentle-ai. Para cada uno de los pasos, mejora o modificacion SIEMPRE se realizara una el flujo de agentes completos desde SDD-init (para iniciar el proyecto) hasta el SD-archive para archivar. IMPOSIBLE SALTEARSE UN PASO, ASI COMO TAMPOCO SE PUEDE REALIZAR SIN DELEGACION EN SUBAGENTES.
+- **PR Budget (tejado flexible)**: PR ≤ **600 líneas por defecto**, con **excepciones justificadas** para features que lo requieran. La granularidad de rollback es la **feature atómica**, no el micro-paso. Fundamento: trabajamos con agentes de programación (Claude Code/OpenCode) que manejan contextos grandes;  Requiere disciplina: cada PR cubre una funcionalidad completa y verificable
 
 ### 6.2 Constraints de Diseño
 
@@ -310,7 +308,7 @@ Casos internos de prueba (a definir orden/prioridad):
 
 **Objetivo**: estructurar toda la parte transversal de nuestros programas de forma estandarizada, de modo que **cualquier agente que conozca Core pueda auditar nuestros programas de manera estandarizada**.
 
-**Estado actual**: hoy Core es especificación, no código. **Aún no se convirtió en código** porque no le dedicamos tiempo. Será esta especificación + un agente de programación quienes lo creen siguiendo esos lineamientos.
+**Estado actual**: hoy Core es especificación, no código. **Aún no se convirtió en código**. Será esta especificación + un agente de programación quienes lo creen siguiendo esos lineamientos.
 
 **Integración con yaml-agno**: una vez que existan tanto yaml-agno como Core como código, **el agente de programación debe programar usando ambos de manera totalmente integrada**. Ambos mejorarán con el tiempo pero **siempre estarán integrados entre sí**.
 
