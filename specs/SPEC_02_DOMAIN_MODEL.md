@@ -1086,5 +1086,3 @@ Implica:
 - **Trade-off**: Storage cost vs capacidad de debugging/historial
 
 ---
-
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente específico o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
