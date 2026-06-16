@@ -8,7 +8,7 @@ Target_Agent: "sdd-apply"
 Context_Tags: ["#Agno", "#Runtime", "#SessionManagement", "#WorkflowPrimitives"]
 Dependency_Hashes: ["SPEC_00"]
 Last_Updated: "2026-06-16"
-Revision_Note: "Iteración 1 - correcciones de revisión del usuario (coroutine, Engram, dynamic loading, factories como esquemas); sub-iteración: DependencyManager split Core/yaml-agno, retention aclarado, escalabilidad y cache decididos"
+Revision_Note: "Iteración 1 - factories como esquemas, coroutine eliminado, DependencyManager split Core/yaml-agno, retention/ACID como feature futura, escalabilidad y cache decididos"
 ---
 
 # SPEC_01_AGNO_RUNTIME_ARCHITECTURE
@@ -197,78 +197,36 @@ La tabla lista los parámetros de sesión que efectivamente existen en la API de
 | `add_session_state_to_context` | `run(add_session_state_to_context=...)` | `bool` | Inyecta session_state en contexto |
 | `max_iterations` | `run(max_iterations=...)` (límite de loop) | `int` | Integer >= 1 |
 
-> **@ai-directive (punto 7 del usuario - retención/purge de datos)**: ¿qué significa "retención"? Es **cuánto tiempo se guardan los datos antes de borrarlos automáticamente** (ej: "borrar el historial de sesiones de más de 30 días"). Agno **NO** trae un parámetro `retention_days` que haga eso solo. Lo que Agno sí ofrece para limpiar datos viejos:
-> - **Curator** (parte de `LearningMachine`): un método `prune(max_age_days=90)` que vos llamás cuando queras borrar memorias con más de N días. No es automático: **vos decidís cuándo llamarlo**.
-> - **RedisDb(expire=N)**: si usás Redis como DB, podés setear un TTL en segundos y Redis borra las claves solas al expirar.
+> **@ai-directive (punto 7 + P2 del usuario - retención, FEATURE FUTURA)**: Agno **NO** tiene `retention_days` nativo ni un job de limpieza periódico listo. Hallazgos verificados en Agno v2.6.14:
+> - **`Curator.prune(max_age_days=)`** (parte de `LearningMachine`, `agno/learn/curate.py:36`) solo limpia el store `user_profile`, **no** las memorias generales. Es síncrono y standalone (no requiere agente corriendo).
+> - **`RedisDb(expire=N)`**: TTL de backend Redis, borra claves solas al expirar (solo si el backend es Redis).
+> - **Scheduler de Agno** (`ScheduleManager`/`SchedulePoller`/`ScheduleExecutor`) **NO sirve directo** para purge: está acoplado a ejecutar runs HTTP de agents/teams/workflows (no funciones Python arbitrarias ni SQL de mantenimiento) y requiere AgentOS corriendo.
 >
-> Por lo tanto, yaml-agno **no expone un `retention_days` mágico** como si fuera nativo de Agno (porque no lo es). Si queremos retención automática en yaml-agno, la construimos nosotros como **extensión propia**: un **job programado** (cron, en SPEC_13) que corre periódicamente y llama a `Curator.prune(max_age_days=...)`, o configurar `RedisDb(expire=...)` cuando el backend sea Redis. Ese comportamiento se documenta como feature de yaml-agno, no como mapeo directo a un parámetro de Agno que no existe.
+> **Decisión**: la retención/purge automática es **feature futura de yaml-agno, no bloqueante para el MVP core**. Cuando se implemente, requerirá: (a) función de purge que opere sobre las memorias correctas (no solo user_profile), y (b) un mecanismo de programación propio o envolver el purge en un endpoint HTTP para usar el scheduler de Agno. Por ahora yaml-agno **no expone** `retention_days` como nativo de Agno (porque no lo es).
 
 ### 1.3 DependencyManager (carga dinámica segura de providers/DBs/primitives)
 
-**@ai-directive (puntos 1, 2, 8, 11 del usuario)**: yaml-agno **NO** carga todos los providers de Agno (modelos, DBs, primitivas de workflow) al importar el módulo. Eso gastaría memoria innecesariamente. En su lugar, un **`DependencyManager`** resuelve cada dependencia de forma **perezosa, validada y con cache**.
+**@ai-directive**: yaml-agno **NO** carga todos los providers de Agno (modelos, DBs, primitivas de workflow) al importar el módulo. Eso gastaría memoria innecesariamente. En su lugar, un **`DependencyManager`** resuelve cada dependencia de forma **perezosa, validada y con cache**, siguiendo el patrón SOTA de Python 3.12 para plugin loading seguro.
 
-**División de responsabilidades (decisión P1 del usuario)**: `DependencyManager` se separa en dos partes, siguiendo el principio de que todo lo transversal y reutilizable vive en **Core Infra**:
-
-| Parte | Dónde vive | Qué contiene |
-|-------|-----------|--------------|
-| **Mecanismo** | **Core Infra** (`core.di.DependencyManager`) | `resolve_class(module, class)` via `importlib`, allowlist, `lru_cache`, `entry_points`. Reutilizable por TODOS los programas CENF, no solo yaml-agno |
-| **Registries de Agno** | **yaml-agno** (`yaml_agno.registries`) | `MODEL_REGISTRY`, `STORAGE_REGISTRY`, `WORKFLOW_PRIMITIVE_REGISTRY`: las keys específicas de Agno (qué providers/DBs/primitivas existen) |
-
-yaml-agno **consume** el `DependencyManager` de Core (vía DI) y le **inyecta** sus propios registries de Agno. Si mañana Core mejora el mecanismo, yaml-agno lo hereda sin tocar sus registries.
-
-**Patrón (mecanismo, en Core)**: registry declarativo (dict validado) + `importlib.import_module` perezoso + **allowlist** de módulos (nunca input directo del usuario, mitiga path traversal) + cache de instancias + **entry_points** (`importlib.metadata.entry_points`) para extensión de terceros. Inspirado en el `ReaderFactory` de Agno (que sí usa importlib) y mejorado con allowlist + entry_points.
+**Patrón**: registry declarativo (dict validado) + `importlib.import_module` perezoso + **allowlist** de módulos (nunca input directo del usuario, mitiga path traversal) + cache de instancias + **entry_points** (`importlib.metadata.entry_points`) para extensión de terceros. Inspirado en el `ReaderFactory` de Agno (que sí usa importlib) y mejorado con allowlist + entry_points.
 
 ```python
-# --- Core Infra: the reusable MECHANISM (transversal to all CENF programs) ---
-# core/di/dependency_manager.py
-# SCHEMATIC: the mechanism lives in Core; registries are injected by each program.
+# yaml-agno/src/di/dependency_manager.py
+# SCHEMATIC: dynamic, lazy, allowlisted dependency resolution.
 
 import importlib
 from functools import lru_cache
 from importlib.metadata import entry_points
 
-class DependencyManager:
-    """
-    Generic dependency resolver: lazy, allowlisted, cached, extensible.
-    @ai-directive: mechanism only. Program-specific registries (which providers/DBs
-    exist) are injected at construction. Lives in Core Infra so ALL CENF programs
-    can reuse it and any agent can audit them uniformly.
-    """
-
-    def __init__(self, registries: dict[str, dict], entry_point_groups: list[str]):
-        # registries: {"models": {...}, "storage": {...}, ...} injected by the program
-        self._registries = registries
-        self._ep_groups = entry_point_groups
-        self._merge_entry_points()
-
-    def _merge_entry_points(self) -> None:
-        """Allow 3rd-party packages to register new providers/DBs safely."""
-        for group in self._ep_groups:
-            for ep in entry_points(group=group):
-                self._registries.setdefault(group, {})[ep.name] = ep.value
-
-    @lru_cache(maxsize=128)
-    def resolve_class(self, module_path: str, class_name: str):
-        """
-        Import module_path and return class_name. Cached.
-        @ai-directive: module_path must come from an allowlisted registry;
-        NEVER from direct user input (mitigates path traversal).
-        """
-        module = importlib.import_module(module_path)   # raises ImportError if missing
-        return getattr(module, class_name)
-
-
-# --- yaml-agno: the Agno-specific REGISTRIES (injected into Core DependencyManager) ---
-# yaml_agno/registries.py
-# SCHEMATIC: these keys map YAML values to Agno classes. Only Agno knowledge here.
-
+# Declarative registry: key -> (module_path, class_name). Validated, allowlisted.
+# Users reference keys in YAML; they can NEVER inject arbitrary module paths.
 MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     "openai":      ("agno.models.openai", "OpenAIChat"),
     "anthropic":   ("agno.models.anthropic", "Claude"),
     "google":      ("agno.models.google", "Gemini"),
     "ollama":      ("agno.models.ollama", "Ollama"),
     "openrouter":  ("agno.models.openrouter", "OpenRouter"),
-    # ... remaining Agno providers; extensible via entry_points(group="yaml_agno.models") ...
+    # ... remaining providers; extensible via entry_points ...
 }
 
 STORAGE_REGISTRY: dict[str, tuple[str, str]] = {
@@ -276,65 +234,81 @@ STORAGE_REGISTRY: dict[str, tuple[str, str]] = {
     "postgres":("agno.db.postgres", "PostgresDb"),
     "redis":   ("agno.db.redis", "RedisDb"),
     "memory":  ("agno.db.memory", "InMemoryDb"),
-    # ... extensible via entry_points(group="yaml_agno.storage") ...
+    # ... extensible via entry_points ...
 }
 
-WORKFLOW_PRIMITIVE_REGISTRY: dict[str, tuple[str, str]] = {
-    "step":      ("agno.workflow", "Step"),
-    "parallel":  ("agno.workflow", "Parallel"),
-    "condition": ("agno.workflow", "Condition"),
-    "router":    ("agno.workflow", "Router"),
-    "loop":      ("agno.workflow", "Loop"),
-}
+class DependencyManager:
+    """
+    Resolves Agno providers/DBs/primitives lazily and safely.
+    @ai-directive: only the key referenced in YAML is imported, not all providers.
+    """
 
+    def __init__(self, model_reg=MODEL_REGISTRY, storage_reg=STORAGE_REGISTRY):
+        self._model_reg = model_reg
+        self._storage_reg = storage_reg
+        self._merge_entry_points()  # 3rd-party plugins register here
 
-# --- yaml-agno: AgnoProviderResolver uses Core's DependencyManager ---
-# yaml_agno/di/resolver.py
-# SCHEMATIC: thin wrapper that resolves Agno classes via Core DependencyManager.
+    def _merge_entry_points(self) -> None:
+        """Allow 3rd-party packages to register new providers/DBs safely."""
+        for ep in entry_points(group="yaml_agno.models"):
+            self._model_reg[ep.name] = (ep.value, ep.load)  # validated by packaging metadata
 
-class AgnoProviderResolver:
-    """Resolves Agno providers/DBs/primitives using Core's DependencyManager."""
-
-    def __init__(self, deps: "DependencyManager"):   # injected Core DependencyManager
-        self.deps = deps
+    @lru_cache(maxsize=128)
+    def resolve_class(self, module_path: str, class_name: str):
+        """
+        Import module_path and return class_name. Cached.
+        @ai-directive: module_path must be in an allowlist registry; never user input.
+        """
+        module = importlib.import_module(module_path)   # raises ImportError if missing
+        return getattr(module, class_name)
 
     async def resolve_model(self, model_str: str):
-        """'openai/gpt-4o' -> OpenAIChat(id='gpt-4o'). Only openai module imported."""
+        """'openai/gpt-4o' -> OpenAIChat(id='gpt-4o'). Only openai is imported."""
         provider, _, model_id = model_str.partition("/")
-        from yaml_agno.registries import MODEL_REGISTRY
-        if provider not in MODEL_REGISTRY:
+        if provider not in self._model_reg:
             raise ValueError(f"Unknown model provider: {provider}")
-        module_path, class_name = MODEL_REGISTRY[provider]
-        ModelCls = self.deps.resolve_class(module_path, class_name)
+        module_path, class_name = self._model_reg[provider]
+        ModelCls = self.resolve_class(module_path, class_name)
         return ModelCls(id=model_id)
 
     async def build_db(self, storage_type: str, connection_string: str | None):
-        """storage_type -> Agno DB instance. Only that DB module imported."""
-        from yaml_agno.registries import STORAGE_REGISTRY
-        if storage_type not in STORAGE_REGISTRY:
+        """storage_type -> Agno DB instance. Only that DB module is imported."""
+        if storage_type not in self._storage_reg:
             raise ValueError(f"Unknown storage_type: {storage_type}")
-        module_path, class_name = STORAGE_REGISTRY[storage_type]
-        DbCls = self.deps.resolve_class(module_path, class_name)
+        module_path, class_name = self._storage_reg[storage_type]
+        DbCls = self.resolve_class(module_path, class_name)
         return DbCls(connection_string) if connection_string else DbCls()
 
+    async def is_known_storage(self, storage_type: str) -> bool:
+        return storage_type in self._storage_reg
+
+    async def list_storage_types(self) -> list[str]:
+        return list(self._storage_reg.keys())
+
+    async def storage_needs_connection(self, storage_type: str) -> bool:
+        return storage_type not in ("sqlite", "memory")  # heuristic; refined per-DB
+
     async def resolve_workflow_primitive(self, step_type: str):
-        """step_type -> Agno workflow primitive class."""
-        from yaml_agno.registries import WORKFLOW_PRIMITIVE_REGISTRY
-        if step_type not in WORKFLOW_PRIMITIVE_REGISTRY:
+        """step_type -> Agno workflow primitive class (Step/Parallel/Condition/Router/Loop)."""
+        registry = {
+            "parallel": ("agno.workflow", "Parallel"),
+            "condition":("agno.workflow", "Condition"),
+            "router":   ("agno.workflow", "Router"),
+            "loop":     ("agno.workflow", "Loop"),
+        }
+        if step_type not in registry:
             raise ValueError(f"Unsupported step type: {step_type}")
-        module_path, class_name = WORKFLOW_PRIMITIVE_REGISTRY[step_type]
-        return self.deps.resolve_class(module_path, class_name)
+        module_path, class_name = registry[step_type]
+        return self.resolve_class(module_path, class_name)
 ```
 
 **Do's & Don'ts**:
-- ✅ **Mecanismo en Core, registries en yaml-agno**: el `DependencyManager` (mecanismo) vive en Core y lo reutilizan todos los programas CENF; los registries de Agno (keys → clases) viven en yaml-agno
 - ✅ Registry declarativo + allowlist: el YAML referencia **keys**, nunca paths de módulo
 - ✅ Import perezoso: solo se importa el provider/DB/primitiva referenciado
 - ✅ Cache (`lru_cache`): instancias de clase reusadas
 - ✅ `entry_points`: extensión segura de terceros (plugins instalados via pip)
 - ❌ NUNCA `importlib.import_module` con input directo del usuario (path traversal)
 - ❌ NUNCA importar todos los providers al inicio del módulo
-- ❌ NUNCA poner lógica de Agno en el `DependencyManager` de Core (Core es agnóstico al framework)
 
 ---
 
@@ -456,7 +430,7 @@ yaml-agno **no hardcodea** un enum cerrado de storage types. Cualquier DB soport
 | **Redis** | `storage_type: redis` | `agno.db.redis.RedisDb` (+ `expire` TTL) | Cache / TTL / pub-sub cancellation |
 | *(extensible)* | `storage_type: <registry>` | entry_points (3rd-party) | Plugins |
 
-> **@ai-directive (puntos 8, 6 del usuario)**: la abstracción clave es que el `storage_type` en YAML es una **key del registry**, no un enum cerrado. `DependencyManager` resuelve la clase Agno correspondiente, la importa perezosamente (solo esa, no todas) y la instancia con los params del YAML. Esto permite usar **cualquier DB de Agno** sin tocar código yaml-agno.
+> **@ai-directive**: la abstracción clave es que el `storage_type` en YAML es una **key del registry**, no un enum cerrado. `DependencyManager` resuelve la clase Agno correspondiente, la importa perezosamente (solo esa, no todas) y la instancia con los params del YAML. Esto permite usar **cualquier DB de Agno** sin tocar código yaml-agno.
 
 #### Session Configuration YAML
 
@@ -481,7 +455,7 @@ agent:
       environment: "${ENV}"
 ```
 
-> **@ai-directive (punto 7)**: Agno **no** trae `retention_days` ni `auto_cleanup` nativos (no borra datos viejos solo). La limpieza/retención es **extensión propia** de yaml-agno: un job programado (SPEC_13) que llama a `Curator.prune(max_age_days=...)`, o el TTL de `RedisDb(expire=...)` si el backend es Redis. Ver nota de §1.1 para detalle.
+> **@ai-directive**: no hay `retention_days` ni `auto_cleanup` nativos de Agno. La limpieza/retención se modela como **extensión propia** de yaml-agno (un job del scheduler SPEC_13 que invoca `LearningMachine`/Curator `prune(max_age_days=...)`, o el TTL de `RedisDb(expire=...)`).
 
 #### Session Manager Contract
 
@@ -540,7 +514,8 @@ graph LR
     [Long-term Memory] -.-> |Agno LearningMachine / MemoryManager| [Cross-Session Memory]
 ```
 
-> **@ai-directive (punto 9 del usuario - Redis/learning)**: aclaraciones técnicas verificadas en Agno v2.6.14:
+> **@ai-directive**: aclaraciones técnicas verificadas en Agno v2.6.14:
+> - **Engram NO es de Agno** (0 menciones en código/doc de Agno). Es nuestro MCP tool. El runtime core de yaml-agno **no** lo muestra como capa nativa. El equivalente Agno para "long-term cross-session memory" es **`LearningMachine`** (6 stores: user_profile, user_memory, session_context, entity_memory, learned_knowledge, decision_log) o, más simple, **`MemoryManager`/`UserMemory`**. Engram se trata como **adapter opcional externo**, definido en SPEC_04, no en el runtime core.
 > - **Redis SÍ es de Agno**: `agno.db.redis.RedisDb` (DB de sessions/memory con `expire` TTL), `agno.vectordb.redis.RedisDB` (vector DB) y `RedisRunCancellationManager` (cancelación pub-sub). La etiqueta anterior "Redis/Agno" era imprecisa: Redis es una opción de backend Agno, no un cache genérico nuestro.
 > - **`learning` y `culture`**: `learning` = `LearningMachine` (sistema unificado de aprendizaje). `culture` = `CultureManager` (experimental, "shared cultural knowledge"). Ambos son de Agno. Memory (MemoryManager) ≠ Learning (LearningMachine es la evolución más rica). Ver SPEC_04 para detalle.
 
@@ -550,7 +525,7 @@ graph LR
 |------|----------------|--------------|-----------------|
 | **Session State** | `db=` + `session_id`/`user_id` | PostgresDb / SqliteDb / RedisDb | Historial de runs, tool calls |
 | **Working Memory** | run context (interno Agno) | (efímero, run actual) | Contexto del run actual |
-| **Long-term Memory** | `LearningMachine` (o `MemoryManager`) | db= (misma DB) | Observaciones cross-session |
+| **Long-term Memory** | `LearningMachine` (o `MemoryManager`) | db= (misma DB) | Observaciones cross-session; "Engram" es adapter opcional externo (SPEC_04) |
 
 #### State Persistence YAML
 
@@ -562,7 +537,7 @@ agent:
     # Session persistence
     session:
       store_history: true
-      # @ai-directive (punto 10): num_history_messages is an Agno Agent attribute
+      # @ai-directive: num_history_messages is an Agno Agent attribute
       # (agent.py:138), mutually exclusive with num_history_runs. NOT max_history_messages.
       # These params are chatbot-oriented (multi-turn). For agentic single-shot flows
       # set add_history_to_context: false and omit them.
@@ -1054,18 +1029,18 @@ AND the error message contains "Agent not found: nonexistent_agent"
 
 ## 8. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
 
-### [Pregunta 1] Escalabilidad de Session Storage — DECIDIDO
+### [Pregunta 1] Escalabilidad de Session Storage
 
-**Decisión del usuario**: empezar por **< 100 sesiones activas simultáneas** (PostgreSQL single instance, MVP actual) y escalar a **10,000+ sesiones** cuando haya suficientes clientes/usuarios.
+**Objetivo declarado: productos escalables.** No sabemos el volumen exacto de antemano, pero apuntamos a que el sistema escale sin rediseño.
 
 Umbral de diseño (para no re-arquitecturar tarde):
-- **Etapa 1 (ahora): < 100 sesiones activas simultáneas** → PostgreSQL single instance es suficiente
-- **Etapa 2 (cuando tengamos clientes/usuarios suficientes): 10,000+ sesiones** → connection pooling (PgBouncer) + revisar índices
-- **Etapa 3 (futuro): 100,000+ sesiones** → particionamiento/sharding (por `user_id`/tenant)
+- **< 100 sesiones activas simultáneas** → PostgreSQL single instance es suficiente (estado actual, MVP)
+- **10,000+ sesiones** → connection pooling (PgBouncer) + revisar índices
+- **100,000+ sesiones** → particionamiento/sharding (por `user_id`/tenant)
 
-Implica: SPEC_03 define partitioning opcional desde el inicio (para no re-arquitecturar tarde); el salto a Etapa 2 se documenta como criterio operativo, no como bloqueador del MVP.
+Implica: empezar con PostgreSQL single instance (SPEC_03 ya define partitioning opcional), y dejar documentados los umbrales para escalar horizontalmente cuando el uso lo exija.
 
-### [Pregunta 2] Consistencia de Workflow State (¿qué es ACID?) — PENDIENTE
+### [Pregunta 2] Consistencia de Workflow State (¿qué es ACID?) — FEATURE FUTURA
 
 **Aclaración del concepto (preguntado por el usuario)**: **ACID** son las 4 garantías transaccionales de una base de datos relacional:
 - **A**tomicidad: una operación de varios pasos se completa entera o se revierte entera (no queda a medias). Si un workflow de 5 steps falla en el paso 3, los pasos 1-2 se deshacen.
@@ -1073,25 +1048,23 @@ Implica: SPEC_03 define partitioning opcional desde el inicio (para no re-arquit
 - **I**solación: transacciones concurrentes no interfieren entre sí (una no ve cambios a medias de otra).
 - **D**urabilidad: una vez confirmada (commit), el cambio sobrevive a crashes/cortes de luz.
 
-**La decisión pendiente**: ¿un workflow multi-step debe garantizar ACID (estado guardado transaccionalmente en PostgreSQL, "todo o nada") o basta consistencia eventual (estado en Redis + replicación asíncrona a PostgreSQL, más rápido pero puede haber breves inconsistencias)?
+**@ai-directive (hallazgo verificado en Agno v2.6.14)**: ACID **NO viene por defecto** en Agno. Agno persiste el workflow como **un `upsert_session` de la sesión completa** (una escritura atómica, pero de toda la sesión junta, no step por step). **Si falla el step 3, los steps 1-2 NO se revierten**: quedan committed y el run se marca `cancelled`/`partial`. **No existe parámetro** `transactional`/`atomic` para controlarlo. (Verificado: cero coincidencias de `transaction|atomic|rollback` en `agno/workflow/`).
+
+**Decisión**: ACID entre steps es una **extensión nuestra** sobre Agno, **no bloqueante para el MVP core**. Se implementa cuando tengamos workflows críticos (financieros/legales) que lo requieran. Ejemplo del valor: workflow facturación (validar → debitar → notificar); con ACID, si falla "notificar", se revierten "validar" y "debitar" (estado siempre consistente); sin ACID (Agno default), el débito queda hecho y hay que reconciliar a mano.
+
+- **ACID (extensión propia futura)**: envolver los steps críticos en una transacción de nuestra DB (vía Core `DatabaseManager.transaction()`). Máxima integridad. Post-MVP.
+- **Agno default (MVP)**: consistencia por upsert de sesión completa; aceptable mientras no haya workflows críticos.
+- **No existe en Agno**: consistencia eventual vía Redis + write-behind (eso sería otra extensión propia, no necesaria por ahora).
+
+### [Pregunta 3] Cacheo de Agent/Team Instances (¿de qué se trata?)
+
+**Aclaración del concepto (preguntado por el usuario)**: cada vez que llega un request HTTP, el `AgentFactory` puede **reconstruir** el objeto `Agent` desde el YAML (leer YAML, validar Pydantic, resolver modelo, construir tools, etc.). Eso cuesta ~5ms por agente. La pregunta es: ¿vale la pena **guardar en memoria** ("cachear") el objeto `Agent` ya construido y reusarlo en requests siguientes del mismo tenant/config, en vez de reconstruirlo cada vez?
 
 Implica:
-- **ACID (PostgreSQL transaccional)**: máxima garantía de estado; workflows financieros/legales lo exigen. Trade-off: algo más de latencia.
-- **Eventual (Redis + write-behind)**: menor latencia; aceptable para workflows donde una breve inconsistencia no es crítica.
-- **Recomendación tentativa**: ACID por defecto (somos productos escalables que pueden tocar datos sensibles), con opción de eventual para casos de baja criticidad.
+- **Sin cache (reconstruir cada request)**: simple, sin problemas de estado compartido, pero ~5ms de overhead por request + CPU.
+- **Con cache LRU (reusar instancias)**: menos overhead y CPU; pero (a) consume memoria RAM por instancia cacheada, (b) si cambia el YAML (hot-reload) hay que **invalidar** el cache para que la próxima request use la config nueva.
+- **Trade-off**: memoria + complejidad de invalidación vs CPU/latencia.
 
-### [Pregunta 3] Cacheo de Agent/Team Instances — DECIDIDO (feature planeada)
-
-**Aclaración del concepto**: cada vez que llega un request HTTP, el `AgentFactory` puede **reconstruir** el objeto `Agent` desde el YAML (leer YAML, validar Pydantic, resolver modelo, construir tools, etc.). Eso cuesta ~5ms por agente.
-
-**Decisión del usuario**: **sí, vale la pena cachear** instancias de Agent/Team construidas y reusarlas en requests siguientes del mismo tenant/config, en vez de reconstruir cada vez. Se deja **planteado como feature planeada** (no bloqueante para el MVP core).
-
-Diseño de la feature:
-- **Cache LRU por `tenant_id + config_hash`**: la clave combina el tenant y un hash del YAML de config.
-- **Invalidación automática en hot-reload**: si el YAML cambia, su hash cambia → cache miss → se reconstruye con la config nueva.
-- **Capas de cache complementarias**: el `DependencyManager` (Core) ya provee `lru_cache` a nivel de **clase**; esta feature extiende el cache a nivel de **instancia de Agent/Team**.
-- **Cuándo construir**: post-MVP core, como optimización de rendimiento (ver roadmap SPEC_00).
+**Recomendación tentativa**: cachear LRU por `tenant_id + config_hash`, con invalidación automática en hot-reload (el hash del YAML cambia → cache miss → reconstruye). El `DependencyManager` ya provee `lru_cache` a nivel de **clase**; esto extiende el cache a nivel de **instancia de Agent/Team**.
 
 ---
-
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente específico o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
