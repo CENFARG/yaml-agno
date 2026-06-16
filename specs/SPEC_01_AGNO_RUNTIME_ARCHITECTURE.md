@@ -29,13 +29,13 @@ El runtime de yaml-agno se construye SOBRE Agno Framework, no reimplementa sus i
 
 ```mermaid
 graph TD
-    [YAML Config] --> |Pydantic Validation| [yaml-agno Factory]
-    [yaml-agno Factory] --> |Agent:run:| [Agno Agent Instance]
-    [Agno Agent Instance] --> |Session Management| [Agent Session]
-    [Agent Session] --> |Tool Execution| [FunctionToolkit]
-    [Agent Session] --> |Knowledge Retrieval| [Knowledge Base]
-    [Agent Session] --> |Memory Operations| [User Memory]
-    [Agent Session] --> |Response Generation| [Structured Output]
+    CFG["YAML Config"] --> |Pydantic Validation| YAF["yaml-agno Factory"]
+    YAF --> |Agent:run:| AGI["Agno Agent Instance"]
+    AGI --> |Session Management| SESS["Agent Session"]
+    SESS --> |Tool Execution| FT["FunctionToolkit"]
+    SESS --> |Knowledge Retrieval| KB["Knowledge Base"]
+    SESS --> |Memory Operations| UM["User Memory"]
+    SESS --> |Response Generation| SO["Structured Output"]
 ```
 
 #### Contrato de Factory: YAML → Agno Objects
@@ -504,14 +504,14 @@ El estado de agente se divide en 3 capas, todas mapeadas a **primitivas nativas 
 
 ```mermaid
 graph LR
-    [Input] --> [Session State]
-    [Session State] --> [Working Memory]
-    [Working Memory] --> [Long-term Memory]
-    [Long-term Memory] --> [Output]
+    IN["Input"] --> SS["Session State"]
+    SS --> WM["Working Memory"]
+    WM --> LTM["Long-term Memory"]
+    LTM --> OUT["Output"]
 
-    [Session State] -.-> |Agno db= PostgresDb/SqliteDb/RedisDb| [Persistent Storage]
-    [Working Memory] -.-> |Agno run context| [Ephemeral - current run]
-    [Long-term Memory] -.-> |Agno LearningMachine / MemoryManager| [Cross-Session Memory]
+    SS -.-> |Agno db= PostgresDb/SqliteDb/RedisDb| PS["Persistent Storage"]
+    WM -.-> |Agno run context| EPH["Ephemeral - current run"]
+    LTM -.-> |Agno LearningMachine / MemoryManager| CSM["Cross-Session Memory"]
 ```
 
 > **@ai-directive**: aclaraciones técnicas verificadas en Agno v2.6.14:
@@ -573,12 +573,12 @@ yaml-agno abstrae las 6 primitivas de workflow de Agno:
 
 ```mermaid
 graph TD
-    [Input] --> |Step| [Agent/Team/Function]
-    [Input] --> |Steps| [Sequential Execution]
-    [Input] --> |Parallel| [Concurrent Execution]
-    [Input] --> |Condition| [Branching]
-    [Input] --> |Router| [Dynamic Selection]
-    [Input] --> |Loop| [Iterative Execution]
+    IN["Input"] --> |Step| ATF["Agent/Team/Function"]
+    IN --> |Steps| SEQ["Sequential Execution"]
+    IN --> |Parallel| CONC["Concurrent Execution"]
+    IN --> |Condition| BR["Branching"]
+    IN --> |Router| DS["Dynamic Selection"]
+    IN --> |Loop| ITER["Iterative Execution"]
 ```
 
 #### Primitiva: Step

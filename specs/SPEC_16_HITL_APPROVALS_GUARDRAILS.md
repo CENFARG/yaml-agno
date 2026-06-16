@@ -26,24 +26,24 @@ yaml-agno implementa oversight humano y validación automática en tres capas in
 
 ```mermaid
 graph TB
-    subgraph["Capa 1: Guardrails (Automática, bloqueante)"]
+    subgraph C1L ["Capa 1: Guardrails (Automática, bloqueante)"]
         A1[Input Guardrails]
         A2[PII Guardrail]
         A3[PromptInjection Guardrail]
         A4[Moderation Guardrail]
     end
 
-    subgraph["Capa 2: Hooks (Transformación, no bloqueante por defecto)"]
+    subgraph C2L ["Capa 2: Hooks (Transformación, no bloqueante por defecto)"]
         B1[Pre-hooks]
         B2[Post-hooks]
     end
 
-    subgraph["Capa 3: HITL / Approvals (Humano, pausante)"]
-        C1[User Confirmation]
-        C2[User Input]
-        C3[External Tool Execution]
-        C4[Admin Approval blocking]
-        C5[Admin Approval audit]
+    subgraph C3L ["Capa 3: HITL / Approvals (Humano, pausante)"]
+        CC1[User Confirmation]
+        CC2[User Input]
+        CC3[External Tool Execution]
+        CC4[Admin Approval blocking]
+        CC5[Admin Approval audit]
     end
 
     Request[Run Request] --> A1
@@ -51,8 +51,8 @@ graph TB
     A4 -->|Input limpio| B1
     B1 -->|Input enriquecido| Agent[Agent / LLM]
     Agent -->|Output| B2
-    B2 -->|Output validado| C1
-    C1 -->|needs_confirmation| Pause[RunStatus.paused]
+    B2 -->|Output validado| CC1
+    CC1 -->|needs_confirmation| Pause[RunStatus.paused]
     Pause --> Admin[Admin / User]
     Admin -->|confirm/reject| Continue[continue_run]
     Continue --> Agent

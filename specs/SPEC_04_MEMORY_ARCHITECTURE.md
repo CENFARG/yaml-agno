@@ -22,34 +22,34 @@ Last_Updated: "2026-06-13"
 
 ```mermaid
 graph TB
-    subgraph["Layer 1: Input/Output"]
-        [User Message]
-        [Agent Response]
+    subgraph L1 ["Layer 1: Input/Output"]
+        UM["User Message"]
+        AR["Agent Response"]
     end
-    
-    subgraph["Layer 2: Session Memory (PostgreSQL)"]
-        [SessionContext]
-        [Message History]
-        [Agent States]
+
+    subgraph L2 ["Layer 2: Session Memory (PostgreSQL)"]
+        SC["SessionContext"]
+        MH["Message History"]
+        AST["Agent States"]
     end
-    
-    subgraph["Layer 3: Working Memory (Agno Internal)"]
-        [Current Run Context]
-        [Tool Call Results]
-        [Intermediate Variables]
+
+    subgraph L3 ["Layer 3: Working Memory (Agno Internal)"]
+        CRC["Current Run Context"]
+        TCR["Tool Call Results"]
+        IV["Intermediate Variables"]
     end
-    
-    subgraph["Layer 4: Long-term Memory (Engram)"]
-        [Past Sessions]
-        [Learnings]
-        [Domain Knowledge]
+
+    subgraph L4 ["Layer 4: Long-term Memory (Engram)"]
+        PS["Past Sessions"]
+        LRN["Learnings"]
+        DK["Domain Knowledge"]
     end
-    
-    [User Message] --> [SessionContext]
-    [Agent Response] --> [SessionContext]
-    [SessionContext] --> |Load into context| [Current Run Context]
-    [Current Run Context] --> |Relevant findings| [Long-term Memory]
-    [Long-term Memory] -.-> |Recall| [Current Run Context]
+
+    UM --> SC
+    AR --> SC
+    SC --> |Load into context| CRC
+    CRC --> |Relevant findings| LTM["Long-term Memory"]
+    LTM -.-> |Recall| CRC
 ```
 
 ### 1.2 Memoria por Capa

@@ -69,19 +69,19 @@ dashboard/
 
 ```mermaid
 graph TD
-    [Overview Page] --> [Stats Cards]
-    [Overview Page] --> [Recent Sessions]
-    [Overview Page] --> [Active Agents]
-    [Overview Page] --> [Quick Actions]
-    
-    [Stats Cards] --> [Total Agents]
-    [Stats Cards] --> [Total Teams]
-    [Stats Cards] --> [Active Sessions]
-    [Stats Cards] --> [Avg Response Time]
-    
-    [Quick Actions] --> [Create Agent]
-    [Quick Actions] --> [Create Team]
-    [Quick Actions] --> [View Logs]
+    OP["Overview Page"] --> SC["Stats Cards"]
+    OP --> RS["Recent Sessions"]
+    OP --> AA["Active Agents"]
+    OP --> QA["Quick Actions"]
+
+    SC --> TA["Total Agents"]
+    SC --> TT["Total Teams"]
+    SC --> AS["Active Sessions"]
+    SC --> ART["Avg Response Time"]
+
+    QA --> CA["Create Agent"]
+    QA --> CT["Create Team"]
+    QA --> VL["View Logs"]
 ```
 
 ### 2.2 Agent Detail Page

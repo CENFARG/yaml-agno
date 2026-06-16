@@ -26,7 +26,7 @@ sequenceDiagram
     participant InvoiceAgent
     participant ValidatorTeam
     participant ProcessorAgent
-    participantNotifierAgent
+    participant NotifierAgent
     
     User->>InvoiceAgent: Invoice request
     InvoiceAgent->>ValidatorTeam: Validate structure

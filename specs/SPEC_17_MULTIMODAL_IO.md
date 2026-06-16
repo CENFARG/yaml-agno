@@ -26,24 +26,24 @@ yaml-agno trata la media (imágenes, audio, video, archivos) como ciudadanos de 
 
 ```mermaid
 graph TB
-    subgraph["Frontera de Entrada"]
+    subgraph FE ["Frontera de Entrada"]
         U[User Upload]
         API[API /agents/run]
     end
 
-    subgraph["Media Processing Pipeline"]
+    subgraph MPP ["Media Processing Pipeline"]
         V[Validate]
         S[Store]
         R[Reference]
     end
 
-    subgraph["Storage Adapters"]
+    subgraph SA ["Storage Adapters"]
         S3[S3Adapter]
         FS[LocalFSAdapter]
         GCS[GCSAdapter]
     end
 
-    subgraph["Consumo"]
+    subgraph CONS ["Consumo"]
         LLM[send_media_to_model]
         TOOL[Tool injection]
         PERSIST[store_media only]

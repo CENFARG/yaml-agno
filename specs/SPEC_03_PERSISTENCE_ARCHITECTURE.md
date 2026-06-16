@@ -22,31 +22,31 @@ Last_Updated: "2026-06-13"
 
 ```mermaid
 graph TB
-    subgraph["Application Layer"]
-        [yaml-agno Factory]
-        [AgentInstance]
-        [SessionContext]
+    subgraph APP ["Application Layer"]
+        YAF["yaml-agno Factory"]
+        AI["AgentInstance"]
+        SC["SessionContext"]
     end
-    
-    subgraph["Persistence Layer"]
-        [PostgreSQL]
-        [SQLite Dev]
+
+    subgraph PERS ["Persistence Layer"]
+        PG["PostgreSQL"]
+        SL["SQLite Dev"]
     end
-    
-    subgraph["Cache Layer"]
-        [Redis Optional]
+
+    subgraph CACHE ["Cache Layer"]
+        REDIS["Redis Optional"]
     end
-    
-    subgraph["Long-term Memory"]
-        [Engram]
+
+    subgraph LTM ["Long-term Memory"]
+        ENG["Engram"]
     end
-    
-    [yaml-agno Factory] -->|ConfigDB| [PostgreSQL]
-    [AgentInstance] -->|Session State| [PostgreSQL]
-    [SessionContext] -->|Message History| [PostgreSQL]
-    [PostgreSQL] -.->|Replicate| [SQLite Dev]
-    [PostgreSQL] <-->|Cache| [Redis Optional]
-    [AgentInstance] -->|Learning| [Engram]
+
+    YAF -->|ConfigDB| PG
+    AI -->|Session State| PG
+    SC -->|Message History| PG
+    PG -.->|Replicate| SL
+    PG <-->|Cache| REDIS
+    AI -->|Learning| ENG
 ```
 
 ### 1.2 Mapeo de Datos a Storage
