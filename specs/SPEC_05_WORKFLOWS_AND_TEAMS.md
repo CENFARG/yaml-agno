@@ -1,24 +1,27 @@
 ---
 Spec_ID: "SPEC_05"
 Title: "Workflows and Teams - Complex Runtime Coordination"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Workflows", "#Teams", "#Coordination", "#ErrorRecovery"]
-Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-13"
+Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_09"]
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1: yaml-agno declares workflows (WorkflowConfig/StepConfig from SPEC_02) and delegates execution to Agno. Removed proprietary workflow runtime/state machine. Error handling consumes Core Infra ErrorHandlingManager; retry composed at step level only when Agno does not cover it. StepType values capitalized. asyncio.TaskGroup."
 ---
 
 # SPEC_05_WORKFLOWS_AND_TEAMS
 
-> **Propósito**: Definir workflows complejos de runtime, contratos de interacción entre teams y máquina de estados para recuperación de errores.
+> **Purpose**: Define how yaml-agno declares complex runtime workflows (via the schemas in SPEC_02), how it delegates their execution/coordination to Agno natively, the interaction contracts between distinct teams, and the orchestrator-level error recovery strategy. yaml-agno does NOT reimplement Agno's workflow runtime; it declares and orchestrates on top of it.
 
 ---
 
 ## 1. COMPLEX RUNTIME WORKFLOWS
 
-### 1.1 Diagrama de Secuencia - Workflow de Facturación
+> @ai-directive: yaml-agno does NOT implement a workflow runtime. It declares workflows using `WorkflowConfig` / `StepConfig` (defined as SSOT in SPEC_02) and delegates execution/coordination to Agno natively. The examples in this section are USAGE of those schemas, not their definition. `StepType` values follow Agno's capitalized enum (`Step`, `Parallel`, `Condition`, `Router`, `Loop`, `Function`, `Workflow`, `Steps`).
+
+### 1.1 Sequence Diagram - Invoice Workflow
 
 ```mermaid
 sequenceDiagram
@@ -45,7 +48,9 @@ sequenceDiagram
     end
 ```
 
-### 1.2 Workflow YAML Complejo
+### 1.2 Workflow YAML Example
+
+> @ai-directive: The authoritative shape of this YAML (`WorkflowConfig`, `StepConfig`, `StepType`, `merge_strategy`, `condition`, `if_true`/`if_false`, parallel sub-steps) is defined as SSOT in SPEC_02. The snippet below is an illustrative USAGE of those schemas. All `type` values use Agno's capitalized `StepType` enum.
 
 ```yaml
 workflow:
@@ -55,48 +60,48 @@ workflow:
   steps:
     # Step 1: Receive request
     - step: receive_request
-      type: agent
+      type: Step
       agent: invoice_receiver
       description: "Receive and parse invoice request"
     
     # Step 2: Parallel validation
     - step: validate_invoice
-      type: parallel
+      type: Parallel
       description: "Validate all aspects in parallel"
       steps:
         - step: validate_structure
-          type: agent
+          type: Step
           agent: structure_validator
         - step: validate_content
-          type: agent
+          type: Step
           agent: content_validator
         - step: validate_format
-          type: agent
+          type: Step
           agent: format_validator
       
       merge_strategy: all  # All must succeed
     
     # Step 3: Conditional routing
     - step: check_validation
-      type: condition
+      type: Condition
       condition: "${result.all_valid == true}"
       if_true: process_invoice
       if_false: return_error
     
     # Step 4: Process (if valid)
     - step: process_invoice
-      type: agent
+      type: Step
       agent: invoice_processor
       description: "Generate PDF and QR code"
     
     # Step 5: Send notification
     - step: send_notification
-      type: agent
+      type: Step
       agent: notification_sender
       
     # Step 6: Error handler
     - step: return_error
-      type: agent
+      type: Step
       agent: error_handler
       description: "Return validation errors to user"
 ```
@@ -105,9 +110,11 @@ workflow:
 
 ## 2. TEAM INTERACTION CONTRACTS
 
-### 2.1 Protocolo de Paso de Información
+> @ai-directive: Within a single Agno Team, message passing and member coordination are handled natively by Agno. The contracts in this section concern coordination BETWEEN distinct teams (cross-team boundaries), which Agno does not orchestrate for yaml-agno's composed workflows.
 
-**Contract**: Teams intercambian información vía `cognitive_profile` schemas
+### 2.1 Information Passing Protocol
+
+**Contract**: Distinct teams exchange information via `cognitive_profile` schemas at cross-team boundaries.
 
 ```yaml
 # Input/Output schemas contract
@@ -141,7 +148,9 @@ cognitive_profile:
         processing_time_ms: { type: number }
 ```
 
-### 2.2 Message Passing Protocol
+### 2.2 Message Passing Protocol (Cross-Team)
+
+> @ai-directive: This protocol applies ONLY to coordination between distinct teams at workflow boundaries. Intra-team messaging (members of the same Agno Team) is handled natively by Agno and is NOT reimplemented here. If a single workflow only spans one team, this protocol is not exercised.
 
 ```python
 # yaml-agno/src/workflows/message_protocol.py
@@ -157,50 +166,72 @@ class MessageType(str, Enum):
     NOTIFICATION = "notification"
 
 class TeamMessage(BaseModel):
-    """Mensaje entre teams"""
-    
+    """Cross-team message exchanged between distinct teams at workflow boundaries.
+
+    Attributes:
+        message_id: Unique message identifier.
+        message_type: Semantic type of the message.
+        sender_team: Name of the sending team.
+        receiver_team: Name of the receiving team.
+        payload_schema: Name of the schema validating the payload.
+        payload: Actual payload data.
+        correlation_id: Optional correlation id for request-response pairing.
+        conversation_id: Conversation thread identifier.
+        timestamp: ISO8601 timestamp.
+        metadata: Arbitrary metadata bag.
+    """
+
     # Header
     message_id: str = Field(..., description="Unique message ID")
     message_type: MessageType = Field(..., description="Type of message")
     sender_team: str = Field(..., description="Sender team name")
     receiver_team: str = Field(..., description="Receiver team name")
-    
+
     # Payload
     payload_schema: str = Field(..., description="Schema name for payload")
     payload: Dict[str, Any] = Field(..., description="Actual payload data")
-    
+
     # Context
     correlation_id: str | None = Field(None, description="Correlation for request-response")
     conversation_id: str = Field(..., description="Conversation thread ID")
-    
+
     # Metadata
     timestamp: str = Field(..., description="ISO8601 timestamp")
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
+
     def validate_payload(self, schema: type[BaseModel]) -> BaseModel:
-        """Valida payload contra schema"""
+        """Validate the payload against the provided schema.
+
+        Args:
+            schema: Pydantic model class used to validate the payload.
+
+        Returns:
+            The validated model instance.
+        """
         return schema(**self.payload)
 ```
 
 ---
 
-## 3. CORE INFRA MANAGER INTEGRATION
+## 3. ERROR HANDLING COMPOSITION AT THE WORKFLOW LEVEL
 
-### 3.1 ErrorHandlingManager Integration
+> @ai-directive: yaml-agno does NOT reimplement error classification, ExceptionGroup handling, or single-call retry. Agno v2.6.14 already provides retry/error handling in its runtime for individual model/tool calls. yaml-agno CONSUMES the Core Infra `ErrorHandlingManager` (SPEC_00) for classification + reporting, and COMPOSES a step-level retry on top of Agno ONLY for workflow steps that Agno does not already cover. Resilience primitives (e.g. CircuitBreaker) are owned by SPEC_09 and referenced, not duplicated.
 
-**Responsabilidad**: Clasificación, reporte y decisión técnica sobre fallos.
+### 3.1 Consume Core Infra ErrorHandlingManager
 
-**Port (Protocol)**:
+**Responsibility**: classify, report, and decide the technical handling of failures. This is owned by Core Infra (SPEC_00) and consumed by the workflow orchestrator.
+
+**Port (Protocol)** — owned by SPEC_00, referenced here:
 ```python
 from typing import Protocol
 from enum import Enum
 
 class ErrorCategory(str, Enum):
-    TRANSIENT = "transient"      # Retry posible
+    TRANSIENT = "transient"      # Retry possible
     PERMANENT = "permanent"      # Fail-fast
     VALIDATION = "validation"    # Input error
     AUTH = "auth"                # Authentication/authorization
-    RATE_LIMIT = "rate_limit"    # Backoff requerido
+    RATE_LIMIT = "rate_limit"    # Backoff required
     CRITICAL = "critical"        # Manual review
 
 class ErrorHandlingManager(Protocol):
@@ -209,160 +240,92 @@ class ErrorHandlingManager(Protocol):
     async def report_error(self, error: Exception, context: dict) -> None: ...
 ```
 
-**Uso en yaml-agno**:
+### 3.2 Compose Step-Level Retry Above Agno
+
+> @ai-directive: `RetryPolicy` here is a STEP-LEVEL retry composed by the yaml-agno workflow orchestrator when a step is NOT already covered by Agno's own retry. It does NOT replace Agno's model/tool call retry. Classification and reporting are delegated to the Core Infra `ErrorHandlingManager`. ExceptionGroup flattening is owned by Core Infra and is NOT reimplemented here.
+
 ```python
 # yaml-agno/src/workflows/error_aware_executor.py
 
+import asyncio
+
 class ErrorAwareWorkflowExecutor:
+    """Composes step-level retry on top of Agno's runtime.
+
+    This executor does NOT re-run single model/tool calls that Agno already
+    retries; it applies a workflow-level retry around a whole step when that
+    step is not covered by Agno's built-in retry. Classification and reporting
+    are delegated to the Core Infra ErrorHandlingManager (SPEC_00).
+    """
+
     def __init__(self, error_manager: ErrorHandlingManager):
         self.error_manager = error_manager
-    
+
     async def execute_workflow_step(
         self,
         step: WorkflowStep,
         retry_policy: RetryPolicy
     ) -> Result:
-        """Ejecuta step con clasificación de errores"""
-        
+        """Execute a workflow step with step-level retry composition.
+
+        Args:
+            step: The workflow step to execute (delegates actual run to Agno).
+            retry_policy: Step-level retry policy (backoff + jitter).
+
+        Returns:
+            The step result on success.
+
+        Raises:
+            The last error after retries are exhausted, or immediately for
+            non-retryable errors as decided by ErrorHandlingManager.
+        """
         last_error = None
-        
+
         for attempt in range(retry_policy.max_retries + 1):
             try:
                 return await step.execute()
-            
+
             except Exception as e:
                 last_error = e
-                
-                # Clasificar error
+
+                # Classify via Core Infra
                 category = self.error_manager.categorize_error(e)
-                
-                # Reportar error
+
+                # Report via Core Infra
                 await self.error_manager.report_error(e, {
                     "step_name": step.name,
                     "attempt": attempt,
-                    "category": category
+                    "category": category,
                 })
-                
-                # Decidir retry
+
+                # Decide retry via Core Infra
                 if not self.error_manager.should_retry(e):
-                    raise  # Fail-fast para permanent errors
-                
+                    raise  # Fail-fast for permanent errors
+
                 if attempt < retry_policy.max_retries:
                     delay = retry_policy.calculate_delay(attempt)
                     await asyncio.sleep(delay)
-        
+
         raise last_error  # Exhausted retries
 ```
 
-**Implementación de Clasificación**:
-```python
-# yaml-agno/src/workflows/error_classifier.py
-
-class DefaultErrorHandlingManager:
-    """Implementación por defecto de ErrorHandlingManager"""
-    
-    def categorize_error(self, error: Exception) -> ErrorCategory:
-        """Clasifica error según tipo"""
-        error_type = type(error).__name__
-        
-        # Transient errors (retry posible)
-        if error_type in ["TimeoutError", "ConnectionError", "RateLimitError"]:
-            return ErrorCategory.TRANSIENT
-        
-        # Permanent errors (fail-fast)
-        elif error_type in ["ValueError", "ValidationError", "AuthenticationError"]:
-            return ErrorCategory.PERMANENT
-        
-        # Validation errors
-        elif error_type in ["ValidationError", "SchemaError"]:
-            return ErrorCategory.VALIDATION
-        
-        # Auth errors
-        elif error_type in ["UnauthorizedError", "ForbiddenError"]:
-            return ErrorCategory.AUTH
-        
-        # Rate limit errors
-        elif error_type == "RateLimitError":
-            return ErrorCategory.RATE_LIMIT
-        
-        # Critical errors (manual review)
-        elif error_type in ["DatabaseConnectionError", "SystemFailure"]:
-            return ErrorCategory.CRITICAL
-        
-        return ErrorCategory.PERMANENT  # Default conservador
-    
-    def should_retry(self, error: Exception) -> bool:
-        """Decide si error es retryable"""
-        category = self.categorize_error(error)
-        return category in [
-            ErrorCategory.TRANSIENT,
-            ErrorCategory.RATE_LIMIT
-        ]
-    
-    async def report_error(self, error: Exception, context: dict) -> None:
-        """Reporta error a sistema de alertas"""
-        # TODO: Integrar con ObservabilityManager para métricas
-        pass
-```
-
-**ExceptionGroup Handling (PEP 654)**:
-```python
-# yaml-agno/src/workflows/exception_group_handler.py
-
-class ExceptionGroupHandler:
-    """Maneja ExceptionGroup de forma recursiva"""
-    
-    def __init__(self, error_manager: ErrorHandlingManager):
-        self.error_manager = error_manager
-    
-    def flatten_exception_group(self, error: ExceptionGroup) -> list[Exception]:
-        """Desempaquetar ExceptionGroup recursivamente"""
-        exceptions = []
-        
-        for exc in error.exceptions:
-            if isinstance(exc, ExceptionGroup):
-                # Recursión para grupos anidados
-                exceptions.extend(self.flatten_exception_group(exc))
-            else:
-                exceptions.append(exc)
-        
-        return exceptions
-    
-    def categorize_group(self, error: ExceptionGroup) -> ErrorCategory:
-        """Clasifica grupo basado en peor error"""
-        exceptions = self.flatten_exception_group(error)
-        
-        categories = [self.error_manager.categorize_error(e) for e in exceptions]
-        
-        # Si algún error es CRITICAL, todo el grupo es CRITICAL
-        if ErrorCategory.CRITICAL in categories:
-            return ErrorCategory.CRITICAL
-        
-        # Si algún error es PERMANENT, todo el grupo es PERMANENT
-        if ErrorCategory.PERMANENT in categories:
-            return ErrorCategory.PERMANENT
-        
-        # Si todos son TRANSIENT, retry es posible
-        if all(c == ErrorCategory.TRANSIENT for c in categories):
-            return ErrorCategory.TRANSIENT
-        
-        return ErrorCategory.PERMANENT  # Default conservador
-```
-
 **Do's & Don'ts**:
-- ✅ Clasificar errores: transient, permanent, validation, auth, rate_limit
-- ✅ Desempaquetar ExceptionGroup recursivamente
-- ✅ Integrar con alertas externas
-- ❌ NO tragar errores sin reportar
-- ❌ NO decidir reintentos de negocio (solo técnicos)
+- DO classify and report errors through the Core Infra `ErrorHandlingManager` (SPEC_00).
+- DO compose step-level retry with backoff + jitter only when Agno does not cover the step.
+- DO reference resilience primitives from SPEC_09 (e.g. CircuitBreaker) instead of reimplementing them.
+- DO NOT reimplement ExceptionGroup flattening (Core Infra owns it).
+- DO NOT swallow errors without reporting them.
+- DO NOT decide business retries (only technical retries).
 
-**Dependencias**: ConfigManager, LoggerManager, ObservabilityManager
+**Dependencies**: ErrorHandlingManager (SPEC_00), RetryPolicy (this spec, step-level), ObservabilityManager, SPEC_09 resilience primitives.
 
 ---
 
-## 4. ERROR RECOVERY STATE MACHINE
+## 4. ORCHESTRATOR-LEVEL ERROR RECOVERY
 
-### 4.1 Máquina de Estados para Recovery
+> @ai-directive: This state machine describes the yaml-agno WORKFLOW ORCHESTRATOR's recovery behavior (step-level retry + manual review routing on top of Agno), NOT Agno's internal runtime state. yaml-agno does not own a workflow execution runtime or a workflow lifecycle state machine; Agno executes steps natively.
+
+### 4.1 Orchestrator Recovery State Machine
 
 ```mermaid
 stateDiagram-v2
@@ -370,14 +333,14 @@ stateDiagram-v2
     Running --> Success: Complete successfully
     Running --> Retry: Transient error
     Running --> Failed: Permanent error
-    
+
     Retry --> Running: Retry success
     Retry --> Failed: Max retries exceeded
     Retry --> ManualReview: Critical error
-    
+
     ManualReview --> Running: Issue resolved
     ManualReview --> Failed: Cannot resolve
-    
+
     Success --> [*]
     Failed --> [*]
 ```
@@ -393,7 +356,9 @@ stateDiagram-v2
 | **Database timeout** | Transient | Retry with new connection | 2 |
 | **Configuration error** | Permanent | Fail fast, alert admin | 0 |
 
-### 4.3 Retry Policy Implementation
+### 4.3 Step-Level Retry Policy Implementation
+
+> @ai-directive: `RetryPolicy` is a STEP-LEVEL policy composed by the yaml-agno workflow orchestrator on top of Agno. It does NOT replace Agno's retry for individual model/tool calls. Error classification is delegated to the Core Infra `ErrorHandlingManager` (SPEC_00); the local `ErrorCategory` enum is kept only as a lightweight retry signal. No `asyncio.gather`; concurrency uses `asyncio.TaskGroup` (see §5 TDD and parallel steps).
 
 ```python
 # yaml-agno/src/workflows/retry_policy.py
@@ -403,13 +368,22 @@ from typing import Callable, Any
 import asyncio
 
 class ErrorCategory(str, Enum):
+    """Lightweight retry signal used by the step-level retry policy.
+
+    Full classification (validation, auth, rate_limit, critical, ...) is owned
+    by the Core Infra ErrorHandlingManager (SPEC_00).
+    """
     TRANSIENT = "transient"
     PERMANENT = "permanent"
     CRITICAL = "critical"
 
 class RetryPolicy:
-    """Política de retry con exponential backoff"""
-    
+    """Step-level retry policy with exponential backoff + jitter.
+
+    This policy is composed at the workflow-step boundary by the yaml-agno
+    orchestrator when a step is not already covered by Agno's own retry.
+    """
+
     def __init__(
         self,
         max_retries: int = 3,
@@ -421,71 +395,92 @@ class RetryPolicy:
         self.base_delay = base_delay
         self.max_delay = max_delay
         self.jitter = jitter
-    
-    def categorize_error(self, error: Exception) -> ErrorCategory:
-        """Categoriza error para decidir retry"""
-        error_type = type(error).__name__
-        
-        # Transient errors
-        if error_type in ["TimeoutError", "ConnectionError", "RateLimitError"]:
-            return ErrorCategory.TRANSIENT
-        
-        # Permanent errors
-        elif error_type in ["ValueError", "ValidationError", "AuthenticationError"]:
-            return ErrorCategory.PERMANENT
-        
-        # Critical errors
-        elif error_type in ["DatabaseConnectionError", "SystemFailure"]:
-            return ErrorCategory.CRITICAL
-        
-        return ErrorCategory.PERMANENT  # Default
-    
+
+    def is_retryable(self, error: Exception, error_manager: ErrorHandlingManager) -> bool:
+        """Decide whether a step error is retryable.
+
+        @ai-directive: classification is DELEGATED to the Core Infra
+        ErrorHandlingManager (no local classifier). yaml-agno only asks the
+        coarse retry question (transient -> retryable).
+
+        Args:
+            error: The raised exception.
+            error_manager: Core Infra ErrorHandlingManager that classifies errors.
+
+        Returns:
+            True if the error is transient (retryable), False otherwise.
+        """
+        category = error_manager.categorize_error(error)  # Core Infra, SPEC_00
+        return category == ErrorCategory.TRANSIENT
+
     async def execute_with_retry(
         self,
         func: Callable[..., Any],
+        error_manager: ErrorHandlingManager,
         *args: Any,
         **kwargs: Any
     ) -> Any:
-        """Ejecuta función con retry policy"""
+        """Execute a step-level callable with the retry policy.
+
+        @ai-directive: retry is step-level (above Agno); it does NOT replace
+        Agno's model-level retry. Classification delegated to Core Infra.
+
+        Args:
+            func: Async callable to execute.
+            error_manager: Core Infra ErrorHandlingManager (SPEC_00).
+            *args: Positional arguments forwarded to func.
+            **kwargs: Keyword arguments forwarded to func.
+
+        Returns:
+            The result of func on success.
+
+        Raises:
+            The last error after retries are exhausted, or immediately for
+            non-retryable errors.
+        """
         last_error = None
-        
+
         for attempt in range(self.max_retries + 1):
             try:
                 return await func(*args, **kwargs)
-            
+
             except Exception as e:
                 last_error = e
-                category = self.categorize_error(e)
-                
-                if category == ErrorCategory.PERMANENT:
-                    raise  # No retry for permanent errors
-                
-                if category == ErrorCategory.CRITICAL:
-                    # TODO: Trigger manual review
-                    raise
-                
+
+                if not self.is_retryable(e, error_manager):
+                    raise  # Non-retryable: do not retry
+
                 if attempt < self.max_retries:
-                    delay = self._calculate_delay(attempt)
+                    delay = self.calculate_delay(attempt)
                     await asyncio.sleep(delay)
-        
+
         raise last_error  # Exhausted retries
-    
-    def _calculate_delay(self, attempt: int) -> float:
-        """Calcula delay con exponential backoff + jitter"""
+
+    def calculate_delay(self, attempt: int) -> float:
+        """Compute the delay with exponential backoff + jitter.
+
+        @ai-directive: PUBLIC so ErrorAwareWorkflowExecutor can call it.
+
+        Args:
+            attempt: Zero-based attempt index.
+
+        Returns:
+            Delay in seconds, capped at max_delay, with optional +/-50% jitter.
+        """
         delay = min(self.base_delay * (2 ** attempt), self.max_delay)
-        
+
         if self.jitter:
             import random
             delay = delay * (0.5 + random.random())  # ±50%
-        
+
         return delay
 ```
 
 ---
 
-## 4. BEHAVIOR DELTA - BDD SCENARIOS
+## 5. BEHAVIOR DELTA - BDD SCENARIOS
 
-### 4.1 Escenarios de Aceptación
+### 5.1 Acceptance Scenarios
 
 #### Scenario 1: Golden Path - Parallel Workflow Execution
 
@@ -537,39 +532,45 @@ AND the correlation_id matches the request
 
 ---
 
-## 5. TDD MICRO-TASK EXECUTION PROTOCOL
+## 6. TDD MICRO-TASK EXECUTION PROTOCOL
 
-### 5.1 Cascading Task Checklist
+### 6.1 Cascading Task Checklist
 
-#### TASK_001: Define Workflow Execution Model
+> @ai-directive: yaml-agno declares workflows via `WorkflowConfig` / `StepConfig` (SSOT in SPEC_02) and delegates execution to Agno. These tasks cover DECLARATION + delegation + step-level retry composition, NOT a proprietary workflow runtime/state machine. `StepType` values are Agno's capitalized enum (`Step`, `Parallel`, `Condition`, `Router`, `Loop`). Parallel steps use `asyncio.TaskGroup`, never `asyncio.gather`.
+
+#### TASK_001: Declare Workflow via WorkflowConfig/StepConfig (SPEC_02)
 
 - **File**: `yaml-agno/src/workflows/models.py`
 - **Test**: `tests/unit/workflows/test_models.py`
 - **RED**:
   ```python
-  def test_workflow_execution_creation():
-      exec = WorkflowExecution(workflow_name="test")
-      assert exec.state == WorkflowState.CREATED
+  def test_workflow_config_declaration():
+      wf = WorkflowConfig(
+          name="test",
+          steps=[StepConfig(step="s1", type=StepType.STEP, agent="a1")],
+      )
+      assert wf.name == "test"
+      assert wf.steps[0].type == StepType.STEP
   ```
-- **GREEN**: Implementar `WorkflowExecution` con lifecycle
-- **Commit**: `feat: add WorkflowExecution model`
+- **GREEN**: Build a `WorkflowConfig` from parsed YAML, referencing the SSOT schemas from SPEC_02. Do NOT introduce a `WorkflowExecution` / `WorkflowState` lifecycle model.
+- **Commit**: `feat: declare workflow via WorkflowConfig/StepConfig (SPEC_02)`
 
-#### TASK_002: Implement Step Executor
+#### TASK_002: Implement Step Executor (delegates to Agno)
 
 - **File**: `yaml-agno/src/workflows/step_executor.py`
 - **Test**: `tests/unit/workflows/test_step_executor.py`
 - **RED**:
   ```python
-  async def test_execute_agent_step():
+  async def test_execute_step_delegates_to_agno():
       executor = StepExecutor()
       result = await executor.execute_step(
-          step_config=StepConfig(step="s1", type=StepType.AGENT, agent="test"),
+          step_config=StepConfig(step="s1", type=StepType.STEP, agent="test"),
           agents={"test": mock_agent}
       )
       assert result is not None
   ```
-- **GREEN**: Implementar `StepExecutor.execute_step()`
-- **Commit**: `feat: add agent step execution`
+- **GREEN**: Implement `StepExecutor.execute_step()` delegating the actual run to Agno.
+- **Commit**: `feat: add step execution delegating to Agno`
 
 #### TASK_003: Implement Parallel Step Executor
 
@@ -585,7 +586,7 @@ AND the correlation_id matches the request
       )
       assert result.merge_strategy == "all"
   ```
-- **GREEN**: Implementar `execute_parallel_step()` con asyncio.TaskGroup
+- **GREEN**: Implement `execute_parallel_step()` with asyncio.TaskGroup (NOT asyncio.gather).
 - **Commit**: `feat: add parallel step execution`
 
 #### TASK_004: Implement Condition Evaluator
@@ -599,10 +600,10 @@ AND the correlation_id matches the request
       result = evaluator.evaluate("${input.amount > 1000}", {"amount": 1500})
       assert result is True
   ```
-- **GREEN**: Implementar CEL evaluation
+- **GREEN**: Implement CEL evaluation.
 - **Commit**: `feat: add CEL condition evaluation`
 
-#### TASK_005: Implement Retry Policy
+#### TASK_005: Implement Step-Level Retry Policy
 
 - **File**: `yaml-agno/src/workflows/retry_policy.py`
 - **Test**: `tests/unit/workflows/test_retry_policy.py`
@@ -611,33 +612,34 @@ AND the correlation_id matches the request
   async def test_retry_on_transient_error():
       policy = RetryPolicy(max_retries=3)
       attempts = [0]
-      
+
       async def failing_func():
           attempts[0] += 1
           if attempts[0] < 3:
               raise TimeoutError()
           return "success"
-      
+
       result = await policy.execute_with_retry(failing_func)
       assert result == "success"
       assert attempts[0] == 3
   ```
-- **GREEN**: Implementar `execute_with_retry()`
-- **Commit**: `feat: add retry with exponential backoff`
+- **GREEN**: Implement step-level `execute_with_retry()` (backoff + jitter) composed above Agno; delegate full classification to Core Infra ErrorHandlingManager.
+- **Commit**: `feat: add step-level retry with exponential backoff`
 
-#### TASK_006: Implement Error Categorization
+#### TASK_006: Implement Retry Decision (classification delegated to Core Infra)
 
 - **File**: `yaml-agno/src/workflows/retry_policy.py`
 - **Test**: `tests/unit/workflows/test_retry_policy.py`
 - **RED**:
   ```python
-  def test_categorize_transient_error():
+  def test_transient_error_is_retryable():
       policy = RetryPolicy()
-      category = policy.categorize_error(TimeoutError())
-      assert category == ErrorCategory.TRANSIENT
+      # Classification is delegated to Core Infra ErrorHandlingManager (SPEC_00),
+      # NOT reimplemented locally.
+      assert policy.is_retryable(TimeoutError(), error_manager) is True
   ```
-- **GREEN**: Implementar `categorize_error()`
-- **Commit**: `feat: add error categorization`
+- **GREEN**: Implement `is_retryable()` that asks the Core Infra `ErrorHandlingManager.categorize_error()` and treats `TRANSIENT` as retryable.
+- **Commit**: `feat: add retry decision delegated to Core Infra`
 
 #### TASK_007: Implement Team Message Protocol
 
@@ -658,79 +660,83 @@ AND the correlation_id matches the request
       )
       assert msg.sender_team == "A"
   ```
-- **GREEN**: Implementar `TeamMessage` con Pydantic
-- **Commit**: `feat: add team message protocol`
+- **GREEN**: Implement `TeamMessage` with Pydantic (cross-team boundary only).
+- **Commit**: `feat: add cross-team message protocol`
 
-#### TASK_008: Implement Workflow State Machine
+#### TASK_008: Verify Agno Delegation (No Proprietary Workflow Runtime)
 
-- **File**: `yaml-agno/src/workflows/state_machine.py`
-- **Test**: `tests/unit/workflows/test_state_machine.py`
+- **File**: N/A (verification task)
+- **Test**: `tests/unit/workflows/test_no_workflow_runtime.py`
 - **RED**:
   ```python
-  def test_workflow_state_transitions():
-      sm = WorkflowStateMachine()
-      sm.transition_to(WorkflowState.RUNNING)
-      assert sm.state == WorkflowState.RUNNING
+  def test_no_proprietary_workflow_runtime_classes():
+      # yaml-agno must NOT introduce its own workflow execution runtime
+      # or workflow lifecycle state machine; Agno executes steps natively.
+      import yaml_agno.workflows as w
+      assert not hasattr(w, "WorkflowExecution")
+      assert not hasattr(w, "WorkflowState")
+      assert not hasattr(w, "WorkflowStateMachine")
   ```
-- **GREEN**: Implementar `WorkflowStateMachine` con validación
-- **Commit**: `feat: add workflow state machine`
+- **GREEN**: Ensure workflows are DECLARED via `WorkflowConfig`/`StepConfig` (SPEC_02) and execution is delegated to Agno. No proprietary workflow runtime/state machine is introduced.
+- **Commit**: `test: assert no proprietary workflow runtime (Agno delegates)`
 
 ---
 
-## 6. SUPUESTOS TÉCNICOS ADOPTADOS
+## 7. ADOPTED TECHNICAL ASSUMPTIONS
 
-### [Decisión 1] CEL para Condiciones
+### [Decision 1] CEL for Conditions
 
-**Justificación**:
-- Standard de industria para expressions configurables
-- Type-safe y sandboxeable
-- Soportado por Agno Framework
+**Rationale**:
+- Industry standard for configurable expressions
+- Type-safe and sandboxable
+- Supported by Agno Framework
 
-### [Decisión 2] Exponential Backoff con Jitter
+### [Decision 2] Exponential Backoff with Jitter (Step-Level)
 
-**Justificación**:
-- Previene thundering herd problem
-- Jitter (±50%) distribuye retries en el tiempo
-- Mejor que fixed delay para distributed systems
+**Rationale**:
+- Prevents the thundering-herd problem
+- Jitter (+/-50%) spreads retries over time
+- Better than fixed delay for distributed systems
+- Applied at the workflow-step level above Agno (does not replace Agno's call-level retry)
 
-### [Decisión 3] Correlation ID para Request-Response
+### [Decision 3] Correlation ID for Cross-Team Request-Response
 
-**Justificación**:
-- Traza requests a través de múltiples teams
-- Habilita debugging distribuido
-- Necesario para observabilidad
-
----
-
-## 7. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
-
-### [Pregunta 1] Timeout por Workflow Step
-
-**¿Debería haber timeout global por workflow step (ej: 5 minutos)?**
-
-Implica:
-- **Sí**: Previene hung workflows, mejor UX
-- **No**: Flexibilidad para tareas largas (ej: generación de PDFs grandes)
-- **Trade-off**: Safety vs flexibilidad
-
-### [Pregunta 2] Deadlock Detection en Parallel Steps
-
-**¿Cómo detectar y resolver deadlocks en workflows con cyclic dependencies?**
-
-Implica:
-- **Detect**: Topological sort antes de ejecutar
-- **Resolver**: Error explícito + graph visualization
-- **Trade-off**: Validación upfront vs runtime discovery
-
-### [Pregunta 3] Orchestration vs Choreography
-
-**¿Workflows deben ser orchestrated (central controller) o choreographed (event-driven)?**
-
-Implica:
-- **Orchestration**: Más simple, debugging más fácil
-- **Choreography**: Más scalable, mejor para distributed teams
-- **Trade-off**: Simplicidad vs escalabilidad
+**Rationale**:
+- Traces requests across distinct teams
+- Enables distributed debugging
+- Required for observability
 
 ---
 
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente específico o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
+## 8. STRATEGIC CALIBRATION QUESTIONS
+
+### [Question 1] Per-Workflow-Step Timeout
+
+**Should there be a global timeout per workflow step (e.g. 5 minutes)?**
+
+Implications:
+- **Yes**: Prevents hung workflows, better UX
+- **No**: Flexibility for long tasks (e.g. large PDF generation)
+- **Trade-off**: Safety vs flexibility
+
+### [Question 2] Deadlock Detection in Parallel Steps
+
+**How to detect and resolve deadlocks in workflows with cyclic dependencies?**
+
+Implications:
+- **Detect**: Topological sort before execution
+- **Resolve**: Explicit error + graph visualization
+- **Trade-off**: Upfront validation vs runtime discovery
+
+### [Question 3] Orchestration vs Choreography
+
+**Should workflows be orchestrated (central controller) or choreographed (event-driven)?**
+
+Implications:
+- **Orchestration**: Simpler, easier debugging
+- **Choreography**: More scalable, better for distributed teams
+- **Trade-off**: Simplicity vs scalability
+
+---
+
+*Do you want to deepen the technical specification to **Level 6** for a specific component, or authorize the execution of these tasks by the agent team?*
