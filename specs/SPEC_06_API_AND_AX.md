@@ -1,18 +1,19 @@
 ---
 Spec_ID: "SPEC_06"
 Title: "API and AX - REST Endpoints and Function Calling"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#FastAPI", "#REST", "#AX", "#FunctionCalling"]
-Dependency_Hashes: ["SPEC_00", "SPEC_01"]
-Last_Updated: "2026-06-13"
+Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
+Last_Updated: "2026-06-17"
+Revision_Note: "Iter 1 cleanup. Engram removed from mandatory readiness/health (optional adapter). SPEC_02 added to Dependency_Hashes (API validates against *Config schemas). Readiness path and postgres key unified across BDD and code. Spanish docstrings/comments translated to English (Google style). Clarified this is an additional management/AX layer over AgentOS, not a duplication of Agno native /run endpoints."
 ---
 
 # SPEC_06_API_AND_AX
 
-> **Propósito**: Definir APIs REST/gRPC, perfiles AX para function calling de IA, y health checks para yaml-agno.
+> **Purpose**: Define the additional REST management layer and AX (function-calling) profiles for yaml-agno, plus health checks. This API is an ADDITIONAL management/AX layer mounted ON TOP of the Agno app served by AgentOS (`get_app()`). It does NOT duplicate Agno's native `/run` execution endpoints; it complements them with management, discovery, and observability surfaces. *Config schemas are the SSOT defined in SPEC_02; this API imports and validates against them rather than redefining them.
 
 ---
 
@@ -41,16 +42,25 @@ from typing import Any, Dict
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 class AgentRunRequest(BaseModel):
-    """Request para ejecutar agente"""
-    input: str | Dict[str, Any] = Field(..., max_length=10000, description="Input para el agente")
-    session_id: str | None = Field(None, description="ID de sesión existente")
-    user_id: str = Field(..., description="ID de usuario")
-    tenant_id: str = Field(..., description="ID de tenant")
+    """HTTP transport DTO for an agent run request.
+
+    This is an API-level DTO (request body), not the AgentConfig SSOT from
+    SPEC_02. When the request references an agent by name, the resolved
+    AgentConfig is loaded and validated against the SPEC_02 schema.
+    SPEC_17 imports these DTOs from this module.
+    """
+    input: str | Dict[str, Any] = Field(..., max_length=10000, description="Input for the agent")
+    session_id: str | None = Field(None, description="Existing session ID")
+    user_id: str = Field(..., description="User ID")
+    tenant_id: str = Field(..., description="Tenant ID")
     stream: bool = Field(default=False, description="Streaming response")
-    max_iterations: int | None = Field(None, ge=1, le=100, description="Máximo de iteraciones")
+    max_iterations: int | None = Field(None, ge=1, le=100, description="Maximum iterations")
 
 class AgentRunResponse(BaseModel):
-    """Response de ejecución de agente"""
+    """HTTP transport DTO for an agent run response.
+
+    API-level DTO (response body). SPEC_17 imports this DTO from this module.
+    """
     agent_name: str
     session_id: str
     result: Dict[str, Any]
@@ -65,12 +75,12 @@ async def run_agent(
     agent_service: AgentService = Depends()
 ) -> AgentRunResponse:
     """
-    Ejecuta un agente desde config YAML.
-    
+    Executes an agent resolved from its YAML config.
+
     Raises:
-        404: Agente no encontrado
-        400: Input inválido
-        500: Error de ejecución
+        404: Agent not found
+        400: Invalid input
+        500: Execution error
     """
     try:
         result = await agent_service.run_agent(
@@ -104,56 +114,72 @@ from typing import Dict
 router = APIRouter(prefix="/health", tags=["health"])
 
 class HealthResponse(BaseModel):
-    """Response de health check"""
+    """Health check response."""
     status: str  # healthy|degraded|unhealthy
     version: str
     dependencies: Dict[str, str]
 
 class LivenessResponse(BaseModel):
-    """Response de liveness probe"""
+    """Liveness probe response."""
     status: str  # alive|dead
 
 class ReadinessResponse(BaseModel):
-    """Response de readiness probe"""
+    """Readiness probe response."""
     status: str  # ready|not_ready
     checks: Dict[str, bool]
 
 @router.get("/", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """Health check general"""
+    """General health check.
+
+    Lists only MANDATORY dependencies. Engram is an OPTIONAL external MCP
+    adapter and MUST NOT appear here; a missing Engram config does not make
+    the service unhealthy.
+    """
     return HealthResponse(
         status="healthy",
         version="0.1.0-MVP",
         dependencies={
             "postgres": "connected",
-            "engram": "connected"
         }
     )
 
 @router.get("/liveness", response_model=LivenessResponse)
 async def liveness() -> LivenessResponse:
     """
-    Liveness probe - ¿Está el proceso vivo?
-    
-    Kubernetes usa este endpoint para restart si falla.
+    Liveness probe - is the process alive?
+
+    Kubernetes uses this endpoint to restart the pod on failure.
     """
     return LivenessResponse(status="alive")
 
 @router.get("/readiness", response_model=ReadinessResponse)
 async def readiness() -> ReadinessResponse:
     """
-    Readiness probe - ¿Está listo para recibir tráfico?
-    
-    Kubernetes usa este endpoint para sacar del rotation si no está ready.
+    Readiness probe - is the service ready to receive traffic?
+
+    Kubernetes uses this endpoint to remove the pod from rotation when
+    not ready. Only MANDATORY dependencies gate readiness.
+
+    @ai-directive: Engram is an OPTIONAL external MCP adapter. Its check
+    MUST be skippable: if Engram is not configured, the probe skips it
+    (returns "skipped") and MUST NOT mark the service not_ready. Only
+    mandatory dependencies (e.g., postgres) can flip status to not_ready.
     """
-    checks = {
+    checks: Dict[str, bool] = {
         "postgres": await check_postgres(),
-        "engram": await check_engram(),
     }
-    
-    all_ready = all(checks.values())
+
+    # Optional, non-gating Engram check. Reported for observability only.
+    # @ai-directive: skipped/False here never forces not_ready.
+    if is_engram_configured():
+        checks["engram"] = await check_engram()
+    else:
+        checks["engram"] = False  # skipped, optional
+
+    mandatory_ready = checks["postgres"]
     return ReadinessResponse(
-        status="ready" if all_ready else "not_ready",
+        status="ready" if mandatory_ready else "not_ready",
         checks=checks
     )
 ```
@@ -169,50 +195,50 @@ import time
 
 class RateLimiter:
     """
-    Rate limiter por tenant e IP.
-    
-    Límites:
-    - Por tenant: 100 requests/minuto
-    - Por IP: 20 requests/minuto
+    Rate limiter by tenant and IP.
+
+    Limits:
+    - Per tenant: 100 requests/minute
+    - Per IP: 20 requests/minute
     """
-    
+
     def __init__(self):
         # tenant_id -> {timestamp, count}
         self.tenant_buckets: Dict[str, Dict[str, int]] = {}
         # ip -> {timestamp, count}
         self.ip_buckets: Dict[str, Dict[str, int]] = {}
-        
+
         self.tenant_limit = 100  # requests per minute
         self.ip_limit = 20  # requests per minute
         self.window = 60  # seconds
-    
+
     async def check_rate_limit(
         self,
         tenant_id: str,
         client_ip: str
     ) -> None:
         """
-        Verifica rate limits.
-        
+        Checks rate limits.
+
         Raises:
             HTTPException: 429 Too Many Requests
         """
         now = int(time.time())
-        
+
         # Check tenant limit
         if not self._check_bucket(self.tenant_buckets, tenant_id, now, self.tenant_limit):
             raise HTTPException(
                 status_code=429,
                 detail=f"Tenant rate limit exceeded: {self.tenant_limit} req/min"
             )
-        
+
         # Check IP limit
         if not self._check_bucket(self.ip_buckets, client_ip, now, self.ip_limit):
             raise HTTPException(
                 status_code=429,
                 detail=f"IP rate limit exceeded: {self.ip_limit} req/min"
             )
-    
+
     def _check_bucket(
         self,
         buckets: Dict[str, Dict[str, int]],
@@ -220,21 +246,21 @@ class RateLimiter:
         now: int,
         limit: int
     ) -> bool:
-        """Verifica si bucket permite request"""
+        """Checks whether the bucket allows the request."""
         if key not in buckets:
             buckets[key] = {"timestamp": now, "count": 0}
-        
+
         bucket = buckets[key]
-        
-        # Reset si window expiró
+
+        # Reset if the window has expired
         if now - bucket["timestamp"] >= self.window:
             bucket = {"timestamp": now, "count": 0}
             buckets[key] = bucket
-        
-        # Verificar límite
+
+        # Check limit
         if bucket["count"] >= limit:
             return False
-        
+
         bucket["count"] += 1
         return True
 ```
@@ -344,7 +370,7 @@ class RateLimiter:
 
 ## 3. BEHAVIOR DELTA - BDD SCENARIOS
 
-### 3.1 Escenarios de Aceptación
+### 3.1 Acceptance Scenarios
 
 #### Scenario 1: Golden Path - Agent Execution via API
 
@@ -387,7 +413,7 @@ BUT PostgreSQL is disconnected
 WHEN GET /health/readiness is called
 THEN the response status is 503
 AND the status field is "not_ready"
-AND the checks.postgresql is false
+AND the checks.postgres is false
 ```
 
 ---
@@ -410,7 +436,7 @@ AND the checks.postgresql is false
       )
       assert req.input == "test input"
   ```
-- **GREEN**: Implementar `AgentRunRequest` con Pydantic
+- **GREEN**: Implement `AgentRunRequest` with Pydantic
 - **Commit**: `feat: add AgentRunRequest model`
 
 #### TASK_002: Define AgentRunResponse Model
@@ -429,7 +455,7 @@ AND the checks.postgresql is false
       )
       assert resp.agent_name == "test"
   ```
-- **GREEN**: Implementar `AgentRunResponse` con Pydantic
+- **GREEN**: Implement `AgentRunResponse` with Pydantic
 - **Commit**: `feat: add AgentRunResponse model`
 
 #### TASK_003: Implement Run Agent Endpoint
@@ -449,7 +475,7 @@ AND the checks.postgresql is false
       )
       assert response.status_code == 200
   ```
-- **GREEN**: Implementar `run_agent()` endpoint
+- **GREEN**: Implement `run_agent()` endpoint
 - **Commit**: `feat: add run agent endpoint`
 
 #### TASK_004: Implement Health Check Endpoint
@@ -464,7 +490,7 @@ AND the checks.postgresql is false
       data = response.json()
       assert data["status"] == "healthy"
   ```
-- **GREEN**: Implementar `health()` endpoint
+- **GREEN**: Implement `health()` endpoint
 - **Commit**: `feat: add health check endpoint`
 
 #### TASK_005: Implement Readiness Probe
@@ -480,7 +506,7 @@ AND the checks.postgresql is false
       assert "status" in data
       assert "checks" in data
   ```
-- **GREEN**: Implementar `readiness()` endpoint
+- **GREEN**: Implement `readiness()` endpoint
 - **Commit**: `feat: add readiness probe`
 
 #### TASK_006: Define AX Schemas
@@ -494,14 +520,14 @@ AND the checks.postgresql is false
       assert schema["name"] == "create_agent"
       assert "parameters" in schema
   ```
-- **GREEN**: Implementar `get_ax_schema()` function
+- **GREEN**: Implement `get_ax_schema()` function
 - **Commit**: `feat: add AX schema definitions`
 
 ---
 
 ## 5. SUPUESTOS TÉCNICOS ADOPTADOS
 
-### [Decisión 1] FastAPI para REST API
+### [Decision 1] FastAPI for REST API
 
 **Justificación**:
 - Soporte nativo para async/await
@@ -509,14 +535,14 @@ AND the checks.postgresql is false
 - OpenAPI schema generation
 - WebSocket support para streaming
 
-### [Decisión 2] Separación de Liveness vs Readiness
+### [Decision 2] Liveness vs Readiness Separation
 
 **Justificación**:
 - **Liveness**: Proceso vivo (siempre true si running)
 - **Readiness**: Listo para tráfico (depende de dependencies)
 - Kubernetes necesita ambos para rolling updates
 
-### [Decisión 3] AX Schemas para Function Calling
+### [Decision 3] AX Schemas for Function Calling
 
 **Justificación**:
 - Estándar de facto para AI function calling
@@ -525,7 +551,7 @@ AND the checks.postgresql is false
 
 ---
 
-## 6. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
+## 6. STRATEGIC CALIBRATION QUESTIONS
 
 ### [Pregunta 1] Streaming Response
 
