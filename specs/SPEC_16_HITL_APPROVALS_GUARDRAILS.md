@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_16"
 Title: "HITL, Approvals & Guardrails - Human Oversight, Input Validation and Safety Boundaries"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#HITL", "#Approvals", "#Guardrails", "#PII", "#Secrets", "#Hooks", "#Safety", "#AgnoPreHooks"]
-Dependency_Hashes: ["SPEC_04", "SPEC_05", "SPEC_06"]
-Last_Updated: "2026-06-14"
+Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_09"]
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1 cleanup: import RunStatus from agno.run.base (no YamlAgnoRunStatus); consume CircuitBreaker from SPEC_09 (no local CBState); EngramMemoryManager as optional LongTermMemoryPort adapter consistent with SPEC_04; allow_pii audited escape hatch added; English docstrings."
 ---
 
 # SPEC_16_HITL_APPROVALS_GUARDRAILS
@@ -93,18 +94,21 @@ Agno expone HITL a través de `active_requirements` en el `run_response`. Cada r
 
 ### 2.2 Estado del Run: `RunStatus.paused`
 
+> **@ai-directive**: `RunStatus` is imported from `agno.run.base`. Do NOT define a `YamlAgnoRunStatus` mirror. Use the lowercase members (`RunStatus.paused`, `RunStatus.running`, etc.).
+
+
 ```python
 # yaml-agno/src/hitl/states.py
 
-from enum import Enum
+# @ai-directive: RunStatus is IMPORTED from agno.run.base. yaml-agno does NOT
+# redefine it as YamlAgnoRunStatus (build ON TOP of Agno, not a parallel enum).
+# Agno v2.6.14 members (lowercase): pending / running / completed / paused /
+# cancelled / error.
+from agno.run.base import RunStatus  # noqa: F401  (re-exported for HITL layer)
 
-class YamlAgnoRunStatus(str, Enum):
-    """Espejo de agno RunStatus relevantes para HITL."""
-    RUNNING = "running"
-    PAUSED = "paused"        # HITL requirement activo
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    ERROR = "error"
+# The paused state is the HITL anchor: RunStatus.paused means an
+# active_requirement is pending resolution.
+PAUSED_STATE = RunStatus.paused
 ```
 
 Cuando un requirement se activa:
@@ -155,7 +159,7 @@ from agno.tools import tool
 
 @tool(requires_confirmation=True)
 def delete_user_data(user_id: str) -> str:
-    """Permanentemente borra todos los datos de un usuario."""
+    """Permanently delete all data for a user."""
     return f"All data for user {user_id} deleted."
 ```
 
@@ -187,7 +191,7 @@ def create_account(
     email: str,
     plan: str,
 ) -> str:
-    """Crea una cuenta. Requiere input del usuario."""
+    """Create an account. Requires user input."""
     ...
 ```
 
@@ -277,7 +281,7 @@ from agno.db.sqlite import SqliteDb
 @approval
 @tool(requires_confirmation=True)
 def delete_user_data(user_id: str) -> str:
-    """Permanentemente borra datos. Requiere admin approval."""
+    """Permanently delete data. Requires admin approval."""
     return f"All data for user {user_id} deleted."
 
 db = SqliteDb(db_file="app.db", approvals_table="approvals")
@@ -292,10 +296,10 @@ agent = Agent(model=..., tools=[delete_user_data], db=db)
 import time
 
 async def approve_request(db, approval_id: str, admin_user_id: str) -> None:
-    """Admin aprueba un request pendiente. Anti-race con expected_status."""
+    """Admin approves a pending request. Anti-race via expected_status."""
     await db.update_approval(
         approval_id,
-        expected_status="pending",   # Solo si sigue pending
+        expected_status="pending",   # Only if it is still pending
         status="approved",
         resolved_by=admin_user_id,
         resolved_at=int(time.time()),
@@ -349,7 +353,7 @@ async def publish_approval_taskcard(
     approval_record: dict,
     channel: str,
 ) -> str:
-    """Publica TaskCard interactivo. Retorna timestamp del mensaje."""
+    """Publish an interactive TaskCard. Returns the message timestamp."""
     blocks = _build_taskcard_blocks(approval_record)
     resp = await slack_client.chat_postMessage(
         channel=channel,
@@ -365,13 +369,15 @@ async def publish_approval_taskcard(
 @approval(type="audit")
 @tool(requires_confirmation=True)
 def log_sensitive_access(record_id: str) -> str:
-    """Acceso sensible. No bloquea, pero audita."""
+    """Sensitive access. Does not block, but is audited."""
     return f"Accessed {record_id}"
 ```
 
 El `log_approval=True` en `@tool` marca explícitamente que la ejecución debe ir al sistema de audit HITL.
 
 ### 3.8 ApprovalManager (Core Infra)
+
+> **@ai-directive**: `ApprovalManager` is a yaml-agno domain addition. Agno provides the `@approval` decorator and the `approvals` DB table, but NOT an orchestrating manager (tenant scoping, Slack publishing, circuit-breaker wiring). The frontier is clear: Agno owns the decorator + persistence; yaml-agno owns the multi-tenant manager that composes them. The CircuitBreaker consumed here is IMPORTED from SPEC_09 (not redefined).
 
 ```python
 # yaml-agno/src/approval/manager.py
@@ -380,21 +386,28 @@ from typing import Protocol
 from dataclasses import dataclass
 
 class ApprovalDB(Protocol):
+    """Protocol for the approval persistence backend (Agno DB provider)."""
     async def insert_approval(self, record: dict) -> str: ...
     async def update_approval(self, approval_id: str, **fields) -> None: ...
     async def list_pending(self, tenant_id: str) -> list[dict]: ...
     async def get_approval(self, approval_id: str) -> dict | None: ...
 
 @dataclass
-class ApprovalConfig:
+class ApprovalManagerConfig:
+    """Local manager config (schema SSOT lives in SPEC_02)."""
     default_type: str = "required"   # required | audit
     slack_channel: str | None = None
     circuit_breaker_threshold: int = 5
 
 class ApprovalManager:
-    """Core Infra manager para approvals."""
+    """Multi-tenant orchestrator for approval lifecycle.
 
-    def __init__(self, db: ApprovalDB, config: ApprovalConfig):
+    Agno owns the @approval decorator and the approvals table; this manager
+    adds tenant scoping, audit, Slack publishing, and SPEC_09 circuit-breaker
+    wiring. It does NOT redefine CircuitBreaker.
+    """
+
+    def __init__(self, db: ApprovalDB, config: ApprovalManagerConfig):
         self.db = db
         self.config = config
 
@@ -481,12 +494,12 @@ from agno.run.agent import RunInput, RunOutput
 
 
 class BaseYamlAgnoGuardrail(BaseGuardrail):
-    """Base para guardrails custom de yaml-agno. Añade telemetría y audit."""
+    """Base class for custom yaml-agno guardrails. Adds telemetry and audit."""
 
     name: str = "yaml-agno-guardrail"
 
     def _audit_block(self, run_input: RunInput, reason: str) -> None:
-        """Log estructurado del bloqueo (SPEC_09 observability)."""
+        """Structured log of the block event (SPEC_09 observability)."""
         # TODO: integrar con ErrorHandlingManager y structured logger
         ...
 ```
@@ -513,7 +526,7 @@ Agno NO provee guardrails de output nativos. yaml-agno los implementa como `post
 # yaml-agno/src/guardrails/secret_output_guardrail.py (post-hook)
 
 class SecretOutputGuardrail:
-    """Post-hook: asegura que el output no contenga secretos sin enmascarar."""
+    """Post-hook: ensure the output contains no unmasked secrets."""
 
     def __call__(self, run_output: RunOutput) -> None:
         content = run_output.content
@@ -546,7 +559,7 @@ from agno.run.agent import RunInput
 
 class PIIGuardrail(BaseGuardrail):
     """
-    Detecta y enmascara PII antes de llegar al LLM.
+    Detect and mask PII before it reaches the LLM.
 
     NOTE: Para producción, considerar migrar a Microsoft Presidio
     (https://github.com/microsoft/presidio). Presidio ofrece:
@@ -623,21 +636,51 @@ PII masking NO es solo un guardrail de LLM. Se aplica en cada frontera de persis
 | Frontera | Mecanismo | Punto de aplicación |
 |----------|-----------|---------------------|
 | LLM call | `PIIGuardrail` (pre-hook) | Antes de `.run()` |
-| Memory (SPEC_04) | Sanitizer en `EngramMemoryManager.save_*` | Antes de `mem_save` |
+| Memory (SPEC_04) | Sanitización la hace el guardrail de SPEC_16 ANTES de persistir; el adapter de memoria recibe contenido ya limpio | Antes de `mem_save` |
 | DB (SPEC_03) | Column encryption + sanitizer en repository | Antes de INSERT |
 | Logs (SPEC_09) | Structured logger con sanitizer middleware | Antes de emit log |
 
+> **@ai-directive**: `EngramMemoryManager` is an OPTIONAL adapter of the `LongTermMemoryPort` defined in SPEC_04. The default implementation is Agno's `LearningMachine` / `MemoryManager`. yaml-agno does NOT present Engram as a native memory layer or the only path. The signature MUST be consistent with SPEC_04: `__init__(self, project, session_id)` and `save_decision(self, title, content, where, learned=None)`. The adapter does NOT sanitize content itself — sanitization (PII / secret masking) is done by the SPEC_16 guardrail BEFORE the content reaches the port. Persisting already-sanitized content is what removes the contradiction with SPEC_04.
+
 ```python
-# yaml-agno/src/memory/engram_manager.py (integración con PII guardrail)
+# yaml-agno/src/memory/engram_adapter.py
+# OPTIONAL adapter of LongTermMemoryPort (SPEC_04). Default port impl is
+# Agno's LearningMachine; Engram is opt-in.
 
-class EngramMemoryManager:
-    def __init__(self, project: str, session_id: str, pii_guardrail: PIIGuardrail):
-        self.pii = pii_guardrail
-        ...
+from yaml_agno.ports.memory import LongTermMemoryPort  # SPEC_04
 
-    async def save_decision(self, title: str, content: str, where: str) -> None:
-        sanitized_content = self.pii._sanitize_string(content)
-        await mem_save(title=title, content=sanitized_content, ...)
+
+class EngramMemoryManager(LongTermMemoryPort):
+    """Optional LongTermMemoryPort backed by Engram.
+
+    Args:
+        project: Engram project identifier.
+        session_id: Engram session identifier.
+
+    Note:
+        Content passed to save_decision MUST already be sanitized by the
+        SPEC_16 guardrail. This adapter performs NO sanitization; doing it
+        here would duplicate the guardrail and contradict SPEC_04.
+    """
+
+    def __init__(self, project: str, session_id: str):
+        self.project = project
+        self.session_id = session_id
+
+    async def save_decision(
+        self,
+        title: str,
+        content: str,
+        where: str,
+        learned: str | None = None,
+    ) -> None:
+        # Content arrives pre-sanitized from the SPEC_16 guardrail.
+        await mem_save(
+            title=title,
+            content=content,
+            project=self.project,
+            session_id=self.session_id,
+        )
 ```
 
 ### 5.3 Migración a Microsoft Presidio (NOTE)
@@ -679,7 +722,7 @@ from agno.run.agent import RunInput
 
 class SecretGuardrail(BaseGuardrail):
     """
-    Detecta y enmascara secretos (API keys, tokens, passwords) en input.
+    Detect and mask secrets (API keys, tokens, passwords) in input.
 
     Integración con SecretManager (Core Infra): los valores enmascarados
     no se pierden. Si el agente necesita el secreto real, lo pide al
@@ -837,7 +880,7 @@ from agno.hooks import hook
 
 @hook(run_in_background=True)
 async def send_notification(run_output, agent):
-    """Corre en background sin bloquear la respuesta."""
+    """Run in the background without blocking the response."""
     await send_email_notification(run_output.content)
 ```
 
@@ -863,11 +906,17 @@ agent:
     id: gpt-4o
 
   # ---- GUARDRAILS (Capa 1: pre_hooks) ----
+  # @ai-directive: PII masking is default ON. allow_pii is an AUDITED escape
+  # hatch for agents that legitimately need PII (legal / medical advisors).
+  # Default safe behavior: allow_pii.enabled = false.
   guardrails:
     input:
       # Built-in de Agno
       - type: pii_detection           # PIIDetectionGuardrail
         enabled: true
+        allow_pii:                    # audited escape hatch, default OFF
+          enabled: false
+          reason: ""                  # REQUIRED when enabled: true (audited)
         config:
           redact: true                # mask vs block
       - type: prompt_injection        # PromptInjectionGuardrail
@@ -957,17 +1006,53 @@ agent:
       taskcard: true
 ```
 
+**Ejemplo: agente que necesita PII (escape hatch auditado)**
+
+```yaml
+# Legal / medical advisor that legitimately requires PII in context.
+agent:
+  name: "legal_advisor"
+  guardrails:
+    input:
+      - type: pii_detection
+        enabled: true
+        allow_pii:
+          enabled: true
+          reason: "legal-advisor: contract review requires party identity"
+        config:
+          redact: false
+```
+
+> **Default seguro**: `allow_pii.enabled = false`. Un agente que lo sobreescribe a `true` DEBE declarar `reason`; esa razón queda en audit trail (SPEC_09). El guardrail nunca se desactiva — solo suelta la máscara de PII para ese agente específico, manteniendo el resto de la cadena (secret masking, prompt injection, moderation).
+
+
 ### 8.2 Pydantic V2 Models de Config
 
 ```python
 # yaml-agno/src/guardrails/config.py
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Literal
+
+class AllowPIIConfig(BaseModel):
+    """Audited escape hatch for PII masking. Default safe: disabled."""
+    enabled: bool = False
+    reason: str = ""
+
+    @model_validator(mode="after")
+    def _require_reason_when_enabled(self) -> "AllowPIIConfig":
+        if self.enabled and not self.reason.strip():
+            raise ValueError(
+                "allow_pii.reason is REQUIRED when allow_pii.enabled is true "
+                "(audited exception)."
+            )
+        return self
 
 class GuardrailItem(BaseModel):
     type: str
     enabled: bool = True
+    # Default safe: allow_pii is absent -> PII masking stays ON.
+    allow_pii: AllowPIIConfig = Field(default_factory=AllowPIIConfig)
     config: dict = Field(default_factory=dict)
 
 class GuardrailsConfig(BaseModel):
@@ -998,10 +1083,29 @@ class ApprovalDBConfig(BaseModel):
     provider: Literal["sqlite", "postgres"] = "postgres"
     table: str = "approvals"
 
+class CircuitBreakerConfig(BaseModel):
+    """yaml-agno config for the approval CircuitBreaker.
+
+    @ai-directive: this config is OWNED by SPEC_16 (guardrails domain). It maps
+    yaml-agno keys to the SPEC_09 CircuitBreaker constructor params
+    (failure_threshold, recovery_timeout, min_requests). The CircuitBreaker
+    implementation itself is OWNED by SPEC_09; this is only its yaml-agno config.
+    """
+    failure_threshold_pct: float = 50.0   # maps to SPEC_09 failure_threshold
+    cooldown_seconds: float = 30.0         # maps to SPEC_09 recovery_timeout
+    min_requests: int = 10
+
+
+class SlackApprovalConfig(BaseModel):
+    """Optional Slack delivery for approval TaskCards."""
+    channel: str
+    webhook_url_secret: str   # resolved via SecretManager (SPEC_23), never inline
+
+
 class ApprovalConfig(BaseModel):
     db: ApprovalDBConfig = Field(default_factory=ApprovalDBConfig)
     default_type: Literal["required", "audit"] = "required"
-    circuit_breaker: CircuitBreakerConfig = Field(default_factory=lambda: CircuitBreakerConfig())
+    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
     slack: SlackApprovalConfig | None = None
 ```
 
@@ -1046,7 +1150,7 @@ from .secret_guardrail import SecretGuardrail
 from .config import GuardrailItem
 
 class GuardrailFactory:
-    """Construye instancias de guardrail desde YAML config."""
+    """Build guardrail instances from YAML config."""
 
     _REGISTRY: dict[str, Callable[..., BaseGuardrail]] = {
         "pii_detection": lambda c: PIIDetectionGuardrail(**c),
@@ -1106,46 +1210,42 @@ def build_agent(config: AgentConfig, secret_manager, db) -> Agent:
 
 Si un approval loop falla repetidamente (ej: admin nunca responde, DB caída), el circuit breaker abre y evita acaparar runs pausados.
 
+> **@ai-directive**: `CircuitBreaker` (and its state machine `CircuitState`) is OWNED by **SPEC_09** (resilience / SRE). SPEC_16 does NOT redefine it — no `CBState`, no local `CircuitBreaker` class. SPEC_16 IMPORTS and CONSUMES the SPEC_09 implementation, whose real API is: `CircuitBreaker(failure_threshold=, recovery_timeout=, min_requests=, half_open_max_calls=)`, methods `allow_request()` / `record_success()` / `record_failure()`, and state via `cb.state == CircuitState.OPEN`. yaml-agno maps its own config keys (`threshold`, `cooldown_seconds`) to the SPEC_09 constructor params.
+
 ```python
-# yaml-agno/src/guardrails/circuit_breaker.py
+# yaml-agno/src/approval/resilience.py
 
-import time
-from enum import Enum
+# @ai-directive: CircuitBreaker is imported from SPEC_09 (resilience owner).
+# Do NOT declare CBState / CircuitBreaker here. Use the SPEC_09 API:
+# failure_threshold / recovery_timeout / min_requests / half_open_max_calls.
+from yaml_agno.resilience.circuit_breaker import CircuitBreaker, CircuitState  # SPEC_09
 
-class CBState(str, Enum):
-    CLOSED = "closed"
-    OPEN = "open"
-    HALF_OPEN = "half_open"
 
-class CircuitBreaker:
-    def __init__(self, threshold: int = 5, cooldown: int = 300):
-        self.threshold = threshold
-        self.cooldown = cooldown
-        self.failures = 0
-        self.state = CBState.CLOSED
-        self.opened_at: float | None = None
+def build_approval_circuit_breaker(config) -> CircuitBreaker:
+    """Build a CircuitBreaker scoped to approval resolution.
 
-    def record_success(self) -> None:
-        self.failures = 0
-        self.state = CBState.CLOSED
-        self.opened_at = None
+    Args:
+        config: ApprovalManagerConfig carrying a circuit_breaker block with
+            yaml-agno keys (failure_threshold_pct, cooldown_seconds,
+            min_requests).
 
-    def record_failure(self) -> None:
-        self.failures += 1
-        if self.failures >= self.threshold:
-            self.state = CBState.OPEN
-            self.opened_at = time.time()
+    Returns:
+        A SPEC_09 CircuitBreaker instance configured for the approval loop.
+    """
+    cb_cfg = config.circuit_breaker
+    return CircuitBreaker(
+        failure_threshold=cb_cfg.failure_threshold_pct,  # % failure rate to open
+        recovery_timeout=cb_cfg.cooldown_seconds,         # seconds before HALF_OPEN
+        min_requests=cb_cfg.min_requests,
+    )
 
-    def allow(self) -> bool:
-        if self.state == CBState.CLOSED:
-            return True
-        if self.state == CBState.OPEN:
-            if time.time() - self.opened_at > self.cooldown:
-                self.state = CBState.HALF_OPEN
-                return True
-            return False
-        return True  # HALF_OPEN
+
+# Usage: the ApprovalManager wraps each resolve attempt in cb.allow_request();
+# on failure it calls cb.record_failure(), on success cb.record_success(). The
+# state (CLOSED -> OPEN -> HALF_OPEN) lives entirely in SPEC_09 and is read via
+# cb.state == CircuitState.OPEN (NO cb.is_open accessor exists).
 ```
+
 
 ---
 
@@ -1558,15 +1658,15 @@ THEN the agent receives the external result as the tool output
   ```python
   def test_running_to_paused():
       sm = HITLStateMachine()
-      assert sm.status == RunStatus.RUNNING
+      assert sm.status == RunStatus.running
       sm.pause()
-      assert sm.status == RunStatus.PAUSED
+      assert sm.status == RunStatus.paused
 
   def test_paused_to_running_on_continue():
       sm = HITLStateMachine()
       sm.pause()
       sm.continue_()
-      assert sm.status == RunStatus.RUNNING
+      assert sm.status == RunStatus.running
   ```
 - **GREEN**: Implementar `HITLStateMachine` con transiciones válidas.
 - **Commit**: `feat: add HITLStateMachine transitions`
@@ -1608,28 +1708,31 @@ THEN the agent receives the external result as the tool output
 - **GREEN**: Implementar `HITLTimeoutPolicy.act`.
 - **Commit**: `feat: add HITL timeout policy`
 
-#### TASK_016: CircuitBreaker open on threshold
+#### TASK_016: Approval resilience consumes SPEC_09 CircuitBreaker
 
-- **File**: `yaml-agno/src/guardrails/circuit_breaker.py`
-- **Test**: `tests/unit/guardrails/test_circuit_breaker.py`
+- **File**: `yaml-agno/src/approval/resilience.py`
+- **Test**: `tests/unit/approval/test_resilience.py`
+- **@ai-directive**: CircuitBreaker is OWNED by SPEC_09. This task verifies the wiring from SPEC_16 (no local CBState / CircuitBreaker class).
 - **RED**:
   ```python
-  def test_cb_opens_after_threshold():
-      cb = CircuitBreaker(threshold=3, cooldown=60)
-      for _ in range(3):
-          cb.record_failure()
-      assert cb.state == CBState.OPEN
-      assert cb.allow() is False
+  from yaml_agno.resilience.circuit_breaker import CircuitBreaker, CircuitState  # SPEC_09
 
-  def test_cb_half_open_after_cooldown():
-      cb = CircuitBreaker(threshold=1, cooldown=0)
+  def test_approval_loop_blocked_when_cb_open():
+      # failure_threshold=0.0 + min_requests=1 opens after the first failure.
+      cb = build_approval_circuit_breaker(_cfg(failure_threshold_pct=0.0, min_requests=1, cooldown_seconds=60))
+      cb.record_failure()
+      # SPEC_09 exposes its own state enum; SPEC_16 must NOT redefine it.
+      assert cb.state == CircuitState.OPEN
+      assert cb.allow_request() is False
+
+  def test_approval_loop_recovers_after_cooldown():
+      cb = build_approval_circuit_breaker(_cfg(failure_threshold_pct=0.0, min_requests=1, cooldown_seconds=0))
       cb.record_failure()
       time.sleep(0.01)
-      assert cb.allow() is True
-      assert cb.state == CBState.HALF_OPEN
+      assert cb.allow_request() is True
   ```
-- **GREEN**: Implementar `CircuitBreaker` con CLOSED/OPEN/HALF_OPEN.
-- **Commit**: `feat: add CircuitBreaker for guardrail resilience`
+- **GREEN**: Implement `build_approval_circuit_breaker` that instantiates the SPEC_09 `CircuitBreaker` (failure_threshold / recovery_timeout / min_requests). Do NOT declare CBState.
+- **Commit**: `feat: wire SPEC_09 CircuitBreaker into approval loop`
 
 #### TASK_017: SecretOutputGuardrail post-hook
 
