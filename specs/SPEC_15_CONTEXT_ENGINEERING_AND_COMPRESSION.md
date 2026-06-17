@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_15"
 Title: "Context Engineering & Compression"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#context-engineering", "#compression", "#dependencies", "#session-state", "#run-context", "#token-counting", "#pydantic-v2"]
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_08", "SPEC_14"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 - RunContext imported from agno.run.base (never redefined). Context compression moved here from SPEC_04 (SPEC_04 owns the memory MODEL only)."
 ---
 
 # SPEC_15_CONTEXT_ENGINEERING_AND_COMPRESSION
@@ -378,21 +379,11 @@ graph LR
 `RunContext` es el objeto que se pasa a callables (dependencies, tools, build_context) con todo el contexto de ejecución.
 
 ```python
-from dataclasses import dataclass, field
-from typing import Any
-
-@dataclass
-class RunContext:
-    session_id: str
-    user_id: str | None
-    run_id: str
-    session_state: dict[str, Any] = field(default_factory=dict)
-    dependencies: dict[str, Any] = field(default_factory=dict)
-    knowledge_filters: dict[str, Any] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
-    agent_name: str | None = None
-    team_name: str | None = None
-    workflow_id: str | None = None
+# @ai-directive: RunContext is IMPORTED from Agno (agno.run.base), never redefined.
+# yaml-agno consumes it; Agno is the source of truth for its shape (which is richer
+# than shown here: run_id, session_id, user_id, workflow_id, dependencies,
+# knowledge_filters, metadata, session_state, output_schema, messages, tools, ...).
+from agno.run.base import RunContext
 ```
 
 ### 6.2 Llenado del RunContext

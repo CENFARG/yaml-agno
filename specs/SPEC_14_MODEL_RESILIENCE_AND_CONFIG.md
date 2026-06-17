@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_14"
 Title: "Model Resilience & Configuration"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#models", "#fallback", "#resilience", "#circuit-breaker", "#cache", "#providers", "#pydantic-v2", "#retry", "#reasoning"]
 Dependency_Hashes: ["SPEC_01", "SPEC_05", "SPEC_08", "SPEC_09"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 - SecretManager referenced via SPEC_23 (Config & Secrets). No model-level enum redefinition; asyncio.TaskGroup enforced (no gather)."
 ---
 
 # SPEC_14_MODEL_RESILIENCE_AND_CONFIG

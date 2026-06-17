@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_13"
 Title: "Scheduler, Background Execution & Run Lifecycle"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Scheduler", "#Cron", "#Background", "#RunLifecycle", "#RunStatus", "#Resume", "#Cancel", "#SSE", "#TaskGroup"]
 Dependency_Hashes: ["SPEC_01", "SPEC_03"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 - RunStatus imported from agno.run.base (never redefined); members corrected to Agno lowercase (no invented 'continued' state)."
 ---
 
 # SPEC_13_SCHEDULER_BACKGROUND_LIFECYCLE
@@ -538,17 +539,13 @@ stateDiagram-v2
 
 ```python
 # yaml-agno/src/domain/runs/run_status.py
-from enum import Enum
+# @ai-directive: RunStatus is IMPORTED from Agno (agno.run.base), never redefined.
+# Members (Agno v2.6.14): pending, running, completed, paused, cancelled, error.
+# yaml-agno does NOT invent extra states (e.g. no "continued"); pause -> running
+# transition is handled by Agno's continue_run, not a separate status.
+from agno.run.base import RunStatus
 
-class RunStatus(str, Enum):
-    RUNNING = "running"
-    PAUSED = "paused"
-    CONTINUED = "continued"
-    CANCELLED = "cancelled"
-    COMPLETED = "completed"
-    ERROR = "error"
-
-TERMINAL = {RunStatus.COMPLETED, RunStatus.ERROR, RunStatus.CANCELLED}
+TERMINAL = {RunStatus.completed, RunStatus.error, RunStatus.cancelled}
 ```
 
 ### 7.3 Run cancellation
@@ -579,7 +576,7 @@ class CancelHandler:
         # cooperative cancel: set flag, the run loop observes it
         self._db.mark_cancel_requested(run_id)
         self._obs.counter("run.cancel_requested", labels={"kind": kind})
-        return {"run_id": run_id, "status": RunStatus.CANCELLED, "cancelled": True}
+        return {"run_id": run_id, "status": RunStatus.cancelled, "cancelled": True}
 ```
 
 - Cancelación **cooperativa**: se setea flag `cancel_requested`; el loop del run lo observa entre pasos y aborta limpiamente.
@@ -847,7 +844,7 @@ async def test_run_workflow_returns_immediately(mocker):
 ```python
 async def test_resume_replays_then_tails():
     db = Mock(); db.get_background_task.return_value = BackgroundTask(
-        run_id="r1", kind="workflow", target_ref="w", status=RunStatus.RUNNING,
+        run_id="r1", kind="workflow", target_ref="w", status=RunStatus.running,
         started_at=datetime.utcnow(), events=[{"i":0},{"i":1},{"i":2},{"i":3}])
     resumer = RunResumer(db=db, obs=Mock())
     out = [e async for e in resumer._replay_and_tail("r1", event_index=2)]
@@ -863,7 +860,7 @@ async def test_resume_replays_then_tails():
 ```python
 async def test_cancel_terminal_run_is_noop():
     db = Mock(); db.get_background_task.return_value = BackgroundTask(
-        run_id="r1", kind="agent", target_ref="a", status=RunStatus.COMPLETED, started_at=datetime.utcnow())
+        run_id="r1", kind="agent", target_ref="a", status=RunStatus.completed, started_at=datetime.utcnow())
     ch = CancelHandler(db=db, obs=Mock())
     res = await ch.cancel("agent", "a", "r1")
     assert res["cancelled"] is False
@@ -871,7 +868,7 @@ async def test_cancel_terminal_run_is_noop():
 
 async def test_cancel_running_run_sets_flag():
     db = Mock(); db.get_background_task.return_value = BackgroundTask(
-        run_id="r1", kind="agent", target_ref="a", status=RunStatus.RUNNING, started_at=datetime.utcnow())
+        run_id="r1", kind="agent", target_ref="a", status=RunStatus.running, started_at=datetime.utcnow())
     ch = CancelHandler(db=db, obs=Mock())
     res = await ch.cancel("agent", "a", "r1")
     assert res["cancelled"] is True
