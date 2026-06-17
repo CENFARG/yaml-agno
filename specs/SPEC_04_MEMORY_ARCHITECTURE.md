@@ -1,18 +1,21 @@
 ---
 Spec_ID: "SPEC_04"
 Title: "Memory Architecture - Session, Working Memory and Long-term Storage"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Memory", "#Engram", "#ContextCompression", "#Session"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-13"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iter 1 cleanup. yaml-agno builds ON TOP of Agno native runtime/session/memory (no own SessionContext). LongTermMemoryPort added; default impl is Agno LearningMachine/MemoryManager, Engram is an optional adapter. retention_days is a post-MVP extension (no native Agno retention). Compression migrated to SPEC_15; PII/secret masking migrated to SPEC_16. SPEC_04 is the memory MODEL; compression ops live in SPEC_15 and PII/secret guardrails live in SPEC_16."
 ---
 
 # SPEC_04_MEMORY_ARCHITECTURE
 
-> **Propósito**: Definir las capas de memoria (sesión, working memory, long-term memory), políticas de compresión de contexto, deduplicación y gobernanza de seguridad para yaml-agno.
+> **Purpose**: Define the memory MODEL for yaml-agno: the memory layers (session, working memory, long-term memory), the `LongTermMemoryPort` abstraction, and how yaml-agno CONFIGURES Agno's native memory. yaml-agno does NOT own a session/runtime.
+>
+> @ai-directive: SPEC_04 is the memory MODEL only. Context compression OPERATION lives in **SPEC_15** (context engineering). PII and secret masking GUARDRAILS live in **SPEC_16**. Retention/purge is a post-MVP extension. Do not re-implement those concerns here.
 
 ---
 
@@ -27,9 +30,9 @@ graph TB
         AR["Agent Response"]
     end
 
-    subgraph L2 ["Layer 2: Session Memory (PostgreSQL)"]
-        SC["SessionContext"]
-        MH["Message History"]
+    subgraph L2 ["Layer 2: Session Memory (Agno native, PostgreSQL backend)"]
+        SC["Agent session (user_id/session_id)"]
+        MH["Message History (Agno managed)"]
         AST["Agent States"]
     end
 
@@ -39,235 +42,210 @@ graph TB
         IV["Intermediate Variables"]
     end
 
-    subgraph L4 ["Layer 4: Long-term Memory (Engram)"]
+    subgraph L4 ["Layer 4: Long-term Memory (Agno LearningMachine/MemoryManager; Engram = optional adapter)"]
         PS["Past Sessions"]
-        LRN["Learnings"]
+        LRN["Learnings (LearningMachine)"]
         DK["Domain Knowledge"]
     end
 
     UM --> SC
     AR --> SC
     SC --> |Load into context| CRC
-    CRC --> |Relevant findings| LTM["Long-term Memory"]
+    CRC --> |Relevant findings| LTM["Long-term Memory (LongTermMemoryPort)"]
     LTM -.-> |Recall| CRC
 ```
 
-### 1.2 Memoria por Capa
+### 1.2 Memory by Layer
 
-| Capa | Storage | TTL | Max Tokens | Responsabilidad |
-|------|---------|-----|------------|-----------------|
-| **Session Memory** | PostgreSQL | 30 días | 100K tokens | Historial completo de conversación |
-| **Working Memory** | Agno internal | 1 sesión | 8K tokens | Contexto del run actual |
-| **Long-term Memory** | Engram | Permanente | ∞ (deduplicado) | Aprendizaje cross-session |
+| Layer | Storage | TTL | Max Tokens | Responsibility |
+|-------|---------|-----|------------|----------------|
+| **Session Memory** | PostgreSQL (Agno `DbSession`/`UserMemo`) | Agno-managed (per session) | 100K tokens | Full conversation history managed natively by Agno |
+| **Working Memory** | Agno internal | 1 run | 8K tokens | Context of the current run |
+| **Long-term Memory** | Agno `LearningMachine` / `MemoryManager` (default) | Permanent | ∞ (deduplicated) | Cross-session learning via `LongTermMemoryPort` |
 
-### 1.3 Configuración de Memoria YAML
+> @ai-directive: yaml-agno does NOT own a session runtime. The session, history, and working memory above are Agno's native concepts (configured via the Agent constructor and `MemoryManager`). yaml-agno only CONFIGURES them from YAML and, optionally, plugs a long-term memory adapter (Engram) through `LongTermMemoryPort`.
+>
+> @ai-directive: Automatic retention/purge (`retention_days`) is a NON-BLOCKING post-MVP extension. Agno has no native retention; it will be implemented as a scheduled job that invokes `Curator.prune`. Do NOT treat retention as effective MVP configuration.
+
+### 1.3 Memory Configuration (YAML)
 
 ```yaml
 agent:
   name: "my_agent"
   # ...
-  
+
   memory:
-    # Session memory (PostgreSQL)
+    # Session/working memory is NATIVE to Agno; yaml-agno only configures it.
+    # These flags map to the Agent constructor (see SPEC_02 *Config schemas, SSOT).
+    enable_agentic_memory: true      # Agno agentic memory on/off
+    update_memory_on_run: true       # Persist learnings after each run
+    add_memories_to_context: true    # Inject recalled memories into the prompt
+    num_history_runs: 5              # Agno-managed history window (runs)
+    num_history_messages: 50         # Agno-managed history window (messages)
+
     session:
-      enabled: true
-      storage_type: postgres  # sqlite|postgres|memory
-      retention_days: 30
-      max_messages: 100
-    
-    # Working memory (Agno)
+      storage_type: postgres         # sqlite|postgres|memory (Agno session DB)
+      max_messages: 100              # Agno native cap on recalled history
+
     working:
       max_context_tokens: 8000
-      compression_threshold: 6000  # Trigger compression al 75%
+      compression_threshold: 6000    # Compression op lives in SPEC_15
       include_tool_calls: true
-    
-    # Long-term memory (Engram)
+
+    # Long-term memory via the LongTermMemoryPort.
+    # Default backend is Agno native (LearningMachine rich / MemoryManager simple).
+    # Engram is an OPTIONAL adapter that implements the same port.
     long_term:
       enabled: true
-      project: "yaml-agno"
-      scope: project  # project|personal
-      
-      # Recall settings
-      recall_on_start: true  # Recall mem_context al inicio
-      recall_keywords: ["previous", "past", "learned", "remembered"]
-      
-      # Save settings
-      save_on_decision: true  # Auto-save decisiones
-      save_on_discovery: true  # Auto-save descubrimientos
-      save_on_bugfix: true  # Auto-save bug fixes
+      backend: agno                  # agno (default) | engram (optional adapter)
+
+      # Engram adapter settings (only used when backend == engram)
+      engram:
+        project: "yaml-agno"
+        scope: project               # project|personal
+        recall_on_start: true
+        recall_keywords: ["previous", "past", "learned", "remembered"]
+        save_on_decision: true
+        save_on_discovery: true
+        save_on_bugfix: true
+
+      # @ai-directive: post-MVP, non-blocking. No native Agno retention.
+      # retention_days: 30           # future: scheduled job -> Curator.prune
 ```
 
 ---
 
 ## 2. CONTEXT COMPRESSION AND DEDUPLICATION
 
-### 2.1 Algoritmo de Compresión de Contexto
+### 2.1 Context Compression (owned by SPEC_15)
 
-**Estrategia**: Semantic compression con preservación de información clave
+> @ai-directive: Context compression is a context-engineering OPERATION, not a memory-model concern. The `ContextCompressor` / `CompressionManager` lives in **SPEC_15** (context engineering & compression), including its threshold policy, important-message identification, and summarization strategy. SPEC_04 only references the memory-side configuration surface (`working.compression_threshold`) and treats the history as Agno-managed.
+>
+> Reference: see SPEC_15 for the full compression algorithm, token thresholds, and the summarization pipeline. Do not duplicate the implementation here.
+
+### 2.2 Long-Term Memory — Port, Default (Agno) and Optional Engram Adapter
+
+**Strategy**: yaml-agno defines a `LongTermMemoryPort` abstraction. The **default implementation is Agno native** — the rich `LearningMachine` (6 stores) or the simpler `MemoryManager`/`UserMemory`, selected via the `long_term.backend` config (`agno` default | `engram` optional). `EngramMemoryManager` is an **optional adapter** that implements the same port for teams that want an external MCP-backed store. Engram is NOT a native Agno layer and is NOT the only path.
 
 ```python
-# yaml-agno/src/memory/compression.py
+# yaml-agno/src/memory/long_term_port.py
 
-from typing import List, Dict, Any
-from datetime import datetime, timedelta
+from typing import Protocol, Any, List, runtime_checkable
 
-class ContextCompressor:
-    """Comprime contexto de sesión cuando se excede threshold"""
-    
-    def __init__(self, threshold_tokens: int = 6000):
-        self.threshold_tokens = threshold_tokens
-    
-    def should_compress(self, current_tokens: int) -> bool:
-        """Decide si es necesario comprimir"""
-        return current_tokens >= self.threshold_tokens
-    
-    def compress_history(
-        self,
-        messages: List[Dict[str, Any]],
-        target_tokens: int = 4000
-    ) -> List[Dict[str, Any]]:
-        """
-        Comprime historial manteniendo mensajes importantes.
-        
-        Estrategia:
-        1. Preservar últimos N mensajes (recientes)
-        2. Preservar mensajes con tool_call results
-        3. Resumir mensajes intermedios
-        """
-        if not messages:
-            return []
-        
-        # 1. Identificar mensajes importantes (no eliminar)
-        important = self._identify_important(messages)
-        
-        # 2. Resumir mensajes no importantes
-        summarized = self._summarize_messages(
-            [m for m in messages if not important.get(m.get("id"))],
-            target_tokens=target_tokens
-        )
-        
-        # 3. Reconstruir con importantes + resumen
-        compressed = [
-            m for m in messages
-            if important.get(m.get("id"))
-        ] + [summarized]
-        
-        return compressed
-    
-    def _identify_important(self, messages: List[Dict[str, Any]]) -> Dict[str, bool]:
-        """Identifica mensajes que NO deben comprimirse"""
-        important = {}
-        
-        for msg in messages:
-            msg_id = msg.get("id")
-            if not msg_id:
-                continue
-            
-            # Importar si:
-            # - Es uno de los últimos 5 mensajes
-            # - Contiene tool_call
-            # - Contiene error
-            # - Es el primer mensaje del usuario
-            is_important = (
-                msg == messages[-1] or  # Último mensaje
-                msg == messages[-2] or  # Penúltimo
-                msg.get("role") == "tool" or  # Tool result
-                "error" in msg.get("content", "").lower() or  # Error
-                msg == messages[0]  # Primer mensaje
-            )
-            
-            important[msg_id] = is_important
-        
-        return important
-    
-    def _summarize_messages(self, messages: List[Dict[str, Any]], target_tokens: int) -> Dict[str, Any]:
-        """Resume grupo de mensajes en un solo mensaje"""
-        if not messages:
-            return {}
-        
-        # TODO: Implementar LLM call para resumir
-        # Por ahora, concatenar con indicador de resumen
-        return {
-            "id": f"summary_{datetime.utcnow().timestamp()}",
-            "role": "system",
-            "content": f"[{len(messages)} messages summarized for context compression]",
-            "timestamp": datetime.utcnow().isoformat(),
-            "metadata": {"compressed": True, "original_count": len(messages)}
-        }
+@runtime_checkable
+class LongTermMemoryPort(Protocol):
+    """Hexagonal port for long-term (cross-session) memory.
+
+    Implementations:
+      * AgnoLearningMemoryAdapter  (default) -> Agno LearningMachine / MemoryManager
+      * EngramMemoryManager        (optional) -> Engram MCP external store
+    """
+
+    async def save_decision(self, title: str, content: str, where: str,
+                            learned: str | None = None) -> None: ...
+
+    async def save_discovery(self, title: str, content: str,
+                             where: str | None = None) -> None: ...
+
+    async def save_bugfix(self, title: str, content: str,
+                          where: str | None = None) -> None: ...
+
+    async def search_relevant(self, query: str, limit: int = 5) -> List[dict[str, Any]]: ...
 ```
 
-### 2.2 Deduplicación en Engram
+```python
+# yaml-agno/src/memory/agno_memory_adapter.py
+# @ai-directive: DEFAULT implementation. Delegates to Agno native memory.
 
-**Estrategia**: Engram MCP tiene deduplicación automática por `topic_key`
+class AgnoLearningMemoryAdapter:
+    """LongTermMemoryPort backed by Agno native memory.
 
-```yaml
+    Wraps Agno's LearningMachine (rich, 6 stores) when configured, or falls
+    back to MemoryManager/UserMemory for the simple path. yaml-agno does NOT
+    reimplement Agno memory; it routes saves/recalls through this adapter so
+    the rest of the system depends on the Port, not on a concrete backend.
+    """
+
+    def __init__(self, agent, project: str):
+        self._agent = agent          # Agno Agent with enable_agentic_memory=True
+        self.project = project
+
+    async def save_decision(self, title: str, content: str, where: str,
+                            learned: str | None = None) -> None:
+        """Persist an architectural decision via Agno native memory."""
+        ...  # route to Agno LearningMachine / UserMemory
+
+    async def save_discovery(self, title: str, content: str,
+                             where: str | None = None) -> None:
+        """Persist a technical discovery via Agno native memory."""
+        ...
+
+    async def save_bugfix(self, title: str, content: str,
+                          where: str | None = None) -> None:
+        """Persist a bug fix (root cause + resolution) via Agno native memory."""
+        ...
+
+    async def search_relevant(self, query: str, limit: int = 5):
+        """Recall relevant memories via Agno native memory."""
+        ...  # Agno native memory recall (add_memories_to_context / mem search)
+```
+
+```python
 # yaml-agno/src/memory/engram_manager.py
+# @ai-directive: OPTIONAL adapter, only active when long_term.backend == "engram".
 
-from typing import Optional, List
-from pydantic import BaseModel
+from typing import List
 
 class EngramMemoryManager:
-    """Gestiona memoria de largo plazo via Engram MCP"""
-    
+    """Optional LongTermMemoryPort adapter backed by the Engram MCP store.
+
+    Engram is an EXTERNAL MCP server, not an Agno layer. It is selected only
+    via the YAML config (long_term.backend: engram) and provides the same
+    contract as the default Agno adapter. Deduplication is automatic by
+    topic_key on the Engram side.
+    """
+
     def __init__(self, project: str, session_id: str):
         self.project = project
         self.session_id = session_id
-    
-    async def save_decision(
-        self,
-        title: str,
-        content: str,
-        where: str,
-        learned: str | None = None
-    ) -> None:
-        """
-        Guarda decisión arquitectónica en Engram.
-        
-        Usa topic_key para upsert (evita duplicados).
-        """
+
+    async def save_decision(self, title: str, content: str, where: str,
+                            learned: str | None = None) -> None:
+        """Persist an architectural decision via Engram (upsert by topic_key)."""
         from .engram_utils import mem_save  # MCP tool
-        
+
         await mem_save(
             title=title,
             type="decision",
             content=f"**What**: {content}\n**Where**: {where}\n**Learned**: {learned or ''}",
             project=self.project,
-            session_id=self.session_id
+            session_id=self.session_id,
         )
-    
-    async def save_discovery(
-        self,
-        title: str,
-        content: str,
-        where: str | None = None
-    ) -> None:
-        """Guarda descubrimiento técnico"""
+
+    async def save_discovery(self, title: str, content: str,
+                             where: str | None = None) -> None:
+        """Persist a technical discovery via Engram."""
         from .engram_utils import mem_save
-        
+
         await mem_save(
             title=title,
             type="discovery",
             content=f"**What**: {content}\n**Where**: {where or 'Unknown'}",
             project=self.project,
-            session_id=self.session_id
+            session_id=self.session_id,
         )
-    
-    async def search_relevant(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """Busca memoria relevante para contexto actual"""
+
+    async def search_relevant(self, query: str, limit: int = 5) -> List[dict]:
+        """Recall relevant memories from Engram for the current context."""
         from .engram_utils import mem_search, mem_get_observation
-        
-        results = await mem_search(
-            query=query,
-            project=self.project,
-            limit=limit
-        )
-        
-        # Obtener contenido completo de cada resultado
+
+        results = await mem_search(query=query, project=self.project, limit=limit)
+
         memories = []
         for result in results:
             full_obs = await mem_get_observation(id=result["id"])
             memories.append(full_obs)
-        
+
         return memories
 ```
 
@@ -275,317 +253,138 @@ class EngramMemoryManager:
 
 ## 3. MEMORY GOVERNANCE AND SECURITY RULES
 
-### 3.1 Políticas de Aislamiento
+### 3.1 Isolation Policies
 
-| Regla | Implementación | Verificación |
-|-------|----------------|--------------|
-| **Tenant Isolation** | RLS en PostgreSQL + `tenant_id` en todas las queries | `assert session.tenant_id == current_tenant` |
-| **User Isolation** | `user_id` en session_contexts | Queries filtradas por `user_id` |
-| **Session Isolation** | `session_id` único por sesión | `session_contexts.session_id UNIQUE` |
+> @ai-directive: yaml-agno does NOT own a session runtime or a `session_contexts` model. Session, user and message isolation are provided **natively by Agno** via its `user_id` + `session_id` keys, and tenant isolation is provided by **Core Infra** (`TenantResolver` / RLS, see SPEC_00 §7.2). yaml-agno only declares which Agno-native isolation keys are in force; it does not re-implement them.
 
-### 3.2 Desidentificación de PII
+| Policy | Mechanism (Agno native / Core) | Enforcement |
+|--------|-------------------------------|-------------|
+| **Tenant Isolation** | Core Infra `TenantResolver` + RLS on the Agno DB (`tenant_id` in all queries) | `assert resolved_tenant_id == current_tenant` |
+| **User Isolation** | Agno `user_id` key (scope of memory/sessions) | Memory queries scoped by `user_id` |
+| **Session Isolation** | Agno `session_id` key (unique per session) | Agno guarantees `session_id` uniqueness |
 
-**Estrategia**: Masking automático de datos sensibles antes de guardar en memoria
+### 3.2 PII De-identification (owned by SPEC_16)
 
-```python
-# yaml-agno/src/memory/pii_sanitizer.py
+> @ai-directive: PII sanitization (`PIISanitizer`, international patterns, masking rules) is a GUARDRAIL and lives in **SPEC_16** (guardrails), where it is owned and configured (`allow_pii` flag). SPEC_04 only states that, when PII guardrails are enabled, anything persisted to the long-term memory port must already be sanitized by the SPEC_16 guardrail. Do not duplicate the `PIISanitizer` implementation here.
+>
+> Reference: see SPEC_16 for the PII detection patterns, masking strategy, and the configurable `allow_pii` toggle.
 
-import re
-from typing import Any, Dict
+### 3.3 Secret Masking (owned by SPEC_16)
 
-class PIISanitizer:
-    """
-    Sanitiza PII antes de persistir.
-    
-    NOTE: Considerar migrar a presidio (Microsoft Presidio) para producción:
-    - Soporta más de 50 tipos de PII
-    - better detection con NLP
-    - Reducir false positives
-    - https://github.com/microsoft/presidio
-    """
-    
-    # Patterns para detectar PII (formatos internacionales) (formatos internacionales)
-    PATTERNS = {
-        "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-        "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
-        "credit_card": r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b",
-        "phone": r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b",
-        # Internacional - Documentos de identidad
-        "dni_ar": r"\b\d{7,8}\b",  # DNI Argentina: 7-8 dígitos
-        "rfc_mx": r"\b[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]\d\b",  # RFC México
-        "cpf_br": r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b",  # CPF Brasil
-        # Internacional - Teléfonos
-        "phone_intl": r"\b\+?\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b",
-    }
-    
-    def sanitize(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Sanitiza PII en diccionario recursivamente"""
-        if isinstance(data, dict):
-            return {k: self.sanitize(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self.sanitize(item) for item in data]
-        elif isinstance(data, str):
-            return self._sanitize_string(data)
-        else:
-            return data
-    
-    def _sanitize_string(self, text: str) -> str:
-        """Sanitiza PII en string"""
-        sanitized = text
-        
-        for pii_type, pattern in self.PATTERNS.items():
-            matches = re.finditer(pattern, sanitized)
-            for match in matches:
-                original = match.group()
-                masked = self._mask_value(original, pii_type)
-                sanitized = sanitized.replace(original, masked)
-        
-        return sanitized
-    
-    def _mask_value(self, value: str, pii_type: str) -> str:
-        """Enmascara valor según tipo"""
-        if pii_type == "email":
-            # user@domain.com -> u***@domain.com
-            parts = value.split("@")
-            return f"{parts[0][0]}***@{parts[1]}"
-        elif pii_type == "ssn":
-            # 123-45-6789 -> ***-**-****
-            return "***-**-****"
-        elif pii_type == "credit_card":
-            # 1234-5678-9012-3456 -> ****-****-****-3456
-            parts = value.split("-")
-            return f"****-****-****-{parts[-1]}"
-        elif pii_type == "phone":
-            # 123-456-7890 -> ***-***-7890
-            parts = value.split("-")
-            return f"***-***-{parts[-1]}"
-        else:
-            return "***"
-```
+> @ai-directive: Secret detection and masking (`SecretSanitizer`, `SecureMemoryManager`, `SecretManager` integration) lives in **SPEC_16** (guardrails). SPEC_04 only states that memory persistence must receive already-masked secrets from the SPEC_16 guardrail layer. Do not duplicate the secret-masking implementation here.
+>
+> Reference: see SPEC_16 for secret patterns, the Zero-Trust `SecretManager` abstraction, and the masking policy.
 
-### 3.3 Enmascaramiento de Secretos
+### 3.4 Retention Rules (GDPR) — post-MVP, non-blocking
 
-**Estrategia**: Detectar y enmascarar secretos antes de persistir
+> @ai-directive: Automatic retention/purge is a NON-BLOCKING post-MVP extension. Agno has NO native retention. The table below is the target policy that a future scheduled job (invoking `Curator.prune`) will enforce; it is NOT effective MVP configuration. The MVP relies on Agno-managed session lifetime plus always-on PII/secret masking (SPEC_16).
 
-**SecretManager Integration**:
-```python
-# yaml-agno/src/memory/secret_manager_integration.py
-
-from typing import Protocol
-
-class SecretManager(Protocol):
-    """Abstracción Zero-Trust para gestión de credenciales"""
-    async def get_secret(self, key: str) -> str: ...
-    async def get_secret_json(self, key: str) -> dict: ...
-
-class SecureMemoryManager:
-    def __init__(self, secret_manager: SecretManager):
-        self.secrets = secret_manager
-    
-    async def mask_secrets_in_memory(self, memory_data: dict) -> dict:
-        """Enmascara secretos antes de persistir en memoria"""
-        
-        # Patrones de secretos a detectar
-        secret_patterns = ["api_key", "secret", "token", "password"]
-        
-        sanitized = {}
-        for key, value in memory_data.items():
-            if any(pattern in key.lower() for pattern in secret_patterns):
-                # Obtener valor seguro desde SecretManager
-                if isinstance(value, str) and len(value) > 8:
-                    # Mostrar solo primeros 4 y últimos 4 caracteres
-                    sanitized[key] = f"{value[:4]}...{value[-4:]}"
-                else:
-                    sanitized[key] = "***"
-            else:
-                sanitized[key] = value
-        
-        return sanitized
-```
-
-**Do's & Don'ts**:
-- ✅ Rotación automática con TTL corto
-- ✅ Auditoría de accesos a secretos
-- ❌ NO persistir secretos en variables de entorno
-- ❌ NO listar todos los secretos
-
-```python
-# yaml-agno/src/memory/secret_sanitizer.py
-
-import os
-from typing import Dict, Any
-
-class SecretSanitizer:
-    """Enmascara secretos (API keys, tokens, passwords)"""
-    
-    # Prefixes comunes de secretos
-    SECRET_PATTERNS = [
-        "api_key", "apikey", "api-key",
-        "secret", "secret_key", "secretkey",
-        "token", "access_token", "auth_token",
-        "password", "pass",
-        "private_key", "privatekey",
-    ]
-    
-    def sanitize(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Sanitiza secretos en diccionario"""
-        if isinstance(data, dict):
-            sanitized = {}
-            for k, v in data.items():
-                if self._is_secret_key(k):
-                    sanitized[k] = self._mask_secret(v)
-                else:
-                    sanitized[k] = self.sanitize(v)
-            return sanitized
-        else:
-            return data
-    
-    def _is_secret_key(self, key: str) -> bool:
-        """Detecta si key es secreto"""
-        key_lower = key.lower()
-        return any(pattern in key_lower for pattern in self.SECRET_PATTERNS)
-    
-    def _mask_secret(self, value: Any) -> str:
-        """Enmascara valor secreto"""
-        if isinstance(value, str):
-            if len(value) <= 8:
-                return "***"
-            else:
-                # Mostrar primeros 4 y últimos 4 caracteres
-                return f"{value[:4]}...{value[-4:]}"
-        else:
-            return "***"
-```
-
-### 3.4 Reglas de Retención (GDPR)
-
-| Tipo de Dato | Retención | Justificación |
-|--------------|-----------|---------------|
-| **Session messages** | 30 días | GDPR - derecho al olvido |
-| **Agent execution logs** | 90 días | Debugging, compliance |
-| **Domain events** | 7 días | Event sourcing window |
-| **Long-term memory (Engram)** | Permanente | Aprendizaje cross-session |
-| **PII data** | Masked siempre | Privacy by design |
+| Data Type | Target Retention | Justification |
+|-----------|------------------|---------------|
+| **Session messages** | 30 days (future) | GDPR - right to be forgotten; enforced by a post-MVP purge job |
+| **Agent execution logs** | 90 days (future) | Debugging, compliance |
+| **Domain events** | 7 days (future) | Event sourcing window |
+| **Long-term memory** | Permanent (default) | Cross-session learning via `LongTermMemoryPort` (Agno default / Engram adapter) |
+| **PII data** | Always masked | Privacy by design (SPEC_16) |
 
 ---
 
 ## 4. MEMORY ACCESS PATTERNS
 
-### 4.1 Patrón: Recall al Inicio de Sesión
+### 4.1 Pattern: Configuring Agno Memory on Session Start
+
+> @ai-directive: yaml-agno does NOT own a session runtime or a `SessionContext` model. The session, message history, and FIFO eviction are managed NATIVELY by Agno. yaml-agno only CONFIGURES Agno memory from YAML (constructor flags + `MemoryManager`) and, optionally, wires a long-term recall through the `LongTermMemoryPort`.
 
 ```python
-# yaml-agno/src/memory/session_bootstrap.py
+# yaml-agno/src/memory/agno_memory_config.py
+# @ai-directive: Build the Agno memory configuration FROM the YAML *Config (SPEC_02 SSOT).
+#                The paths below MATCH the YAML block defined in section 1.3 exactly.
+#                Do not invent a parallel SessionContext/session_state model.
 
-class SessionBootstrap:
-    """Bootstrap de sesión con recall de memoria"""
-    
-    async def initialize_session(
-        self,
-        user_id: str,
-        session_id: str,
-        tenant_id: str
-    ) -> SessionContext:
-        """
-        Inicializa sesión con recall automático.
-        
-        1. Recall Engram context (opcional)
-        2. Cargar session_contexts desde PostgreSQL
-        3. Inicializar working memory
-        """
-        # 1. Recall de Engram (si configurado)
-        if self.config.recall_on_start:
-            past_context = await self.recall_past_context(user_id)
-            # TODO: Inyectar en system prompt
-        
-        # 2. Cargar sesión existente o crear nueva
-        session = await self.load_or_create_session(
-            user_id=user_id,
-            session_id=session_id,
-            tenant_id=tenant_id
-        )
-        
-        # 3. Verificar TTL
-        if self._is_expired(session):
-            await self.cleanup_expired(session)
-            session = await self.create_new_session(...)
-        
-        return session
-    
-    async def recall_past_context(self, user_id: str) -> List[Dict[str, Any]]:
-        """Recall contexto pasado desde Engram"""
-        manager = EngramMemoryManager(
-            project=self.config.project,
-            session_id=self.session_id
-        )
-        
-        # Buscar memorias relevantes
-        memories = await manager.search_relevant(
-            query=f"user:{user_id} past sessions decisions",
-            limit=10
-        )
-        
-        return memories
+def build_memory_config(memory_cfg) -> dict:
+    """Translate the YAML memory block into Agno Agent constructor flags.
+
+    These flags are what make Agno manage the session/history/working memory:
+      enable_agentic_memory, update_memory_on_run,
+      add_memories_to_context, num_history_runs, num_history_messages.
+    """
+    return {
+        "enable_agentic_memory": memory_cfg.enable_agentic_memory,
+        "update_memory_on_run": memory_cfg.update_memory_on_run,
+        "add_memories_to_context": memory_cfg.add_memories_to_context,
+        "num_history_runs": memory_cfg.num_history_runs,
+        "num_history_messages": memory_cfg.num_history_messages,
+    }
+
+
+async def recall_on_start(port: "LongTermMemoryPort",
+                          memory_cfg,
+                          user_id: str) -> list[dict]:
+    """Optional cross-session recall through the LongTermMemoryPort.
+
+    Triggered when memory_cfg.long_term.recall_on_start is true, regardless of
+    the backend (agno default or engram adapter). The port's default
+    implementation is Agno native (LearningMachine / MemoryManager).
+    """
+    return await port.search_relevant(
+        query=f"user:{user_id} past sessions decisions",
+        limit=10,
+    )
 ```
 
-### 4.2 Patrón: Save-on-Decision
+### 4.2 Pattern: Save-on-Decision
+
+> @ai-directive: Autosave depends on the `LongTermMemoryPort`, not on a concrete backend. The default backend is Agno native (LearningMachine / MemoryManager); the Engram adapter is only injected when `long_term.backend == engram`.
 
 ```python
 # yaml-agno/src/memory/autosave.py
 
 class AutosaveManager:
-    """Guarda automáticamente decisiones y descubrimientos"""
-    
-    async def on_agent_decision(
-        self,
-        agent_name: str,
-        decision: str,
-        reasoning: str
-    ) -> None:
-        """Callback cuando agente toma decisión"""
-        if not self.config.save_on_decision:
+    """Auto-saves decisions, discoveries, and bug fixes through the LongTermMemoryPort."""
+
+    def __init__(self, port: "LongTermMemoryPort", config):
+        self.port = port        # Agno default | Engram adapter
+        self.config = config
+
+    async def on_agent_decision(self, agent_name: str, decision: str,
+                                reasoning: str) -> None:
+        """Callback fired when an agent takes a decision."""
+        if not self.config.long_term.save_on_decision:
             return
-        
-        manager = EngramMemoryManager(
-            project=self.config.project,
-            session_id=self.session_id
-        )
-        
-        await manager.save_decision(
+
+        await self.port.save_decision(
             title=f"Decision by {agent_name}",
             content=decision,
             where=agent_name,
-            learned=reasoning
+            learned=reasoning,
         )
-    
-    async def on_discovery(
-        self,
-        title: str,
-        content: str,
-        where: str | None = None
-    ) -> None:
-        """Callback cuando se hace descubrimiento"""
-        if not self.config.save_on_discovery:
+
+    async def on_discovery(self, title: str, content: str,
+                           where: str | None = None) -> None:
+        """Callback fired when a discovery is made."""
+        if not self.config.long_term.save_on_discovery:
             return
-        
-        manager = EngramMemoryManager(...)
-        await manager.save_discovery(title=title, content=content, where=where)
+
+        await self.port.save_discovery(title=title, content=content, where=where)
 ```
 
 ---
 
 ## 5. BEHAVIOR DELTA - BDD SCENARIOS
 
-### 5.1 Escenarios de Aceptación
+### 5.1 Acceptance Scenarios
 
-#### Scenario 1: Golden Path - Session Memory Creation
+#### Scenario 1: Golden Path - Agno Memory Configuration from YAML
 
 ```gherkin
-GIVEN a user starts a new session
-WHEN the session is initialized
-THEN a SessionContext is created
-AND the session_state is "active"
-AND message_history is empty array
-AND created_at and last_activity are set
+GIVEN a YAML memory block with enable_agentic_memory=true
+AND add_memories_to_context=true
+AND num_history_messages=50
+WHEN the Agent is built from the *Config (SPEC_02)
+THEN the Agno Agent is constructed with those memory flags
+AND Agno manages the session/history natively (no yaml-agno SessionContext)
+AND the LongTermMemoryPort is resolved to the configured backend (agno default)
+AND no custom session_state model is created by yaml-agno
 ```
 
 #### Scenario 2: Golden Path - Context Compression
@@ -601,25 +400,27 @@ AND intermediate messages are summarized
 AND the compressed context is under 4000 tokens
 ```
 
-#### Scenario 3: Error Case - PII Not Sanitized
+#### Scenario 3: PII Masking Delegated to SPEC_16
 
 ```gherkin
 GIVEN a message containing PII "user@example.com"
-WHEN the message is saved to memory
-THEN the email is sanitized to "u***@example.com"
-AND the sanitized version is persisted
-AND the original email is NOT in the database
+AND the SPEC_16 PII guardrail is enabled
+WHEN the message is saved to the long-term memory port
+THEN the email is sanitized by the SPEC_16 guardrail to "u***@example.com"
+AND only the sanitized version reaches the LongTermMemoryPort
+AND the original email is NOT persisted
 ```
 
-#### Scenario 4: Golden Path - Engram Recall
+#### Scenario 4: Golden Path - Long-term Recall via Port
 
 ```gherkin
-GIVEN a user with past decisions in Engram
+GIVEN a user with past decisions in long-term memory
 AND recall_on_start is enabled
 WHEN a new session starts
-THEN past decisions are recalled
-AND relevant memories are injected into context
+THEN past decisions are recalled through the LongTermMemoryPort
+AND relevant memories are injected into context (add_memories_to_context)
 AND the agent has awareness of past work
+AND the backend is Agno native by default (Engram only if configured)
 ```
 
 ---
@@ -628,204 +429,155 @@ AND the agent has awareness of past work
 
 ### 6.1 Cascading Task Checklist
 
-#### TASK_001: Define SessionContext Model
+> @ai-directive: yaml-agno does NOT own a session runtime. There is no `SessionContext` model, no `add_message()` FIFO, no `SessionState` — those are Agno native. Tasks below configure/extend Agno memory, not replace it. Compression tasks live in SPEC_15; PII/secret tasks live in SPEC_16.
 
-- **File**: `yaml-agno/src/memory/models/session_context.py`
-- **Test**: `tests/unit/memory/test_session_context.py`
+#### TASK_001: Define LongTermMemoryPort
+
+- **File**: `yaml-agno/src/memory/long_term_port.py`
+- **Test**: `tests/unit/memory/test_long_term_port.py`
 - **RED**:
   ```python
-  def test_session_context_creation():
-      ctx = SessionContext(
-          session_id="s1",
-          user_id="u1",
-          tenant_id="t1"
-      )
-      assert ctx.session_state == SessionState.ACTIVE
+  def test_port_contract_is_protocol():
+      # LongTermMemoryPort is a typing.Protocol; concrete adapters satisfy it.
+      assert hasattr(LongTermMemoryPort, "save_decision")
+      assert hasattr(LongTermMemoryPort, "save_discovery")
+      assert hasattr(LongTermMemoryPort, "search_relevant")
   ```
-- **GREEN**: Implementar `SessionContext` con Pydantic
-- **Commit**: `feat: add SessionContext model`
+- **GREEN**: Define `LongTermMemoryPort` Protocol (save_decision/save_discovery/save_bugfix/search_relevant)
+- **Commit**: `feat: add LongTermMemoryPort abstraction`
 
-#### TASK_002: Implement Add Message with FIFO
+#### TASK_002: Implement Default Agno Memory Adapter
 
-- **File**: `yaml-agno/src/memory/models/session_context.py`
-- **Test**: `tests/unit/memory/test_session_context.py`
+- **File**: `yaml-agno/src/memory/agno_memory_adapter.py`
+- **Test**: `tests/unit/memory/test_agno_memory_adapter.py`
 - **RED**:
   ```python
-  def test_add_message_with_fifo():
-      ctx = SessionContext(
-          session_id="s1",
-          user_id="u1",
-          tenant_id="t1",
-          max_history_size=3
-      )
-      ctx.add_message("user", "msg1")
-      ctx.add_message("user", "msg2")
-      ctx.add_message("user", "msg3")
-      ctx.add_message("user", "msg4")
-      assert len(ctx.message_history) == 3
-      assert ctx.message_history[0]["content"] == "msg2"  # msg1 evicted
+  async def test_agno_adapter_satisfies_port(fake_agent):
+      adapter = AgnoLearningMemoryAdapter(agent=fake_agent, project="yaml-agno")
+      assert isinstance(adapter, LongTermMemoryPort)  # structural typing
+      await adapter.save_decision(title="t", content="c", where="w")
+      fake_agent.memory.add.assert_called_once()
   ```
-- **GREEN**: Implementar `add_message()` con FIFO eviction
-- **Commit**: `feat: add FIFO message history`
+- **GREEN**: Implement `AgnoLearningMemoryAdapter` delegating to Agno LearningMachine/MemoryManager
+- **Commit**: `feat: add default Agno long-term memory adapter`
 
-#### TASK_003: Implement ContextCompressor
+#### TASK_003: Translate YAML Memory Block to Agno Constructor Flags
 
-- **File**: `yaml-agno/src/memory/compression.py`
-- **Test**: `tests/unit/memory/test_compression.py`
+- **File**: `yaml-agno/src/memory/agno_memory_config.py`
+- **Test**: `tests/unit/memory/test_agno_memory_config.py`
 - **RED**:
   ```python
-  def test_should_compress_at_threshold():
-      compressor = ContextCompressor(threshold_tokens=6000)
-      assert compressor.should_compress(6000) is True
-      assert compressor.should_compress(5999) is False
+  def test_build_memory_config_maps_flags(memory_cfg):
+      flags = build_memory_config(memory_cfg)
+      assert flags["enable_agentic_memory"] is True
+      assert flags["add_memories_to_context"] is True
+      assert flags["num_history_messages"] == 50
   ```
-- **GREEN**: Implementar `ContextCompressor.should_compress()`
-- **Commit**: `feat: add ContextCompressor threshold check`
+- **GREEN**: Implement `build_memory_config()` mapping YAML -> Agno constructor flags
+- **Commit**: `feat: map YAML memory config to Agno flags`
 
-#### TASK_004: Implement Identify Important Messages
+#### TASK_004: Implement Long-term Recall on Start (via Port)
 
-- **File**: `yaml-agno/src/memory/compression.py`
-- **Test**: `tests/unit/memory/test_compression.py`
+- **File**: `yaml-agno/src/memory/agno_memory_config.py`
+- **Test**: `tests/integration/memory/test_recall_on_start.py`
 - **RED**:
   ```python
-  def test_identify_important_messages():
-      compressor = ContextCompressor()
-      messages = [
-          {"id": "1", "role": "user", "content": "first"},
-          {"id": "2", "role": "tool", "content": "result"},
-          {"id": "3", "role": "user", "content": "last"}
-      ]
-      important = compressor._identify_important(messages)
-      assert important["1"] is True  # First message
-      assert important["2"] is True  # Tool message
-      assert important["3"] is True  # Last message
+  async def test_recall_on_start_uses_port(fake_port):
+      memories = await recall_on_start(fake_port, user_id="u1")
+      fake_port.search_relevant.assert_awaited_once()
+      assert isinstance(memories, list)
   ```
-- **GREEN**: Implementar `_identify_important()`
-- **Commit**: `feat: add important message identification`
+- **GREEN**: Implement `recall_on_start()` through the `LongTermMemoryPort`
+- **Commit**: `feat: add port-based long-term recall on start`
 
-#### TASK_005: Implement PIISanitizer
-
-- **File**: `yaml-agno/src/memory/pii_sanitizer.py`
-- **Test**: `tests/unit/memory/test_pii_sanitizer.py`
-- **RED**:
-  ```python
-  def test_sanitize_email():
-      sanitizer = PIISanitizer()
-      result = sanitizer._sanitize_string("user@example.com")
-      assert result == "u***@example.com"
-  ```
-- **GREEN**: Implementar `PIISanitizer._sanitize_string()`
-- **Commit**: `feat: add PII email sanitization`
-
-#### TASK_006: Implement SecretSanitizer
-
-- **File**: `yaml-agno/src/memory/secret_sanitizer.py`
-- **Test**: `tests/unit/memory/test_secret_sanitizer.py`
-- **RED**:
-  ```python
-  def test_sanitize_api_key():
-      sanitizer = SecretSanitizer()
-      result = sanitizer.sanitize({"api_key": "sk-1234567890"})
-      assert result["api_key"] == "sk-...7890"
-  ```
-- **GREEN**: Implementar `SecretSanitizer.sanitize()`
-- **Commit**: `feat: add secret masking`
-
-#### TASK_007: Implement EngramMemoryManager
+#### TASK_005: Implement Engram Adapter (optional backend)
 
 - **File**: `yaml-agno/src/memory/engram_manager.py`
 - **Test**: `tests/integration/memory/test_engram_manager.py`
 - **RED**:
   ```python
-  async def test_save_decision(engram_manager):
+  async def test_engram_adapter_satisfies_port(engram_manager):
+      assert isinstance(engram_manager, LongTermMemoryPort)
       await engram_manager.save_decision(
-          title="Test Decision",
-          content="Decision content",
-          where="test.py"
+          title="Test Decision", content="content", where="test.py"
       )
-      # Verify via mem_search
       results = await engram_manager.search_relevant("test decision")
       assert len(results) >= 1
   ```
-- **GREEN**: Implementar `EngramMemoryManager.save_decision()`
-- **Commit**: `feat: add Engram decision saving`
+- **GREEN**: Implement `EngramMemoryManager` as an optional `LongTermMemoryPort` adapter
+- **Commit**: `feat: add optional Engram long-term memory adapter`
 
-#### TASK_008: Implement Recall on Start
+#### TASK_006: Implement Save-on-Decision via Port
 
-- **File**: `yaml-agno/src/memory/session_bootstrap.py`
-- **Test**: `tests/integration/memory/test_session_bootstrap.py`
+- **File**: `yaml-agno/src/memory/autosave.py`
+- **Test**: `tests/unit/memory/test_autosave.py`
 - **RED**:
   ```python
-  async def test_recall_on_start(bootstrap):
-      session = await bootstrap.initialize_session(
-          user_id="test_user",
-          session_id="test_session",
-          tenant_id="test_tenant"
-      )
-      assert session is not None
-      assert session.session_state == SessionState.ACTIVE
+  async def test_autosave_uses_port(fake_port, memory_cfg):
+      mgr = AutosaveManager(port=fake_port, config=memory_cfg)
+      await mgr.on_agent_decision(agent_name="a", decision="d", reasoning="r")
+      fake_port.save_decision.assert_awaited_once()
   ```
-- **GREEN**: Implementar `SessionBootstrap.initialize_session()`
-- **Commit**: `feat: add session initialization with recall`
+- **GREEN**: Implement `AutosaveManager` depending on the `LongTermMemoryPort`
+- **Commit**: `feat: add port-based autosave manager`
+
+> @ai-directive: Compression (`ContextCompressor`), PII sanitization (`PIISanitizer`) and secret masking (`SecretSanitizer`) are NOT tasks in SPEC_04. They are owned by SPEC_15 (compression) and SPEC_16 (PII/secret guardrails). See those specs for their task breakdown.
 
 ---
 
-## 7. SUPUESTOS TÉCNICOS ADOPTADOS
+## 7. ADOPTED TECHNICAL ASSUMPTIONS
 
-### [Decisión 1] Memoria de Sesión en PostgreSQL
+### [Decision 1] Session Memory is Agno Native (PostgreSQL backend)
 
-**Justificación**:
-- ACID transactions para consistency
-- Soporta JSONB para message_history flexible
-- Particionamiento para retención eficiente
-- Mejor que Redis para persistencia (>30 días)
+**Rationale**:
+- yaml-agno does NOT own a session runtime; Agno manages the session/history natively.
+- PostgreSQL provides ACID transactions, JSONB flexibility, and partitioning.
+- Better than Redis for persistence (>30 days) once the post-MVP retention job exists.
 
-### [Decisión 2] Engram para Long-term Memory
+### [Decision 2] Long-term Memory via Port — default Agno, Engram optional
 
-**Justificación**:
-- Sobrevive compactación de contexto
-- Deduplicación automática por `topic_key`
-- Búsqueda semántica (`mem_search`)
-- Integración MCP nativa
+**Rationale**:
+- A `LongTermMemoryPort` keeps the system decoupled from any concrete backend.
+- The **default** implementation is Agno native: `LearningMachine` (rich, 6 stores) or `MemoryManager`/`UserMemory` (simple). Learning (`learning`) and culture (`culture`) are Agno native concepts.
+- `EngramMemoryManager` is an OPTIONAL adapter (external MCP server, not an Agno layer) selected only via `long_term.backend: engram`. It survives context compaction, deduplicates by `topic_key`, and provides semantic search.
 
-### [Decisión 3] Compresión por Importancia
+### [Decision 3] Compression by Importance (owned by SPEC_15)
 
-**Justificación**:
-- Preservar últimos N mensajes (recencia)
-- Preservar tool_call results (importante para debugging)
-- Resumir mensajes intermedios (reduce tokens)
+**Rationale**:
+- Compression is a context-engineering operation (SPEC_15), not a memory-model concern.
+- Preserves last N messages (recency), tool_call results (debugging), and summarizes intermediate messages.
 
 ---
 
-## 8. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
+## 8. STRATEGIC CALIBRATION QUESTIONS
 
-### [Pregunta 1] Threshold de Compresión
+### [Question 1] Compression Threshold (defer to SPEC_15)
 
-**¿Es 6000 tokens (75% de 8000) el threshold óptimo para trigger compresión?**
+**Is 6000 tokens (75% of 8000) the optimal compression threshold?**
 
-Implica:
-- **Demasiado bajo**: Compresión frecuente, pérdida de contexto
-- **Demasiado alto**: Riesgo de exceder límite de modelo
-- **Trade-off**: Frecuencia de compresión vs profundidad de contexto
+This is a context-engineering question owned by **SPEC_15**. It implies:
+- **Too low**: frequent compression, context loss
+- **Too high**: risk of exceeding the model limit
+- **Trade-off**: compression frequency vs context depth
 
-### [Pregunta 2] Retención de Memoria Long-term
+### [Question 2] Long-term Memory Retention (post-MVP)
 
-**¿Debería haber retención máxima para Engram (ej: 1000 memorias por usuario)?**
+**Should there be a maximum retention for long-term memory (e.g. 1000 memories per user)?**
 
-Implica:
-- **Sí**: Limita storage cost, fuerza relevancia
-- **No**: Memoria ilimitada, mejor para descubrimiento
-- **Trade-off**: Storage cost vs capacidad de recuerdo
+Retention/purge is a post-MVP extension (Agno has no native retention). It implies:
+- **Yes**: limits storage cost, forces relevance
+- **No**: unlimited memory, better for discovery
+- **Trade-off**: storage cost vs recall capacity
 
-### [Pregunta 3] Compartición de Memoria entre Tenants
+### [Question 3] Cross-Tenant Memory Sharing
 
-**¿Debería permitirse compartir memoria entre tenants del mismo cliente?**
+**Should memory sharing between tenants of the same client be allowed?**
 
-Implica:
-- **Sí**: Requiere opt-in, menor aislamiento
-- **No**: Aislamiento estricto, mayor security
-- **Trade-off**: Flexibilidad vs seguridad
+It implies:
+- **Yes**: requires opt-in, weaker isolation
+- **No**: strict isolation, stronger security
+- **Trade-off**: flexibility vs security
 
 ---
 
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente específico o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
+*Do you want to deepen the technical specification to Level 6 for a specific component, or authorize the execution of these tasks by the agent team?*
