@@ -5,15 +5,15 @@ Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#Memory", "#Engram", "#ContextCompression", "#Session"]
+Context_Tags: ["#Memory", "#ContextCompression", "#Session"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
 Last_Updated: "2026-06-17"
-Revision_Note: "Iter 1 cleanup. yaml-agno builds ON TOP of Agno native runtime/session/memory (no own SessionContext). LongTermMemoryPort added; default impl is Agno LearningMachine/MemoryManager, Engram is an optional adapter. retention_days is a post-MVP extension (no native Agno retention). Compression migrated to SPEC_15; PII/secret masking migrated to SPEC_16. SPEC_04 is the memory MODEL; compression ops live in SPEC_15 and PII/secret guardrails live in SPEC_16."
+Revision_Note: "Iter 2 correction. Engram removed entirely from the memory model; long-term memory is 100% Agno native (LearningMachine/MemoryManager). No LongTermMemoryPort abstraction, no EngramMemoryManager, no engram backend/block. yaml-agno only CONFIGURES Agno native memory from YAML (Agent constructor flags + MemoryManager/LearningMachine config); it adds no memory layer of its own. retention_days is a post-MVP extension (no native Agno retention). Compression migrated to SPEC_15; PII/secret masking migrated to SPEC_16. SPEC_04 is the memory MODEL; compression ops live in SPEC_15 and PII/secret guardrails live in SPEC_16."
 ---
 
 # SPEC_04_MEMORY_ARCHITECTURE
 
-> **Purpose**: Define the memory MODEL for yaml-agno: the memory layers (session, working memory, long-term memory), the `LongTermMemoryPort` abstraction, and how yaml-agno CONFIGURES Agno's native memory. yaml-agno does NOT own a session/runtime.
+> **Purpose**: Define the memory MODEL for yaml-agno: the memory layers (session, working memory, long-term memory), and how yaml-agno CONFIGURES Agno's native memory. yaml-agno does NOT own a session/runtime and adds NO memory layer of its own — long-term memory is Agno native (`LearningMachine` / `MemoryManager`).
 >
 > @ai-directive: SPEC_04 is the memory MODEL only. Context compression OPERATION lives in **SPEC_15** (context engineering). PII and secret masking GUARDRAILS live in **SPEC_16**. Retention/purge is a post-MVP extension. Do not re-implement those concerns here.
 
@@ -42,7 +42,7 @@ graph TB
         IV["Intermediate Variables"]
     end
 
-    subgraph L4 ["Layer 4: Long-term Memory (Agno LearningMachine/MemoryManager; Engram = optional adapter)"]
+    subgraph L4 ["Layer 4: Long-term Memory (Agno LearningMachine/MemoryManager)"]
         PS["Past Sessions"]
         LRN["Learnings (LearningMachine)"]
         DK["Domain Knowledge"]
@@ -51,7 +51,7 @@ graph TB
     UM --> SC
     AR --> SC
     SC --> |Load into context| CRC
-    CRC --> |Relevant findings| LTM["Long-term Memory (LongTermMemoryPort)"]
+    CRC --> |Relevant findings| LTM["Long-term Memory (Agno native)"]
     LTM -.-> |Recall| CRC
 ```
 
@@ -61,9 +61,9 @@ graph TB
 |-------|---------|-----|------------|----------------|
 | **Session Memory** | PostgreSQL (Agno `DbSession`/`UserMemo`) | Agno-managed (per session) | 100K tokens | Full conversation history managed natively by Agno |
 | **Working Memory** | Agno internal | 1 run | 8K tokens | Context of the current run |
-| **Long-term Memory** | Agno `LearningMachine` / `MemoryManager` (default) | Permanent | ∞ (deduplicated) | Cross-session learning via `LongTermMemoryPort` |
+| **Long-term Memory** | Agno `LearningMachine` / `MemoryManager` (native) | Permanent | ∞ (deduplicated) | Cross-session learning via Agno native memory |
 
-> @ai-directive: yaml-agno does NOT own a session runtime. The session, history, and working memory above are Agno's native concepts (configured via the Agent constructor and `MemoryManager`). yaml-agno only CONFIGURES them from YAML and, optionally, plugs a long-term memory adapter (Engram) through `LongTermMemoryPort`.
+> @ai-directive: yaml-agno does NOT own a session runtime. The session, history, working memory and long-term memory above are Agno's native concepts (configured via the Agent constructor and `MemoryManager`/`LearningMachine`). yaml-agno only CONFIGURES them from YAML; it adds NO memory layer of its own.
 >
 > @ai-directive: Automatic retention/purge (`retention_days`) is a NON-BLOCKING post-MVP extension. Agno has no native retention; it will be implemented as a scheduled job that invokes `Curator.prune`. Do NOT treat retention as effective MVP configuration.
 
@@ -92,25 +92,19 @@ agent:
       compression_threshold: 6000    # Compression op lives in SPEC_15
       include_tool_calls: true
 
-    # Long-term memory via the LongTermMemoryPort.
-    # Default backend is Agno native (LearningMachine rich / MemoryManager simple).
-    # Engram is an OPTIONAL adapter that implements the same port.
-    long_term:
-      enabled: true
-      backend: agno                  # agno (default) | engram (optional adapter)
+    # Long-term memory is NATIVE to Agno; yaml-agno only configures it.
+    # These knobs map to the Agno LearningMachine (rich, 6 stores) when enabled,
+    # and to the MemoryManager / UserMemory simple path otherwise.
+    # See SPEC_02 *Config schemas (SSOT). No Port, no adapters.
+    learning:
+      enabled: true                  # Turn on Agno LearningMachine (cross-session learning)
+      recall_on_start: true          # Inject recalled learnings when a session starts
+      save_on_decision: true         # Persist decisions through Agno native memory
+      save_on_discovery: true        # Persist discoveries through Agno native memory
+      save_on_bugfix: true           # Persist bug fixes through Agno native memory
 
-      # Engram adapter settings (only used when backend == engram)
-      engram:
-        project: "yaml-agno"
-        scope: project               # project|personal
-        recall_on_start: true
-        recall_keywords: ["previous", "past", "learned", "remembered"]
-        save_on_decision: true
-        save_on_discovery: true
-        save_on_bugfix: true
-
-      # @ai-directive: post-MVP, non-blocking. No native Agno retention.
-      # retention_days: 30           # future: scheduled job -> Curator.prune
+    # @ai-directive: post-MVP, non-blocking. No native Agno retention.
+    # retention_days: 30             # future: scheduled job -> Curator.prune
 ```
 
 ---
@@ -123,131 +117,51 @@ agent:
 >
 > Reference: see SPEC_15 for the full compression algorithm, token thresholds, and the summarization pipeline. Do not duplicate the implementation here.
 
-### 2.2 Long-Term Memory — Port, Default (Agno) and Optional Engram Adapter
+### 2.2 Long-Term Memory — Agno Native (LearningMachine / MemoryManager)
 
-**Strategy**: yaml-agno defines a `LongTermMemoryPort` abstraction. The **default implementation is Agno native** — the rich `LearningMachine` (6 stores) or the simpler `MemoryManager`/`UserMemory`, selected via the `long_term.backend` config (`agno` default | `engram` optional). `EngramMemoryManager` is an **optional adapter** that implements the same port for teams that want an external MCP-backed store. Engram is NOT a native Agno layer and is NOT the only path.
-
-```python
-# yaml-agno/src/memory/long_term_port.py
-
-from typing import Protocol, Any, List, runtime_checkable
-
-@runtime_checkable
-class LongTermMemoryPort(Protocol):
-    """Hexagonal port for long-term (cross-session) memory.
-
-    Implementations:
-      * AgnoLearningMemoryAdapter  (default) -> Agno LearningMachine / MemoryManager
-      * EngramMemoryManager        (optional) -> Engram MCP external store
-    """
-
-    async def save_decision(self, title: str, content: str, where: str,
-                            learned: str | None = None) -> None: ...
-
-    async def save_discovery(self, title: str, content: str,
-                             where: str | None = None) -> None: ...
-
-    async def save_bugfix(self, title: str, content: str,
-                          where: str | None = None) -> None: ...
-
-    async def search_relevant(self, query: str, limit: int = 5) -> List[dict[str, Any]]: ...
-```
+**Strategy**: Long-term memory is 100% Agno native. yaml-agno does NOT define a `LongTermMemoryPort`, does NOT add adapters, and does NOT introduce an external memory backend. The rich `LearningMachine` (6 stores) or the simpler `MemoryManager` / `UserMemory` are Agno components that yaml-agno only CONFIGURES from YAML: the Agent constructor flags (`enable_agentic_memory`, `update_memory_on_run`, `add_memories_to_context`) plus the `learning:` block. All saves and recalls go straight through Agno native memory.
 
 ```python
-# yaml-agno/src/memory/agno_memory_adapter.py
-# @ai-directive: DEFAULT implementation. Delegates to Agno native memory.
+# yaml-agno/src/memory/agno_memory_config.py
+# @ai-directive: Build the Agno memory configuration FROM the YAML *Config (SPEC_02 SSOT).
+#                There is NO Port and NO adapter. yaml-agno only configures Agno native memory.
 
-class AgnoLearningMemoryAdapter:
-    """LongTermMemoryPort backed by Agno native memory.
+def build_memory_config(memory_cfg) -> dict:
+    """Translate the YAML memory block into Agno Agent constructor flags.
 
-    Wraps Agno's LearningMachine (rich, 6 stores) when configured, or falls
-    back to MemoryManager/UserMemory for the simple path. yaml-agno does NOT
-    reimplement Agno memory; it routes saves/recalls through this adapter so
-    the rest of the system depends on the Port, not on a concrete backend.
+    These flags are what make Agno manage the session/history/working memory AND
+    the long-term learning memory natively:
+      enable_agentic_memory, update_memory_on_run,
+      add_memories_to_context, num_history_runs, num_history_messages.
     """
+    return {
+        "enable_agentic_memory": memory_cfg.enable_agentic_memory,
+        "update_memory_on_run": memory_cfg.update_memory_on_run,
+        "add_memories_to_context": memory_cfg.add_memories_to_context,
+        "num_history_runs": memory_cfg.num_history_runs,
+        "num_history_messages": memory_cfg.num_history_messages,
+    }
 
-    def __init__(self, agent, project: str):
-        self._agent = agent          # Agno Agent with enable_agentic_memory=True
-        self.project = project
 
-    async def save_decision(self, title: str, content: str, where: str,
-                            learned: str | None = None) -> None:
-        """Persist an architectural decision via Agno native memory."""
-        ...  # route to Agno LearningMachine / UserMemory
+def build_learning_config(learning_cfg) -> dict:
+    """Translate the YAML learning block into Agno LearningMachine configuration.
 
-    async def save_discovery(self, title: str, content: str,
-                             where: str | None = None) -> None:
-        """Persist a technical discovery via Agno native memory."""
-        ...
-
-    async def save_bugfix(self, title: str, content: str,
-                          where: str | None = None) -> None:
-        """Persist a bug fix (root cause + resolution) via Agno native memory."""
-        ...
-
-    async def search_relevant(self, query: str, limit: int = 5):
-        """Recall relevant memories via Agno native memory."""
-        ...  # Agno native memory recall (add_memories_to_context / mem search)
+    When learning.enabled is true, the Agno Agent is wired with a LearningMachine
+    (rich, 6 stores). recall_on_start and the save_on_* flags below are yaml-agno
+    knobs that decide when to drive Agno native memory (recall on session start,
+    autosave of decisions / discoveries / bug fixes). No abstraction sits between
+    yaml-agno and Agno native memory.
+    """
+    return {
+        "enabled": learning_cfg.enabled,
+        "recall_on_start": learning_cfg.recall_on_start,
+        "save_on_decision": learning_cfg.save_on_decision,
+        "save_on_discovery": learning_cfg.save_on_discovery,
+        "save_on_bugfix": learning_cfg.save_on_bugfix,
+    }
 ```
 
-```python
-# yaml-agno/src/memory/engram_manager.py
-# @ai-directive: OPTIONAL adapter, only active when long_term.backend == "engram".
-
-from typing import List
-
-class EngramMemoryManager:
-    """Optional LongTermMemoryPort adapter backed by the Engram MCP store.
-
-    Engram is an EXTERNAL MCP server, not an Agno layer. It is selected only
-    via the YAML config (long_term.backend: engram) and provides the same
-    contract as the default Agno adapter. Deduplication is automatic by
-    topic_key on the Engram side.
-    """
-
-    def __init__(self, project: str, session_id: str):
-        self.project = project
-        self.session_id = session_id
-
-    async def save_decision(self, title: str, content: str, where: str,
-                            learned: str | None = None) -> None:
-        """Persist an architectural decision via Engram (upsert by topic_key)."""
-        from .engram_utils import mem_save  # MCP tool
-
-        await mem_save(
-            title=title,
-            type="decision",
-            content=f"**What**: {content}\n**Where**: {where}\n**Learned**: {learned or ''}",
-            project=self.project,
-            session_id=self.session_id,
-        )
-
-    async def save_discovery(self, title: str, content: str,
-                             where: str | None = None) -> None:
-        """Persist a technical discovery via Engram."""
-        from .engram_utils import mem_save
-
-        await mem_save(
-            title=title,
-            type="discovery",
-            content=f"**What**: {content}\n**Where**: {where or 'Unknown'}",
-            project=self.project,
-            session_id=self.session_id,
-        )
-
-    async def search_relevant(self, query: str, limit: int = 5) -> List[dict]:
-        """Recall relevant memories from Engram for the current context."""
-        from .engram_utils import mem_search, mem_get_observation
-
-        results = await mem_search(query=query, project=self.project, limit=limit)
-
-        memories = []
-        for result in results:
-            full_obs = await mem_get_observation(id=result["id"])
-            memories.append(full_obs)
-
-        return memories
-```
+> @ai-directive: There is no `LongTermMemoryPort`, no `AgnoLearningMemoryAdapter`, and no `EngramMemoryManager`. Long-term memory is configured, not implemented. The decision/discovery/bugfix autosave and the start-of-session recall operate directly on Agno native memory (`LearningMachine` / `MemoryManager`), driven by the `learning:` flags above.
 
 ---
 
@@ -284,7 +198,7 @@ class EngramMemoryManager:
 | **Session messages** | 30 days (future) | GDPR - right to be forgotten; enforced by a post-MVP purge job |
 | **Agent execution logs** | 90 days (future) | Debugging, compliance |
 | **Domain events** | 7 days (future) | Event sourcing window |
-| **Long-term memory** | Permanent (default) | Cross-session learning via `LongTermMemoryPort` (Agno default / Engram adapter) |
+| **Long-term memory** | Permanent (default) | Cross-session learning via Agno native memory (`LearningMachine` / `MemoryManager`) |
 | **PII data** | Always masked | Privacy by design (SPEC_16) |
 
 ---
@@ -293,7 +207,7 @@ class EngramMemoryManager:
 
 ### 4.1 Pattern: Configuring Agno Memory on Session Start
 
-> @ai-directive: yaml-agno does NOT own a session runtime or a `SessionContext` model. The session, message history, and FIFO eviction are managed NATIVELY by Agno. yaml-agno only CONFIGURES Agno memory from YAML (constructor flags + `MemoryManager`) and, optionally, wires a long-term recall through the `LongTermMemoryPort`.
+> @ai-directive: yaml-agno does NOT own a session runtime or a `SessionContext` model. The session, message history, and FIFO eviction are managed NATIVELY by Agno. yaml-agno only CONFIGURES Agno memory from YAML (constructor flags + `MemoryManager` / `LearningMachine`). There is no Port and no adapter; recall and autosave operate directly on Agno native memory.
 
 ```python
 # yaml-agno/src/memory/agno_memory_config.py
@@ -317,16 +231,17 @@ def build_memory_config(memory_cfg) -> dict:
     }
 
 
-async def recall_on_start(port: "LongTermMemoryPort",
-                          memory_cfg,
+async def recall_on_start(agent,
+                          learning_cfg,
                           user_id: str) -> list[dict]:
-    """Optional cross-session recall through the LongTermMemoryPort.
+    """Optional cross-session recall through Agno native memory.
 
-    Triggered when memory_cfg.long_term.recall_on_start is true, regardless of
-    the backend (agno default or engram adapter). The port's default
-    implementation is Agno native (LearningMachine / MemoryManager).
+    Triggered when learning_cfg.recall_on_start is true. Recall is performed by
+    Agno native memory (LearningMachine / MemoryManager) configured on the Agent;
+    yaml-agno only decides WHEN to recall, not HOW.
     """
-    return await port.search_relevant(
+    # Agno native recall (add_memories_to_context / LearningMachine search).
+    return await agent.memory.search_relevant(
         query=f"user:{user_id} past sessions decisions",
         limit=10,
     )
@@ -334,25 +249,30 @@ async def recall_on_start(port: "LongTermMemoryPort",
 
 ### 4.2 Pattern: Save-on-Decision
 
-> @ai-directive: Autosave depends on the `LongTermMemoryPort`, not on a concrete backend. The default backend is Agno native (LearningMachine / MemoryManager); the Engram adapter is only injected when `long_term.backend == engram`.
+> @ai-directive: Autosave operates directly on Agno native memory (`LearningMachine` / `MemoryManager`). There is no Port and no adapter; the `learning:` flags decide WHEN yaml-agno drives a save.
 
 ```python
 # yaml-agno/src/memory/autosave.py
 
 class AutosaveManager:
-    """Auto-saves decisions, discoveries, and bug fixes through the LongTermMemoryPort."""
+    """Auto-saves decisions, discoveries, and bug fixes through Agno native memory.
 
-    def __init__(self, port: "LongTermMemoryPort", config):
-        self.port = port        # Agno default | Engram adapter
-        self.config = config
+    The Agent must be configured with Agno native memory (enable_agentic_memory,
+    or a LearningMachine). yaml-agno only decides when to persist each artifact
+    based on the learning.* flags.
+    """
+
+    def __init__(self, agent, learning_cfg):
+        self.agent = agent          # Agno Agent with native memory configured
+        self.learning_cfg = learning_cfg
 
     async def on_agent_decision(self, agent_name: str, decision: str,
                                 reasoning: str) -> None:
         """Callback fired when an agent takes a decision."""
-        if not self.config.long_term.save_on_decision:
+        if not self.learning_cfg.save_on_decision:
             return
 
-        await self.port.save_decision(
+        await self.agent.memory.add(  # Agno native memory write
             title=f"Decision by {agent_name}",
             content=decision,
             where=agent_name,
@@ -362,10 +282,10 @@ class AutosaveManager:
     async def on_discovery(self, title: str, content: str,
                            where: str | None = None) -> None:
         """Callback fired when a discovery is made."""
-        if not self.config.long_term.save_on_discovery:
+        if not self.learning_cfg.save_on_discovery:
             return
 
-        await self.port.save_discovery(title=title, content=content, where=where)
+        await self.agent.memory.add(title=title, content=content, where=where)
 ```
 
 ---
@@ -380,11 +300,12 @@ class AutosaveManager:
 GIVEN a YAML memory block with enable_agentic_memory=true
 AND add_memories_to_context=true
 AND num_history_messages=50
+AND learning.enabled=true
 WHEN the Agent is built from the *Config (SPEC_02)
 THEN the Agno Agent is constructed with those memory flags
+AND the LearningMachine is wired onto the Agent (Agno native long-term memory)
 AND Agno manages the session/history natively (no yaml-agno SessionContext)
-AND the LongTermMemoryPort is resolved to the configured backend (agno default)
-AND no custom session_state model is created by yaml-agno
+AND no Port, no adapter, and no custom session_state model are created by yaml-agno
 ```
 
 #### Scenario 2: Golden Path - Context Compression
@@ -405,22 +326,22 @@ AND the compressed context is under 4000 tokens
 ```gherkin
 GIVEN a message containing PII "user@example.com"
 AND the SPEC_16 PII guardrail is enabled
-WHEN the message is saved to the long-term memory port
+WHEN the message is saved to long-term memory
 THEN the email is sanitized by the SPEC_16 guardrail to "u***@example.com"
-AND only the sanitized version reaches the LongTermMemoryPort
+AND only the sanitized version reaches Agno native memory
 AND the original email is NOT persisted
 ```
 
-#### Scenario 4: Golden Path - Long-term Recall via Port
+#### Scenario 4: Golden Path - Long-term Recall via Agno Native Memory
 
 ```gherkin
 GIVEN a user with past decisions in long-term memory
-AND recall_on_start is enabled
+AND learning.recall_on_start is enabled
 WHEN a new session starts
-THEN past decisions are recalled through the LongTermMemoryPort
+THEN past decisions are recalled through Agno native memory (LearningMachine)
 AND relevant memories are injected into context (add_memories_to_context)
 AND the agent has awareness of past work
-AND the backend is Agno native by default (Engram only if configured)
+AND no Port or adapter is involved
 ```
 
 ---
@@ -431,37 +352,7 @@ AND the backend is Agno native by default (Engram only if configured)
 
 > @ai-directive: yaml-agno does NOT own a session runtime. There is no `SessionContext` model, no `add_message()` FIFO, no `SessionState` — those are Agno native. Tasks below configure/extend Agno memory, not replace it. Compression tasks live in SPEC_15; PII/secret tasks live in SPEC_16.
 
-#### TASK_001: Define LongTermMemoryPort
-
-- **File**: `yaml-agno/src/memory/long_term_port.py`
-- **Test**: `tests/unit/memory/test_long_term_port.py`
-- **RED**:
-  ```python
-  def test_port_contract_is_protocol():
-      # LongTermMemoryPort is a typing.Protocol; concrete adapters satisfy it.
-      assert hasattr(LongTermMemoryPort, "save_decision")
-      assert hasattr(LongTermMemoryPort, "save_discovery")
-      assert hasattr(LongTermMemoryPort, "search_relevant")
-  ```
-- **GREEN**: Define `LongTermMemoryPort` Protocol (save_decision/save_discovery/save_bugfix/search_relevant)
-- **Commit**: `feat: add LongTermMemoryPort abstraction`
-
-#### TASK_002: Implement Default Agno Memory Adapter
-
-- **File**: `yaml-agno/src/memory/agno_memory_adapter.py`
-- **Test**: `tests/unit/memory/test_agno_memory_adapter.py`
-- **RED**:
-  ```python
-  async def test_agno_adapter_satisfies_port(fake_agent):
-      adapter = AgnoLearningMemoryAdapter(agent=fake_agent, project="yaml-agno")
-      assert isinstance(adapter, LongTermMemoryPort)  # structural typing
-      await adapter.save_decision(title="t", content="c", where="w")
-      fake_agent.memory.add.assert_called_once()
-  ```
-- **GREEN**: Implement `AgnoLearningMemoryAdapter` delegating to Agno LearningMachine/MemoryManager
-- **Commit**: `feat: add default Agno long-term memory adapter`
-
-#### TASK_003: Translate YAML Memory Block to Agno Constructor Flags
+#### TASK_001: Translate YAML Memory Block to Agno Constructor Flags
 
 - **File**: `yaml-agno/src/memory/agno_memory_config.py`
 - **Test**: `tests/unit/memory/test_agno_memory_config.py`
@@ -476,50 +367,48 @@ AND the backend is Agno native by default (Engram only if configured)
 - **GREEN**: Implement `build_memory_config()` mapping YAML -> Agno constructor flags
 - **Commit**: `feat: map YAML memory config to Agno flags`
 
-#### TASK_004: Implement Long-term Recall on Start (via Port)
+#### TASK_002: Translate YAML Learning Block to LearningMachine Config
+
+- **File**: `yaml-agno/src/memory/agno_memory_config.py`
+- **Test**: `tests/unit/memory/test_learning_config.py`
+- **RED**:
+  ```python
+  def test_build_learning_config_maps_flags(learning_cfg):
+      cfg = build_learning_config(learning_cfg)
+      assert cfg["enabled"] is True
+      assert cfg["recall_on_start"] is True
+      assert cfg["save_on_decision"] is True
+  ```
+- **GREEN**: Implement `build_learning_config()` mapping the `learning:` block to Agno LearningMachine configuration (no Port, no adapter)
+- **Commit**: `feat: map YAML learning block to Agno LearningMachine config`
+
+#### TASK_003: Implement Long-term Recall on Start (Agno native)
 
 - **File**: `yaml-agno/src/memory/agno_memory_config.py`
 - **Test**: `tests/integration/memory/test_recall_on_start.py`
 - **RED**:
   ```python
-  async def test_recall_on_start_uses_port(fake_port):
-      memories = await recall_on_start(fake_port, user_id="u1")
-      fake_port.search_relevant.assert_awaited_once()
+  async def test_recall_on_start_uses_agno_native_memory(fake_agent):
+      memories = await recall_on_start(fake_agent, learning_cfg=fake_cfg, user_id="u1")
+      fake_agent.memory.search_relevant.assert_awaited_once()
       assert isinstance(memories, list)
   ```
-- **GREEN**: Implement `recall_on_start()` through the `LongTermMemoryPort`
-- **Commit**: `feat: add port-based long-term recall on start`
+- **GREEN**: Implement `recall_on_start()` driving Agno native memory recall
+- **Commit**: `feat: add Agno native long-term recall on start`
 
-#### TASK_005: Implement Engram Adapter (optional backend)
-
-- **File**: `yaml-agno/src/memory/engram_manager.py`
-- **Test**: `tests/integration/memory/test_engram_manager.py`
-- **RED**:
-  ```python
-  async def test_engram_adapter_satisfies_port(engram_manager):
-      assert isinstance(engram_manager, LongTermMemoryPort)
-      await engram_manager.save_decision(
-          title="Test Decision", content="content", where="test.py"
-      )
-      results = await engram_manager.search_relevant("test decision")
-      assert len(results) >= 1
-  ```
-- **GREEN**: Implement `EngramMemoryManager` as an optional `LongTermMemoryPort` adapter
-- **Commit**: `feat: add optional Engram long-term memory adapter`
-
-#### TASK_006: Implement Save-on-Decision via Port
+#### TASK_004: Implement Save-on-Decision (Agno native)
 
 - **File**: `yaml-agno/src/memory/autosave.py`
 - **Test**: `tests/unit/memory/test_autosave.py`
 - **RED**:
   ```python
-  async def test_autosave_uses_port(fake_port, memory_cfg):
-      mgr = AutosaveManager(port=fake_port, config=memory_cfg)
+  async def test_autosave_uses_agno_native_memory(fake_agent, learning_cfg):
+      mgr = AutosaveManager(agent=fake_agent, learning_cfg=learning_cfg)
       await mgr.on_agent_decision(agent_name="a", decision="d", reasoning="r")
-      fake_port.save_decision.assert_awaited_once()
+      fake_agent.memory.add.assert_awaited_once()
   ```
-- **GREEN**: Implement `AutosaveManager` depending on the `LongTermMemoryPort`
-- **Commit**: `feat: add port-based autosave manager`
+- **GREEN**: Implement `AutosaveManager` driving Agno native memory writes (no Port)
+- **Commit**: `feat: add Agno native autosave manager`
 
 > @ai-directive: Compression (`ContextCompressor`), PII sanitization (`PIISanitizer`) and secret masking (`SecretSanitizer`) are NOT tasks in SPEC_04. They are owned by SPEC_15 (compression) and SPEC_16 (PII/secret guardrails). See those specs for their task breakdown.
 
@@ -534,12 +423,12 @@ AND the backend is Agno native by default (Engram only if configured)
 - PostgreSQL provides ACID transactions, JSONB flexibility, and partitioning.
 - Better than Redis for persistence (>30 days) once the post-MVP retention job exists.
 
-### [Decision 2] Long-term Memory via Port — default Agno, Engram optional
+### [Decision 2] Long-term Memory is Agno Native (configured, not implemented)
 
 **Rationale**:
-- A `LongTermMemoryPort` keeps the system decoupled from any concrete backend.
-- The **default** implementation is Agno native: `LearningMachine` (rich, 6 stores) or `MemoryManager`/`UserMemory` (simple). Learning (`learning`) and culture (`culture`) are Agno native concepts.
-- `EngramMemoryManager` is an OPTIONAL adapter (external MCP server, not an Agno layer) selected only via `long_term.backend: engram`. It survives context compaction, deduplicates by `topic_key`, and provides semantic search.
+- yaml-agno builds ON TOP of Agno and adds NO memory layer of its own. Long-term memory is 100% Agno native.
+- The rich `LearningMachine` (6 stores) or the simpler `MemoryManager` / `UserMemory` are Agno components configured from YAML (Agent constructor flags + `learning:` block).
+- There is no `LongTermMemoryPort`, no adapter, and no external backend. An external memory store (e.g. an MCP server) is out of scope for yaml-agno; it is not modeled here.
 
 ### [Decision 3] Compression by Importance (owned by SPEC_15)
 

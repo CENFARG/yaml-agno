@@ -216,7 +216,7 @@ optionally wrapped to mount yaml-agno-specific routers (/healthz, /readyz,
 """
 from __future__ import annotations
 
-from agno.app.agentos import AgentOS
+from agno.os import AgentOS
 
 from yaml_agno.runtime.bootstrap import build_agentos, mount_health_routers
 

@@ -41,13 +41,30 @@ from typing import Any, Dict
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
+class MediaInput(BaseModel):
+    """Multimodal media reference.
+
+    @ai-directive: maps to Agno's native media classes (agno.media.Image /
+    Audio / Video / File), which accept exactly one content source among
+    `url` (remote), `filepath` (local) or `content` (raw bytes). Verified
+    in agno/media.py v2.6.14. See SPEC_17 (Multimodal I/O) for full detail.
+    """
+    url: str | None = Field(None, description="Remote media location.")
+    filepath: str | None = Field(None, description="Local media file path.")
+    content: str | None = Field(None, description="Base64-encoded media bytes (transport only).")
+
 class AgentRunRequest(BaseModel):
     """HTTP transport DTO for an agent run request.
 
-    This is an API-level DTO (request body), not the AgentConfig SSOT from
-    SPEC_02. When the request references an agent by name, the resolved
-    AgentConfig is loaded and validated against the SPEC_02 schema.
-    SPEC_17 imports these DTOs from this module.
+    @ai-directive: this is an API-level DTO (request body), NOT the
+    AgentConfig SSOT from SPEC_02. When the request references an agent by
+    name, the resolved AgentConfig is loaded and validated against the
+    SPEC_02 schema. SPEC_17 imports these DTOs from this module.
+
+    Multimodal fields (images/audio/videos/files, send_media_to_model,
+    store_media) are OWNED by this DTO; they map to the Agno Agent.run()
+    kwargs of the same name (verified in agno/agent/agent.py v2.6.14).
+    See SPEC_17 for the multimodal pipeline (validation, storage, ToolResult).
     """
     input: str | Dict[str, Any] = Field(..., max_length=10000, description="Input for the agent")
     session_id: str | None = Field(None, description="Existing session ID")
@@ -55,11 +72,20 @@ class AgentRunRequest(BaseModel):
     tenant_id: str = Field(..., description="Tenant ID")
     stream: bool = Field(default=False, description="Streaming response")
     max_iterations: int | None = Field(None, ge=1, le=100, description="Maximum iterations")
+    # Multimodal input (Agno native kwargs)
+    images: list[MediaInput] = Field(default_factory=list, description="Input images (Agno Image).")
+    audio: list[MediaInput] = Field(default_factory=list, description="Input audio (Agno Audio).")
+    videos: list[MediaInput] = Field(default_factory=list, description="Input videos (Agno Video).")
+    files: list[MediaInput] = Field(default_factory=list, description="Input files (Agno File).")
+    send_media_to_model: bool = Field(default=True, description="Send media to the model (Agno native kwarg).")
+    store_media: bool = Field(default=False, description="Persist media artifacts (Agno native kwarg).")
 
 class AgentRunResponse(BaseModel):
     """HTTP transport DTO for an agent run response.
 
-    API-level DTO (response body). SPEC_17 imports this DTO from this module.
+    @ai-directive: API-level DTO (response body). SPEC_17 imports this DTO.
+    Multimodal output (images/videos/audio) maps to Agno's RunOutput media
+    fields (verified in agno/run/agent.py v2.6.14).
     """
     agent_name: str
     session_id: str
@@ -67,6 +93,10 @@ class AgentRunResponse(BaseModel):
     iterations: int
     duration_ms: float
     tool_calls: list[Dict[str, Any]] = Field(default_factory=list)
+    # Multimodal output (Agno native RunOutput fields)
+    images: list[MediaInput] = Field(default_factory=list, description="Generated/returned images.")
+    audio: list[MediaInput] = Field(default_factory=list, description="Generated/returned audio.")
+    videos: list[MediaInput] = Field(default_factory=list, description="Generated/returned videos.")
 
 @router.post("/{name}/run", response_model=AgentRunResponse)
 async def run_agent(

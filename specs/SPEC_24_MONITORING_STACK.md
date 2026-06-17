@@ -774,57 +774,57 @@ Runbooks mínimos: HighErrorRate, HighLatencyP95, CircuitBreakerOpen, TokenBudge
 ## 3. BEHAVIOR DELTA BDD (Gherkin)
 
 ```cucumber
-Feature: Monitoring Stack operativo
-  Como SRE on-call
-  Quiero que el stack detecte, visualice y alerte
-  Para proteger los SLOs de yaml-agno
+Feature: Operational Monitoring Stack
+  As an on-call SRE
+  I want the stack to detect, visualize and alert
+  So that yaml-agno SLOs are protected
 
-  # --- Alertas ---
-  Scenario: Alerta dispara cuando error rate supera 5%
-    Given un agente "classifier" con 6% de runs en error durante 6 minutos
-    When Prometheus evalúa la regla HighErrorRate
-    Then la alerta queda "firing" con severity "critical"
-    And Alertmanager enruta a "pagerduty-critical"
-    And el runbook URL está presente en la notificación
+  # --- Alerts ---
+  Scenario: Alert fires when error rate exceeds 5%
+    Given an agent "classifier" with 6% of runs in error for 6 minutes
+    When Prometheus evaluates the HighErrorRate rule
+    Then the alert is "firing" with severity "critical"
+    And Alertmanager routes to "pagerduty-critical"
+    And the runbook URL is present in the notification
 
-  Scenario: Alerta no dispara con ruido transitorio
-    Given error rate del 8% durante 2 minutos y luego <1%
-    When Prometheus evalúa HighErrorRate con "for: 5m"
-    Then la alerta permanece "pending" y NO "firing"
+  Scenario: Alert does NOT fire on transient noise
+    Given error rate of 8% for 2 minutes then <1%
+    When Prometheus evaluates HighErrorRate with "for: 5m"
+    Then the alert stays "pending" and NOT "firing"
 
   # --- Dashboards ---
-  Scenario: Dashboard AgentOS Overview renderiza con variable tenant
-    Given el dashboard "agentos-overview" desplegado como ConfigMap
-    When un usuario selecciona tenant "enterprise-acme"
-    Then las 3 consultas RED ejecutan con filtro tenant_id
-    And el panel "Latency p95" muestra p50/p95/p99 series
+  Scenario: AgentOS Overview dashboard renders with tenant variable
+    Given the "agentos-overview" dashboard deployed as a ConfigMap
+    When a user selects tenant "enterprise-acme"
+    Then the 3 RED queries run with tenant_id filter
+    And the "Latency p95" panel shows p50/p95/p99 series
 
-  # --- Correlación traces ↔ logs ---
-  Scenario: trace_id correlaciona logs y traces en Grafana
-    Given un run que produjo trace_id "abc123"
-    When el operador hace clic en el trace_id en un panel de logs de Loki
-    Then Grafana abre Tempo con el trace completo
-    And los spans incluyen agent.name, tenant.id, tokens.input
+  # --- Traces <-> logs correlation ---
+  Scenario: trace_id correlates logs and traces in Grafana
+    Given a run that produced trace_id "abc123"
+    When the operator clicks the trace_id in a Loki logs panel
+    Then Grafana opens Tempo with the full trace
+    And the spans include agent.name, tenant.id, tokens.input
 
   # --- SLO breach ---
-  Scenario: Error budget consumido dispara burn-rate alert
-    Given disponibilidad cae bajo el umbral de burn-rate 1h/5m
-    When ambas ventanas superan 14.4
-    Then la alerta SLOBurnRateFast queda "firing"
-    And el dashboard de Error Budget muestra consumo >2% en la hora
+  Scenario: Consumed error budget triggers burn-rate alert
+    Given availability drops below the 1h/5m burn-rate threshold
+    When both windows exceed 14.4
+    Then the SLOBurnRateFast alert is "firing"
+    And the Error Budget dashboard shows consumption >2% in the hour
 
-  Scenario: SLO disponible cumple objetivo mensual
-    Given 30 días con 99.93% de runs exitosos
-    When se calcula el error budget
-    Then el SLO de disponibilidad (99.9%) se reporta como " cumplido"
-    And el budget restante es >0%
+  Scenario: Available SLO meets the monthly target
+    Given 30 days with 99.93% successful runs
+    When the error budget is computed
+    Then the availability SLO (99.9%) is reported as "met"
+    And the remaining budget is >0%
 
-  # --- Provisión ---
-  Scenario: Dashboard nuevo en Git aparece en Grafana
-    Given un commit añade ConfigMap "grafana-dashboards-yaml-agno"
-    When ArgoCD sincroniza el namespace monitoring
-    Then Grafana carga el dashboard sin intervención manual
-    And la edición en UI está deshabilitada (provisión declarativa)
+  # --- Provisioning ---
+  Scenario: New dashboard in Git appears in Grafana
+    Given a commit adds ConfigMap "grafana-dashboards-yaml-agno"
+    When ArgoCD syncs the monitoring namespace
+    Then Grafana loads the dashboard with no manual intervention
+    And UI editing is disabled (declarative provisioning)
 ```
 
 ---

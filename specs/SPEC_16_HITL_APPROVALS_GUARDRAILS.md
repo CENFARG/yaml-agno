@@ -89,8 +89,8 @@ Agno expone HITL a través de `active_requirements` en el `run_response`. Cada r
 | Flag en requirement | Significado | Cómo resolver |
 |---------------------|-------------|---------------|
 | `needs_confirmation` | El agente quiere ejecutar una tool y requiere OK explícito | `requirement.confirm()` o `requirement.reject()` |
-| `needs_user_input` | El agente necesita datos del usuario (campos definidos) | `requirement.submit_responses({...})` |
-| `is_external_tool_execution` | La tool se ejecuta fuera del control del agente | `requirement.submit_external_result(...)` |
+| `needs_user_input` | El agente necesita datos del usuario (campos definidos) | `requirement.provide_user_input({...})` |
+| `needs_external_execution` | La tool se ejecuta fuera del control del agente | `requirement.set_external_execution_result(...)` |
 
 ### 2.2 Estado del Run: `RunStatus.paused`
 
@@ -201,14 +201,14 @@ El requirement expone los campos esperados. El frontend renderiza un formulario 
 
 El agente decide dinámicamente durante el run qué input necesita (no declarado de antemano). Útil para flujos conversacionales donde la siguiente pregunta depende de la respuesta anterior.
 
-### 2.7 External Tool Execution (`is_external_tool_execution`)
+### 2.7 External Tool Execution (`external_execution`)
 
 La tool no se ejecuta dentro del runtime del agente. El agente pausa, entrega el "contrato" de ejecución (tool name + args), un sistema externo la ejecuta, y devuelve el resultado.
 
 ```python
-@tool(is_external_tool_execution=True)
+@tool(external_execution=True)
 def run_legacy_batch_job(job_id: str) -> str:
-    """Ejecuta un batch job legacy. El runtime externo lo corre."""
+    """Run a legacy batch job. The external runtime executes it."""
     ...
 ```
 
@@ -318,26 +318,41 @@ async def reject_request(db, approval_id: str, admin_user_id: str, reason: str) 
 
 ### 3.5 Persistencia y Audit Trail
 
-El record de approval se persiste en la tabla definida por `approvals_table`. Schema mínimo:
+El record de approval se persiste en la tabla `approvals`, cuyo schema es **propio de Agno** (`agno/db/schemas/approval.py`). yaml-agno NO redefine esta tabla; la usa tal cual. Schema real (Agno v2.6.14):
 
 ```sql
--- migrations/approvals.sql
+-- Agno-managed table (agno/db/schemas/approval.py). Do NOT redefine.
 CREATE TABLE approvals (
-    approval_id      TEXT PRIMARY KEY,
+    id               TEXT PRIMARY KEY,        -- Agno key (NOT approval_id)
     run_id           TEXT NOT NULL,
-    agent_name       TEXT,
-    member_agent_name TEXT,        -- NULL si es agent-level
-    tool_name        TEXT NOT NULL,
-    tool_args        JSONB NOT NULL,
-    type             TEXT NOT NULL,    -- required | audit
-    status           TEXT NOT NULL,    -- pending | approved | rejected
+    session_id       TEXT NOT NULL,
+    status           TEXT NOT NULL,           -- pending | approved | rejected | expired | cancelled
+    source_type      TEXT NOT NULL DEFAULT 'agent',  -- agent | team | workflow
+    approval_type    TEXT,                    -- required | audit (NOT "type")
+    pause_type       TEXT NOT NULL DEFAULT 'confirmation',  -- confirmation | user_input | external_execution
+    tool_name        TEXT,
+    tool_args        JSONB,
+    expires_at       INTEGER,
+    agent_id         TEXT,                    -- Agno keys (NOT agent_name)
+    team_id          TEXT,
+    workflow_id      TEXT,
+    user_id          TEXT,                    -- Agno isolation key
+    schedule_id      TEXT,
+    schedule_run_id  TEXT,
+    source_name      TEXT,
+    requirements     JSONB,
+    context          JSONB,
     resolution_data  JSONB,
     resolved_by      TEXT,
     resolved_at      INTEGER,
-    tenant_id        TEXT NOT NULL,
-    created_at       INTEGER NOT NULL
+    run_status       TEXT,                    -- PAUSED | COMPLETED | RUNNING | ERROR | CANCELLED
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER
 );
-CREATE INDEX idx_approvals_status_tenant ON approvals(status, tenant_id);
+-- @ai-directive: Agno has NO tenant_id column. Multi-tenant scoping is done at
+-- the application layer via Core Infra TenantResolver + user_id, NOT via a native
+-- Agno column. Do NOT add a tenant_id column to this Agno-managed table.
+CREATE INDEX idx_approvals_status ON approvals(status);
 CREATE INDEX idx_approvals_run ON approvals(run_id);
 ```
 
@@ -969,7 +984,7 @@ agent:
 
     - name: run_legacy_batch
       module: "yaml_agno.tools.legacy"
-      is_external_tool_execution: true # HITL external exec
+      external_execution: true # HITL external exec
 
     - name: process_payment
       module: "yaml_agno.tools.payments"
@@ -1412,12 +1427,12 @@ AND the config is rejected before run
 #### Scenario 12: Golden Path - External Tool Execution
 
 ```gherkin
-GIVEN a tool marked is_external_tool_execution=true
+GIVEN a tool marked external_execution=true
 WHEN the agent decides to call it
 THEN the run pauses
-AND the requirement exposes is_external_tool_execution=true
+AND the requirement exposes needs_external_execution=true
 AND the tool name and args are available for the external system
-WHEN the external system returns a result via submit_external_result
+WHEN the external system returns a result via set_external_execution_result
 AND continue_run is called
 THEN the agent receives the external result as the tool output
 ```
