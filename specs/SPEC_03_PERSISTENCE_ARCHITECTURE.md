@@ -1,24 +1,25 @@
 ---
 Spec_ID: "SPEC_03"
 Title: "Persistence Architecture - Database Schema and Storage"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PostgreSQL", "#DDL", "#Indexes", "#Transactions"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-13"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iter 1 alignment with SPEC_00-02 baseline. Redrew the persistence boundary: yaml-agno connects to Agno's native storage for agent/session/memory/event runtime and keeps its own ACID transactions only for the control-plane config store. Renamed the SQLAlchemy persistence models to *ConfigRow to avoid collision with the Pydantic *Config schemas from SPEC_02 (Single Source of Truth). Marked retention/purge and time-based partitioning as a future non-blocking extension; retained tenant_id-based partitioning. Clarified Engram as an optional external MCP adapter, not a native storage layer. Fixed internal section numbering."
 ---
 
 # SPEC_03_PERSISTENCE_ARCHITECTURE
 
-> **Propósito**: Definir el esquema físico de persistencia, mapeo de almacenamiento, índices de optimización y control transaccional para yaml-agno siguiendo principios ACID y Zero-Trust Security.
+> **Purpose**: Define the physical persistence schema, storage mapping, optimization indexes and transactional control for the yaml-agno control-plane config store, following ACID and Zero-Trust Security principles. Runtime persistence of agents/sessions/memory/events is delegated to Agno's native storage.
 
 ---
 
 ## 1. PERSISTENCE STRATEGY AND STORAGE MAPPING
 
-### 1.1 Arquitectura de Storage
+### 1.1 Storage Architecture
 
 ```mermaid
 graph TB
@@ -37,103 +38,109 @@ graph TB
         REDIS["Redis Optional"]
     end
 
-    subgraph LTM ["Long-term Memory"]
-        ENG["Engram"]
+    subgraph EXT ["External Adapters (Optional)"]
+        ENG["Engram MCP"]
     end
 
-    YAF -->|ConfigDB| PG
-    AI -->|Session State| PG
-    SC -->|Message History| PG
+    YAF -->|Config store (control plane)| PG
+    AI -->|Runtime: session/memory| AGNODB["Agno native db (PostgresDb/RedisDb via db=)"]
+    SC -->|Runtime: message history| AGNODB
     PG -.->|Replicate| SL
     PG <-->|Cache| REDIS
-    AI -->|Learning| ENG
+    AI -.->|Long-term memory via MCP adapter| ENG
 ```
 
-### 1.2 Mapeo de Datos a Storage
+> **Storage boundary note**: Runtime persistence of agent sessions, memory and run events is provided natively by Agno (via its `db=` PostgresDb/RedisDb). yaml-agno owns the **control-plane config store** (tenant configs, `*_configs` rows, DI cache, audit) in its own PostgreSQL schema. `Engram` is an **optional external MCP adapter** for long-term memory; it is NOT a native Agno storage layer (the `LongTermMemoryPort` detail lives in SPEC_04).
 
-| Tipo de Dato | Storage Primario | Storage Backup | Retención | Justificación |
-|--------------|------------------|----------------|-----------|----------------|
-| **Config Yaml** | PostgreSQL | Git (versionado) | Permanente | Source of truth, multi-tenant |
-| **Session State** | PostgreSQL | - | 30 días | Runtime state, GDPR compliant |
-| **Message History** | PostgreSQL | - | 30 días | Conversation history, GDPR |
-| **DI Variables** | PostgreSQL (cache) | API/DB source | 1 hora | Cached values, TTL |
-| **Agent Execution Logs** | PostgreSQL | - | 90 días | Debugging, observabilidad |
-| **Domain Events** | PostgreSQL | - | 7 días | Event sourcing, replay |
+### 1.2 Data-to-Storage Mapping
+
+| Data Type | Primary Storage | Backup Storage | Retention | Justification |
+|-----------|-----------------|----------------|-----------|----------------|
+| **Config Yaml** | PostgreSQL | Git (versioned) | Permanent | Source of truth, multi-tenant |
+| **Session State** | PostgreSQL (Agno native runtime) | - | Future* | Runtime state owned by Agno |
+| **Message History** | PostgreSQL (Agno native runtime) | - | Future* | Conversation history owned by Agno |
+| **DI Variables** | PostgreSQL (config-store cache) | API/DB source | 1 hour | Cached values, TTL |
+| **Agent Execution Logs** | PostgreSQL (Agno native) | - | Future* | Debugging, observability |
+| **Domain Events** | PostgreSQL (Agno RunEvents) | - | Future* | Owned by Agno run lifecycle |
+
+> *Retention for session/message/event data is a **future, non-blocking extension** post-MVP (job scheduler). Agno has no native retention mechanism; the values above describe intended policy, not MVP scope. Runtime ownership of session/message/event data belongs to Agno; yaml-agno only persists its **control-plane config store** with ACID guarantees.
 
 ### 1.3 Multi-Tenant Isolation Strategy
 
-**Estrategia**: Tenant isolation por `tenant_id` + Row Level Security (RLS)
+**Strategy**: Tenant isolation by `tenant_id` + Row Level Security (RLS). Multi-tenant (`tenant_id`, RLS) is a Core Infra concept; Agno itself isolates by `user_id` + `session_id`, so RLS applies to the yaml-agno control-plane config store.
 
 ```sql
--- Policy RLS para todas las tablas con tenant_id
+-- RLS policy for every table with tenant_id
 CREATE POLICY tenant_isolation_policy ON all_tables
 USING (tenant_id = current_setting('app.current_tenant')::uuid);
 ```
 
-**Ventajas**:
-- Aislamiento completo entre tenants
-- Prevención de data leakage
-- GDPR compliant por defecto
+**Benefits**:
+- Complete isolation between tenants
+- Data-leakage prevention
+- GDPR-compliant by default
 
 ---
 
-## 2. DATABASE SCHEMA (DDL COMPLETOS)
+## 2. DATABASE SCHEMA (FULL DDL)
 
-### 2.1 Tabla: tenants
+### 2.1 Table: tenants
 
-**Propósito**: Metadata de tenants (clientes/organizaciones)
+**Purpose**: Tenant metadata (clients/organizations)
 
 ```sql
 CREATE TABLE tenants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     slug VARCHAR(100) NOT NULL UNIQUE,
-    
+
     -- Metadata
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
+
     -- Settings
     settings JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Constraints
     CONSTRAINT slug_format CHECK (slug ~ '^[a-z0-9-]+$')
 );
 
--- Index para lookup por slug
+-- Index for slug lookup
 CREATE INDEX idx_tenants_slug ON tenants(slug);
 ```
 
-### 2.2 Tabla: agent_configs
+### 2.2 Table: agent_configs
 
-**Propósito**: Configuraciones de agentes por tenant
+**Purpose**: Agent configurations per tenant.
+
+> `@ai-directive`: The SQLAlchemy persistence model for this table is named `AgentConfigRow` (the **persistence row**), NOT `AgentConfig`. The Pydantic schema `AgentConfig` defined in SPEC_02 is the Single Source of Truth for the JSONB payload and is **imported, never redefined**. `config_jsonb` must validate against `AgentConfig` at the adapter boundary; do not duplicate its fields here.
 
 ```sql
 CREATE TABLE agent_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     
-    -- Identidad
+    -- Identity
     name VARCHAR(100) NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
-    
-    -- Configuración (YAML serializado)
+
+    -- Configuration (YAML serialized)
     config_yaml TEXT NOT NULL,
     config_jsonb JSONB NOT NULL,
-    
+
     -- Metadata
     description TEXT,
     tags TEXT[] NOT NULL DEFAULT '{}',
     metadata JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Timing
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_by VARCHAR(255),
-    
-    -- Estado
+
+    -- Status
     is_active BOOLEAN NOT NULL DEFAULT true,
-    
+
     -- Constraints
     CONSTRAINT tenant_name_unique UNIQUE (tenant_id, name),
     CONSTRAINT version_positive CHECK (version >= 1)
@@ -144,41 +151,43 @@ CREATE INDEX idx_agent_configs_tenant_name ON agent_configs(tenant_id, name);
 CREATE INDEX idx_agent_configs_tags ON agent_configs USING GIN(tags);
 CREATE INDEX idx_agent_configs_active ON agent_configs(tenant_id, is_active);
 
--- Trigger para updated_at
+-- Trigger for updated_at
 CREATE TRIGGER update_agent_configs_updated_at
 BEFORE UPDATE ON agent_configs
 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 ```
 
-### 2.3 Tabla: team_configs
+### 2.3 Table: team_configs
 
-**Propósito**: Configuraciones de equipos por tenant
+**Purpose**: Team configurations per tenant.
+
+> `@ai-directive`: SQLAlchemy persistence model `TeamConfigRow` (persistence row). JSONB validates against the Pydantic `TeamConfig` from SPEC_02 (Single Source of Truth, imported, not redefined).
 
 ```sql
 CREATE TABLE team_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     
-    -- Identidad
+    -- Identity
     name VARCHAR(100) NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
-    
-    -- Configuración
+
+    -- Configuration
     config_yaml TEXT NOT NULL,
     config_jsonb JSONB NOT NULL,
-    
+
     -- Metadata
     description TEXT,
     tags TEXT[] NOT NULL DEFAULT '{}',
     metadata JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Timing
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
-    -- Estado
+
+    -- Status
     is_active BOOLEAN NOT NULL DEFAULT true,
-    
+
     -- Constraints
     CONSTRAINT tenant_name_unique UNIQUE (tenant_id, name)
 );
@@ -188,31 +197,33 @@ CREATE INDEX idx_team_configs_tenant_name ON team_configs(tenant_id, name);
 CREATE INDEX idx_team_configs_tags ON team_configs USING GIN(tags);
 ```
 
-### 2.4 Tabla: workflow_configs
+### 2.4 Table: workflow_configs
 
-**Propósito**: Configuraciones de workflows por tenant
+**Purpose**: Workflow configurations per tenant.
+
+> `@ai-directive`: SQLAlchemy persistence model `WorkflowConfigRow` (persistence row). JSONB validates against the Pydantic `WorkflowConfig` from SPEC_02 (Single Source of Truth, imported, not redefined).
 
 ```sql
 CREATE TABLE workflow_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     
-    -- Identidad
+    -- Identity
     name VARCHAR(100) NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
-    
-    -- Configuración
+
+    -- Configuration
     config_yaml TEXT NOT NULL,
     config_jsonb JSONB NOT NULL,
-    
+
     -- Metadata
     description TEXT,
     metadata JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Timing
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
+
     -- Constraints
     CONSTRAINT tenant_name_unique UNIQUE (tenant_id, name)
 );
@@ -221,38 +232,41 @@ CREATE TABLE workflow_configs (
 CREATE INDEX idx_workflow_configs_tenant_name ON workflow_configs(tenant_id, name);
 ```
 
-### 2.5 Tabla: agent_sessions
+### 2.5 Table: agent_sessions (DEPRECATED — runtime owned by Agno)
 
-**Propósito**: Sesiones activas de agentes (runtime state)
+> `@ai-directive`: yaml-agno does **not** persist its own agent runtime/session table. Agent session lifecycle, state and runs are managed natively by Agno (via `db=` PostgresDb/RedisDb), isolated by `user_id` + `session_id`. The DDL below is retained only as an **optional read-only mirror/index** for control-plane management queries (e.g. listing sessions per tenant). It is **out of MVP scope**; do not implement unless a concrete control-plane query requirement is identified. Agno remains the source of truth for session data.
 
 ```sql
+-- DEPRECATED / OUT OF MVP SCOPE
+-- Optional read-only mirror of Agno-managed sessions for control-plane queries only.
+-- Agno is the source of truth; this table MUST NOT own runtime state.
 CREATE TABLE agent_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    
-    -- Identidad de sesión
+
+    -- Session identity (mirrors Agno session)
     session_id VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
-    
-    -- Referencia a config
+
+    -- Reference to config
     agent_config_id UUID NOT NULL REFERENCES agent_configs(id) ON DELETE CASCADE,
-    
-    -- Estado
+
+    -- Status (mirrored, not authoritative)
     state VARCHAR(50) NOT NULL, -- created|initialized|running|completed|failed
     current_iteration INTEGER NOT NULL DEFAULT 0,
-    
+
     -- Timing
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
-    
-    -- Resultados
+
+    -- Results
     result TEXT,
     error TEXT,
-    
+
     -- Metadata
     metadata JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Constraints
     CONSTRAINT tenant_user_session_unique UNIQUE (tenant_id, user_id, session_id),
     CONSTRAINT valid_state CHECK (state IN ('created', 'initialized', 'running', 'completed', 'failed')),
@@ -265,42 +279,45 @@ CREATE INDEX idx_agent_sessions_session_id ON agent_sessions(session_id);
 CREATE INDEX idx_agent_sessions_state ON agent_sessions(state);
 CREATE INDEX idx_agent_sessions_created ON agent_sessions(created_at DESC);
 
--- Partición por created_at (retención 30 días)
+-- Time-based partitioning for retention is a FUTURE non-blocking extension (Agno has no native retention).
+-- Tenant_id-based partitioning (multi-tenant) is legitimate and retained for Core Infra.
 -- CREATE TABLE agent_sessions_2026_06 PARTITION OF agent_sessions
 -- FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
 ```
 
-### 2.6 Tabla: session_contexts
+### 2.6 Table: session_contexts (DEPRECATED — runtime owned by Agno)
 
-**Propósito**: Contexto de sesión con historial de mensajes
+> `@ai-directive`: Same boundary as §2.5. Message history and per-agent runtime state are owned by Agno natively; yaml-agno does not persist its own session-context runtime table. The DDL below is retained only as an **optional read-only mirror** for control-plane queries and is **out of MVP scope**.
 
 ```sql
+-- DEPRECATED / OUT OF MVP SCOPE
+-- Optional read-only mirror of Agno-managed session context for control-plane queries only.
 CREATE TABLE session_contexts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    
-    -- Identidad
+
+    -- Identity
     session_id VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
-    
-    -- Estado
+
+    -- Status (mirrored)
     session_state VARCHAR(50) NOT NULL DEFAULT 'active', -- active|paused|closed
-    
-    -- Historial
-    message_history JSONB NOT NULL DEFAULT '[]', -- Array de mensajes
+
+    -- History (mirrored; Agno is authoritative)
+    message_history JSONB NOT NULL DEFAULT '[]', -- Array of messages
     max_history_size INTEGER NOT NULL DEFAULT 100,
-    
-    -- Estado de agentes
-    agent_states JSONB NOT NULL DEFAULT '{}', -- agent_name → state JSON
-    
+
+    -- Agent states (mirrored)
+    agent_states JSONB NOT NULL DEFAULT '{}', -- agent_name -> state JSON
+
     -- Timing
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_activity TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     closed_at TIMESTAMPTZ,
-    
+
     -- Metadata
     metadata JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Constraints
     CONSTRAINT tenant_session_unique UNIQUE (tenant_id, session_id),
     CONSTRAINT valid_session_state CHECK (session_state IN ('active', 'paused', 'closed')),
@@ -313,32 +330,32 @@ CREATE INDEX idx_session_contexts_user ON session_contexts(tenant_id, user_id);
 CREATE INDEX idx_session_contexts_state ON session_contexts(session_state);
 CREATE INDEX idx_session_contexts_last_activity ON session_contexts(last_activity DESC);
 
--- Partición por last_activity (retención 30 días)
+-- Time-based retention partitioning is a FUTURE non-blocking extension.
 ```
 
-### 2.7 Tabla: di_variable_cache
+### 2.7 Table: di_variable_cache
 
-**Propósito**: Cache de variables DI (Database, API, File providers)
+**Purpose**: DI variable cache (Database, API, File providers). Part of the yaml-agno control-plane config store.
 
 ```sql
 CREATE TABLE di_variable_cache (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    
-    -- Identidad de variable
+
+    -- Variable identity
     provider_name VARCHAR(100) NOT NULL, -- user_db|config_api|app_config
     variable_key VARCHAR(255) NOT NULL, -- name|email|preferences
-    
-    -- Valor cacheado
+
+    -- Cached value
     variable_value JSONB NOT NULL,
-    
+
     -- Timing
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,
-    
+
     -- Metadata
     metadata JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Constraints
     CONSTRAINT tenant_provider_key_unique UNIQUE (tenant_id, provider_name, variable_key),
     CONSTRAINT expires_future CHECK (expires_at > created_at)
@@ -348,70 +365,72 @@ CREATE TABLE di_variable_cache (
 CREATE INDEX idx_di_cache_tenant_provider ON di_variable_cache(tenant_id, provider_name);
 CREATE INDEX idx_di_cache_expires ON di_variable_cache(expires_at);
 
--- Partición por expires_at (TTL 1 hora)
+-- Partition by expires_at (TTL 1 hour)
 ```
 
-### 2.8 Tabla: domain_events
+### 2.8 Table: config_change_log (audit for the config store)
 
-**Propósito**: Event sourcing para debugging y replay
+**Purpose**: Audit log of changes to the yaml-agno control-plane config store (config create/update/delete, feature-flag toggles, secret-audit events).
+
+> `@ai-directive`: This is an **audit log for the config store only**. It does NOT replicate Agno RunEvents — run/agent events are emitted natively by Agno. The legacy name `domain_events` implied broad event sourcing of agent runtime, which is out of scope; this table is renamed to `config_change_log` to make the boundary explicit. General event sourcing for agent runs is a **future feature**, not MVP.
 
 ```sql
-CREATE TABLE domain_events (
+CREATE TABLE config_change_log (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    
-    -- Identificación
+
+    -- Identification
     event_type VARCHAR(255) NOT NULL,
     event_version VARCHAR(50) NOT NULL DEFAULT '1.0',
-    
+
     -- Payload
     payload JSONB NOT NULL,
-    
+
     -- Metadata
     tenant_id UUID,
     correlation_id UUID,
     causation_id UUID,
-    
+
     -- Timing
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
-    -- Procesamiento
+
+    -- Processing
     processed_at TIMESTAMPTZ,
     processing_attempts INTEGER NOT NULL DEFAULT 0,
-    
+
     -- Constraints
     CONSTRAINT positive_attempts CHECK (processing_attempts >= 0)
 );
 
 -- Indexes
-CREATE INDEX idx_domain_events_type ON domain_events(event_type);
-CREATE INDEX idx_domain_events_tenant ON domain_events(tenant_id);
-CREATE INDEX idx_domain_events_created ON domain_events(created_at DESC);
-CREATE INDEX idx_domain_events_correlation ON domain_events(correlation_id);
-CREATE INDEX idx_domain_events_processed ON domain_events(processed_at) WHERE processed_at IS NULL;
+CREATE INDEX idx_config_change_log_type ON config_change_log(event_type);
+CREATE INDEX idx_config_change_log_tenant ON config_change_log(tenant_id);
+CREATE INDEX idx_config_change_log_created ON config_change_log(created_at DESC);
+CREATE INDEX idx_config_change_log_correlation ON config_change_log(correlation_id);
+CREATE INDEX idx_config_change_log_processed ON config_change_log(processed_at) WHERE processed_at IS NULL;
 
--- Partición por created_at (retención 7 días)
+-- Time-based retention partitioning is a FUTURE non-blocking extension.
 ```
 
 ---
 
 ## 3. INDEXES AND PERFORMANCE TUNING
 
-### 3.1 Índices Justificados
+### 3.1 Justified Indexes
 
-| Índice | Tabla | Columnas | Tipo | Justificación |
-|--------|-------|----------|------|---------------|
-| `idx_agent_configs_tenant_name` | agent_configs | (tenant_id, name) | B-tree | Lookup primario de configs por tenant |
-| `idx_agent_configs_tags` | agent_configs | tags | GIN | Búsqueda por tags (config discovery) |
-| `idx_agent_sessions_tenant_user` | agent_sessions | (tenant_id, user_id) | B-tree | Historial de sesiones por usuario |
-| `idx_agent_sessions_state` | agent_sessions | state | B-tree | Filtrado de sesiones activas |
-| `idx_session_contexts_last_activity` | session_contexts | last_activity DESC | B-tree | Cleanup de sesiones expiradas |
-| `idx_di_cache_expires` | di_variable_cache | expires_at | B-tree | Eliminación de entradas expiradas |
-| `idx_domain_events_processed` | domain_events | processed_at WHERE NULL | B-tree Partial | Eventos pendientes de procesamiento |
+| Index | Table | Columns | Type | Justification |
+|-------|-------|---------|------|---------------|
+| `idx_agent_configs_tenant_name` | agent_configs | (tenant_id, name) | B-tree | Primary config lookup per tenant |
+| `idx_agent_configs_tags` | agent_configs | tags | GIN | Tag-based search (config discovery) |
+| `idx_agent_sessions_tenant_user` | agent_sessions | (tenant_id, user_id) | B-tree | Session history per user (mirror, optional) |
+| `idx_agent_sessions_state` | agent_sessions | state | B-tree | Active-session filtering (mirror, optional) |
+| `idx_session_contexts_last_activity` | session_contexts | last_activity DESC | B-tree | Expired-session cleanup (mirror, optional) |
+| `idx_di_cache_expires` | di_variable_cache | expires_at | B-tree | Expired-entry eviction |
+| `idx_config_change_log_processed` | config_change_log | processed_at WHERE NULL | B-tree Partial | Pending audit events |
 
-### 3.2 Consultas Optimizadas
+### 3.2 Optimized Queries
 
 ```sql
--- Q1: Lookup de config activa por tenant y nombre
+-- Q1: Active config lookup by tenant and name
 EXPLAIN ANALYZE
 SELECT id, config_yaml, config_jsonb
 FROM agent_configs
@@ -419,7 +438,7 @@ WHERE tenant_id = $1 AND name = $2 AND is_active = true;
 
 -- Expected: Index Scan using idx_agent_configs_tenant_name + Filter
 
--- Q2: Sesiones activas por usuario
+-- Q2: Active sessions per user (optional control-plane mirror; runtime owned by Agno)
 EXPLAIN ANALYZE
 SELECT id, session_id, state, current_iteration
 FROM agent_sessions
@@ -429,75 +448,81 @@ LIMIT 10;
 
 -- Expected: Index Scan using idx_agent_sessions_tenant_user + idx_agent_sessions_state
 
--- Q3: Cleanup de sesiones expiradas (>30 días)
+-- Q3: Cleanup of expired sessions (>30 days) -- FUTURE retention extension
 EXPLAIN ANALYZE
 DELETE FROM session_contexts
 WHERE last_activity < NOW() - INTERVAL '30 days';
 
 -- Expected: Index Scan using idx_session_contexts_last_activity
 
--- Q4: Eventos pendientes de procesamiento
+-- Q4: Pending config-store audit events
 EXPLAIN ANALYZE
 SELECT id, event_type, payload
-FROM domain_events
+FROM config_change_log
 WHERE processed_at IS NULL
 ORDER BY created_at ASC
 LIMIT 100;
 
--- Expected: Index Scan using idx_domain_events_processed
+-- Expected: Index Scan using idx_config_change_log_processed
 ```
 
-### 3.3 Estrategia de Particionamiento
+### 3.3 Partitioning Strategy
 
-**Tablas particionadas por tiempo**:
-- `agent_sessions` por `created_at` (mensual)
-- `session_contexts` por `last_activity` (mensual)
-- `di_variable_cache` por `expires_at` (diaria)
-- `domain_events` por `created_at` (diaria)
+**Time-based partitioning (FUTURE, non-blocking post-MVP)**:
+- `agent_sessions` by `created_at` (monthly)
+- `session_contexts` by `last_activity` (monthly)
+- `di_variable_cache` by `expires_at` (daily)
+- `config_change_log` by `created_at` (daily)
 
-**Ventajas**:
-- Drop partitions rápido para cleanup
-- Queries con filtro de tiempo usan partition pruning
-- Indexes más pequeños por partición
+> `@ai-directive`: Time-based partitioning and purge/retention are a **future extension** (Agno has no native retention). The DDL above is retained for forward compatibility. **Tenant-based partitioning (multi-tenant isolation) is legitimate Core Infra and stays in scope.**
+
+**Benefits**:
+- Fast partition drops for cleanup
+- Time-filtered queries use partition pruning
+- Smaller indexes per partition
 
 ---
 
 ## 4. CORE INFRA MANAGER INTEGRATION
 
+> `@ai-directive` (persistence boundary): yaml-agno **connects to Agno's storage** for everything Agno already persists (agents, sessions, memory, run events) — it does not reimplement that runtime. The integration below scopes the ConfigManager / SecretManager / DatabaseManager / TransactionManager / Repository pattern to the **yaml-agno control-plane config store only** (tenant configs, `*_configs` rows, `di_variable_cache`, `config_change_log`, feature flags, secret audit). ACID transactions here are legitimate because PostgreSQL provides them natively. **Do NOT wrap Agno step runtime in these transactions** — that is not a native Agno concept and is treated as a future feature.
+
 ### 4.1 ConfigManager Integration
 
-**Responsabilidad**: Configuración de conexión y pooling de bases de datos.
+**Responsibility**: Database connection configuration and pooling for the config store.
 
-**Uso en yaml-agno**:
+**Usage in yaml-agno**:
 ```python
 # yaml-agno/src/db/bootstrap.py
 
 class DatabaseBootstrap:
+    """Bootstrap for the yaml-agno control-plane config-store engine.
+
+    @ai-directive: This engine serves ONLY the config store schema. Runtime
+    agent/session/memory storage is delegated to Agno via its own db= setting.
+    """
+
     def __init__(self, config_manager: ConfigManager):
         self.config = config_manager
-    
+
     async def create_engine(self) -> AsyncEngine:
-        """Crea engine de SQLAlchemy desde ConfigManager"""
-        
-        # Obtener configuración desde ConfigManager
+        """Create a SQLAlchemy AsyncEngine for the config store from ConfigManager."""
         db_url = self.config.get_string("database.url")
         pool_size = self.config.get_number("database.pool_size", default=10)
         max_overflow = self.config.get_number("database.max_overflow", default=20)
-        
-        # Crear engine con pooling
+
         engine = create_async_engine(
             db_url,
             pool_size=pool_size,
             max_overflow=max_overflow,
-            pool_pre_ping=True  # Verificar conexiones
+            pool_pre_ping=True,  # verify connections before use
         )
-        
         return engine
 ```
 
 ### 4.2 SecretManager Integration
 
-**Responsabilidad**: Gestión segura de credenciales de base de datos (Zero-Trust).
+**Responsibility**: Secure handling of database credentials (Zero-Trust).
 
 **Port (Protocol)**:
 ```python
@@ -508,7 +533,7 @@ class SecretManager(Protocol):
     async def get_secret_json(self, key: str) -> dict: ...
 ```
 
-**Uso en yaml-agno**:
+**Usage in yaml-agno**:
 ```python
 # yaml-agno/src/db/bootstrap.py
 
@@ -520,30 +545,29 @@ class DatabaseBootstrap:
     ):
         self.config = config_manager
         self.secrets = secret_manager
-    
+
     async def get_db_credentials(self) -> dict:
-        """Obtiene credenciales desde SecretManager"""
-        
-        # NO usar variables de entorno directamente
+        """Fetch database credentials from SecretManager."""
+        # Never read secrets directly from environment variables.
         password = await self.secrets.get_secret("database.password")
-        
+
         return {
             "username": self.config.get_string("database.username"),
-            "password": password,  # Desde SecretManager
+            "password": password,  # from SecretManager
             "host": self.config.get_string("database.host"),
-            "port": self.config.get_number("database.port")
+            "port": self.config.get_number("database.port"),
         }
 ```
 
 **Do's & Don'ts**:
-- ✅ Rotación automática con TTL corto
-- ✅ Auditoría de accesos
-- ❌ NO persistir secretos en env vars
-- ❌ NO listar todos los secretos
+- Automatic rotation with short TTL
+- Access auditing
+- Do NOT persist secrets in env vars
+- Do NOT list all secrets
 
 ### 4.3 DatabaseManager Integration
 
-**Responsabilidad**: Pooling resiliente y factoría de Repositorios Abstractos.
+**Responsibility**: Resilient pooling and factory for config-store repositories.
 
 **Port (Protocol)**:
 ```python
@@ -565,7 +589,7 @@ class DatabaseManager(Protocol):
     def get_repository(self, name: str) -> GenericRepository: ...
 ```
 
-**Uso en yaml-agno con Repository Pattern**:
+**Usage in yaml-agno with Repository Pattern (config store only)**:
 ```python
 # yaml-agno/src/repositories/base_repository.py
 
@@ -573,28 +597,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 class BaseRepository:
-    """Repositorio base con transacciones gestionadas por DatabaseManager"""
-    
+    """Base repository for the config store.
+
+    @ai-directive: Scoped to the control-plane config store. Transactions here
+    guarantee ACID for config rows only; they do NOT cover Agno runtime steps.
+    """
+
     def __init__(self, db_manager: DatabaseManager, tenant_id: UUID):
         self.db = db_manager
         self.tenant_id = tenant_id
-    
+
     async def create(self, entity_data: dict) -> UUID:
-        """Crea entidad con transacción automática"""
-        
+        """Create an entity within an automatic transaction."""
         async with self.db.transaction(tenant_id=self.tenant_id) as session:
-            # Boundary validation con Pydantic
+            # Boundary validation with the Pydantic schema from SPEC_02.
             validated = self._validate(entity_data)
-            
-            # Insertar con SQLAlchemy
+
             result = await session.execute(
                 insert(self.model).values(**validated).returning(self.model.id)
             )
             return result.scalar_one()
-    
+
     async def find_by_id(self, entity_id: UUID) -> dict | None:
-        """Busca entidad por ID"""
-        
+        """Find an entity by ID."""
         async with self.db.transaction(tenant_id=self.tenant_id) as session:
             result = await session.execute(
                 select(self.model).where(
@@ -607,19 +632,21 @@ class BaseRepository:
 ```
 
 **Do's & Don'ts**:
-- ✅ Gestionar transacciones vía Async Context Managers
-- ✅ Boundary Validation con Pydantic en adaptadores
-- ✅ Ocultar detalles del driver (SQLAlchemy)
-- ❌ NO exponer sesiones crudas al dominio
-- ❌ NO admitir SQL dinámico desde el dominio
+- Manage transactions via Async Context Managers
+- Boundary Validation with Pydantic at adapters
+- Hide driver details (SQLAlchemy)
+- Do NOT expose raw sessions to the domain
+- Do NOT accept dynamic SQL from the domain
 
-**Dependencias**: ConfigManager, SecretManager, LoggerManager, ObservabilityManager, ErrorHandlingManager
+**Dependencies**: ConfigManager, SecretManager, LoggerManager, ObservabilityManager, ErrorHandlingManager
 
 ---
 
-## 5. TRANSACTION MANAGER CONTRACT
+## 5. TRANSACTION MANAGER CONTRACT (config store)
 
-### 4.1 Async Context Manager
+> `@ai-directive`: The `TransactionManager` below is scoped to the **config store**. ACID guarantees apply to config-store rows (tenants, `*_configs`, `di_variable_cache`, `config_change_log`). It does NOT manage Agno runtime step transactions.
+
+### 5.1 Async Context Manager
 
 ```python
 # yaml-agno/src/db/transaction.py
@@ -630,46 +657,45 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy import text
 
 class TransactionManager:
-    """Gestor de transacciones con retry y error handling"""
-    
+    """Transaction manager with automatic rollback for the config store."""
+
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self.session_factory = session_factory
-    
+
     @asynccontextmanager
     async def transaction(self, tenant_id: UUID | None = None) -> AsyncIterator[AsyncSession]:
-        """
-        Context manager para transacción con rollback automático.
-        
+        """Context manager for a transaction with automatic rollback.
+
         Args:
-            tenant_id: ID de tenant para RLS (opcional)
-            
+            tenant_id: Tenant ID for RLS (optional).
+
         Yields:
-            AsyncSession: Sesión de SQLAlchemy
-            
+            AsyncSession: SQLAlchemy async session.
+
         Raises:
-            Exception: Cualquier error durante la transacción (rollback automático)
+            Exception: Any error during the transaction triggers rollback.
         """
         async with self.session_factory() as session:
             try:
-                # Set tenant_id para RLS
+                # Set tenant_id for RLS.
                 if tenant_id:
                     await session.execute(
                         text("SET LOCAL app.current_tenant = :tenant_id"),
                         {"tenant_id": str(tenant_id)}
                     )
-                
+
                 yield session
-                
-                # Commit explícito
+
+                # Explicit commit.
                 await session.commit()
-                
-            except Exception as e:
-                # Rollback automático
+
+            except Exception:
+                # Automatic rollback.
                 await session.rollback()
                 raise
 ```
 
-### 4.2 Ejemplo de Uso
+### 5.2 Usage Example (config store repository)
 
 ```python
 # yaml-agno/src/repositories/agent_config_repository.py
@@ -679,19 +705,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 class AgentConfigRepository:
-    """Repositorio para agent_configs"""
-    
+    """Repository for the agent_configs config-store table.
+
+    @ai-directive: The persisted row maps to the SQLAlchemy model AgentConfigRow.
+    The config_jsonb payload validates against the Pydantic AgentConfig schema
+    imported from SPEC_02 (Single Source of Truth).
+    """
+
     def __init__(self, transaction_manager: TransactionManager):
         self.tm = transaction_manager
-    
+
     async def create(
         self,
         tenant_id: UUID,
         name: str,
         config_yaml: str,
-        config_jsonb: dict
+        config_jsonb: dict,
     ) -> UUID:
-        """Crea configuración de agente"""
+        """Create an agent configuration row."""
         async with self.tm.transaction(tenant_id=tenant_id) as session:
             result = await session.execute(
                 text("""
@@ -703,17 +734,17 @@ class AgentConfigRepository:
                     "tenant_id": str(tenant_id),
                     "name": name,
                     "config_yaml": config_yaml,
-                    "config_jsonb": config_jsonb
-                }
+                    "config_jsonb": config_jsonb,
+                },
             )
             return result.scalar_one()
-    
+
     async def get_by_name(
         self,
         tenant_id: UUID,
-        name: str
+        name: str,
     ) -> dict | None:
-        """Obtiene config por nombre"""
+        """Get an active config by name."""
         async with self.tm.transaction(tenant_id=tenant_id) as session:
             result = await session.execute(
                 text("""
@@ -721,7 +752,7 @@ class AgentConfigRepository:
                     FROM agent_configs
                     WHERE tenant_id = :tenant_id AND name = :name AND is_active = true
                 """),
-                {"tenant_id": str(tenant_id), "name": name}
+                {"tenant_id": str(tenant_id), "name": name},
             )
             row = result.fetchone()
             return dict(row._mapping) if row else None
@@ -729,9 +760,9 @@ class AgentConfigRepository:
 
 ---
 
-## 5. BEHAVIOR DELTA - BDD SCENARIOS
+## 6. BEHAVIOR DELTA - BDD SCENARIOS
 
-### 5.1 Escenarios de Aceptación
+### 6.1 Acceptance Scenarios
 
 #### Scenario 1: Golden Path - Create AgentConfig
 
@@ -777,9 +808,9 @@ AND the transaction is rolled back
 
 ---
 
-## 6. TDD MICRO-TASK EXECUTION PROTOCOL
+## 7. TDD MICRO-TASK EXECUTION PROTOCOL
 
-### 6.1 Cascading Task Checklist
+### 7.1 Cascading Task Checklist
 
 #### TASK_001: Define Tenant Model
 
@@ -791,26 +822,28 @@ AND the transaction is rolled back
       tenant = Tenant(name="Test Corp", slug="test-corp")
       assert tenant.slug == "test-corp"
   ```
-- **GREEN**: Implementar `Tenant` con SQLAlchemy
+- **GREEN**: Implement `Tenant` with SQLAlchemy
 - **Commit**: `feat: add Tenant SQLAlchemy model`
 
-#### TASK_002: Define AgentConfig Model
+#### TASK_002: Define AgentConfigRow Model (persistence)
 
 - **File**: `yaml-agno/src/db/models/agent_config.py`
 - **Test**: `tests/unit/db/test_agent_config_model.py`
 - **RED**:
   ```python
-  def test_agent_config_creation():
-      config = AgentConfig(
+  def test_agent_config_row_creation():
+      # @ai-directive: AgentConfigRow is the PERSISTENCE row.
+      # The Pydantic AgentConfig (SPEC_02) is the JSONB validator, imported not redefined.
+      row = AgentConfigRow(
           tenant_id=uuid4(),
           name="test_agent",
           config_yaml="agent:\n  name: test",
-          config_jsonb={"agent": {"name": "test"}}
+          config_jsonb={"agent": {"name": "test"}},
       )
-      assert config.name == "test_agent"
+      assert row.name == "test_agent"
   ```
-- **GREEN**: Implementar `AgentConfig` con foreign keys
-- **Commit**: `feat: add AgentConfig SQLAlchemy model`
+- **GREEN**: Implement `AgentConfigRow` with foreign keys; validate `config_jsonb` against the imported Pydantic `AgentConfig` (SPEC_02)
+- **Commit**: `feat: add AgentConfigRow SQLAlchemy model`
 
 #### TASK_003: Create Migration for Tenants
 
@@ -827,7 +860,7 @@ AND the transaction is rolled back
       """))
       assert result.scalar_one() is True
   ```
-- **GREEN**: Crear migration con DDL de `tenants`
+- **GREEN**: Create migration with the `tenants` DDL
 - **Commit**: `feat: add tenants table migration`
 
 #### TASK_004: Create Migration for AgentConfigs
@@ -845,7 +878,7 @@ AND the transaction is rolled back
       """))
       assert result.scalar_one() is True
   ```
-- **GREEN**: Crear migration con DDL de `agent_configs`
+- **GREEN**: Create migration with the `agent_configs` DDL
 - **Commit**: `feat: add agent_configs table migration`
 
 #### TASK_005: Implement TransactionManager
@@ -859,7 +892,7 @@ AND the transaction is rolled back
           await session.execute(text("SELECT 1"))
       # Verify commit happened (no exception)
   ```
-- **GREEN**: Implementar `TransactionManager.transaction()`
+- **GREEN**: Implement `TransactionManager.transaction()`
 - **Commit**: `feat: add TransactionManager context manager`
 
 #### TASK_006: Implement Rollback on Error
@@ -874,7 +907,7 @@ AND the transaction is rolled back
               await session.execute(text("SELECT 1/0"))
       # Verify rollback happened
   ```
-- **GREEN**: Añadir `try/except/rollback` en `transaction()`
+- **GREEN**: Add `try/except/rollback` to `transaction()`
 - **Commit**: `feat: add automatic rollback on error`
 
 #### TASK_007: Implement AgentConfigRepository
@@ -888,11 +921,11 @@ AND the transaction is rolled back
           tenant_id=tenant_id,
           name="test",
           config_yaml="agent:\n  name: test",
-          config_jsonb={"agent": {"name": "test"}}
+          config_jsonb={"agent": {"name": "test"}},
       )
       assert config_id is not None
   ```
-- **GREEN**: Implementar `AgentConfigRepository.create()`
+- **GREEN**: Implement `AgentConfigRepository.create()`
 - **Commit**: `feat: add AgentConfigRepository.create()`
 
 #### TASK_008: Implement Get By Name
@@ -906,69 +939,71 @@ AND the transaction is rolled back
       assert result is not None
       assert result["name"] == "test"
   ```
-- **GREEN**: Implementar `AgentConfigRepository.get_by_name()`
+- **GREEN**: Implement `AgentConfigRepository.get_by_name()`
 - **Commit**: `feat: add AgentConfigRepository.get_by_name()`
 
 ---
 
-## 7. SUPUESTOS TÉCNICOS ADOPTADOS
+## 8. TECHNICAL ASSUMPTIONS ADOPTED
 
-### [Decisión 1] PostgreSQL para Producción
+### [Decision 1] PostgreSQL for Production
 
-**Justificación**:
-- ACID compliance para transacciones
-- JSONB para config flexible + schema estricto
-- RLS (Row Level Security) para multi-tenant isolation
-- Particionamiento nativo por tiempo
-- Full-text search en configs
+**Justification**:
+- ACID compliance for transactions (config store)
+- JSONB for flexible config + strict schema validation (via Pydantic from SPEC_02)
+- RLS (Row Level Security) for multi-tenant isolation
+- Native time-based partitioning (future retention extension)
+- Full-text search over configs
 
-### [Decisión 2] SQLite para Desarrollo
+### [Decision 2] SQLite for Development
 
-**Justificación**:
-- Zero configuration para devs
-- Compatible con SQLAlchemy (mismo code base)
-- Suficiente para tests unitarios
-- No requiere dependencies externas
+**Justification**:
+- Zero configuration for developers
+- SQLAlchemy-compatible (same code base)
+- Sufficient for unit tests
+- No external dependencies
 
-### [Decisión 3] UUID v4 para IDs
+### [Decision 3] UUID v4 for IDs
 
-**Justificación**:
-- No expone información de secuencialidad
-- Globally unique para distributed systems
-- Soporte nativo en PostgreSQL
-- Mejor security que auto-increment integers
+**Justification**:
+- Does not leak sequencing information
+- Globally unique for distributed systems
+- Native PostgreSQL support
+- Better security than auto-increment integers
 
 ---
 
-## 8. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
+## 9. STRATEGIC CALIBRATION QUESTIONS
 
-### [Pregunta 1] Retención de Datos
+### [Question 1] Data Retention
 
-**¿Es suficiente 30 días de retención para session_state y message_history?**
+**Is 30-day retention sufficient for session_state and message_history?**
 
-Implica:
-- **Sí**: Cumple GDPR, reduce storage costs
-- **No**: Requerir retención extendida para compliance
+Note: these data types are owned by Agno at runtime; retention is a future yaml-agno extension.
+
+Implications:
+- **Yes**: Meets GDPR, reduces storage costs
+- **No**: Requires extended retention for compliance
 - **Trade-off**: Storage cost vs compliance/analytics value
 
-### [Pregunta 2] Particion vs Tabla Separada
+### [Question 2] Partition vs Separate Table
 
-**¿Usar particiones por tiempo o tablas separadas por tenant?**
+**Use time-based partitions or separate tables per tenant?**
 
-Implica:
-- **Particiones**: Más simple, mejor para cleanup temporal
-- **Tablas**: Mejor aislamiento por tenant, más complejo
-- **Trade-off**: Simplicidad de schema vs aislamiento máximo
+Implications:
+- **Partitions**: Simpler, better for temporal cleanup
+- **Tables**: Better per-tenant isolation, more complex
+- **Trade-off**: Schema simplicity vs maximum isolation
 
-### [Pregunta 3] Sync vs Async Replication
+### [Question 3] Sync vs Async Replication
 
-**¿Requerir replicación síncrona para configs de producción?**
+**Require synchronous replication for production configs?**
 
-Implica:
-- **Sí**: Consistencia fuerte, más latencia
-- **No**: Eventual consistency, mejor performance
-- **Trade-off**: Latency de writes vs garantías de consistencia
+Implications:
+- **Yes**: Strong consistency, higher latency
+- **No**: Eventual consistency, better performance
+- **Trade-off**: Write latency vs consistency guarantees
 
 ---
 
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente específico o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
+*Do you want to deepen the technical specification to **Level 6** for a specific component, or authorize execution of these tasks by the agent team?*
