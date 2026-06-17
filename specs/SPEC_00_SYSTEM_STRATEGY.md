@@ -256,7 +256,7 @@ Casos internos de prueba (a definir orden/prioridad):
 
 - **Agno estable**: API no cambia entre minor versions (pinned 2.6.14)
 - **Agent.run() y Agent.arun()**: **ambos soportados**. `run()` síncrono, `arun()` asíncrono (default producción: concurrency, streaming SSE, background). Emiten los mismos eventos. La elección es del caller de runtime, no del spec YAML
-- **Teams supports 5 modes**: coordinate, route, broadcast, tasks, coroutine
+- **Teams supports 4 modes**: coordinate, route, broadcast, tasks (verified in `agno/team/mode.py`; no `coroutine` mode exists in Agno)
 - **Workflows support 6 primitives**: Step, Steps, Parallel, Condition, Router, Loop
 - **Multi-tenant nativo**: Agno **NO** tiene `tenant_id` first-class ni RLS nativo. La isolation es por `user_id` + `session_id`. El sistema multi-tenant (TenantResolver, RLS, RBAC por tenant) se define en **Core Infra** (reutilizable por todos los programas CENF) y yaml-agno lo consume: `tenant_id` se modela como claim JWT / metadata y se propaga vía `header_provider`
 
