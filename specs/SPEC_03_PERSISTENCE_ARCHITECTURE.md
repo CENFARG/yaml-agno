@@ -1,1009 +1,1081 @@
 ---
 Spec_ID: "SPEC_03"
-Title: "Persistence Architecture - Database Schema and Storage"
-Version: "0.2.0-iter1"
+Title: "Persistence Architecture - Config Store on core-cenf DatabaseManager"
+Version: "0.3.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#PostgreSQL", "#DDL", "#Indexes", "#Transactions"]
+Context_Tags: ["#PostgreSQL", "#SQLAlchemy", "#core-cenf", "#MultiTenant", "#ConfigStore"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
 Last_Updated: "2026-06-17"
-Revision_Note: "Iter 1 alignment with SPEC_00-02 baseline. Redrew the persistence boundary: yaml-agno connects to Agno's native storage for agent/session/memory/event runtime and keeps its own ACID transactions only for the control-plane config store. Renamed the SQLAlchemy persistence models to *ConfigRow to avoid collision with the Pydantic *Config schemas from SPEC_02 (Single Source of Truth). Marked retention/purge and time-based partitioning as a future non-blocking extension; retained tenant_id-based partitioning. Clarified Engram as an optional external MCP adapter, not a native storage layer. Fixed internal section numbering."
+Revision_Note: "Iter 2 - deep rewrite integrating the real core-cenf package (core_infrastructure). SPEC_03 no longer reimplements a TransactionManager or repositories: it CONSUMES DatabaseManager/TransactionScope/GenericRepository[T] from core-cenf and only declares DeclarativeBase ORM models. Dropped agent_sessions/session_contexts entirely (Agno runtime owns those in agno_*). All config-store tables renamed to the yamlagno_* prefix in a dedicated SQL schema to avoid collision with Agno's agno_* tables. Added environment-vs-execution variable classification, per-table JSON row example + illustrative query, three-level multi-tenant model (modeled, not MVP), auto-provisioning with checkfirst mirroring Agno, and a config_change_log retention/compaction future-feature section."
 ---
 
 # SPEC_03_PERSISTENCE_ARCHITECTURE
 
-> **Purpose**: Define the physical persistence schema, storage mapping, optimization indexes and transactional control for the yaml-agno control-plane config store, following ACID and Zero-Trust Security principles. Runtime persistence of agents/sessions/memory/events is delegated to Agno's native storage.
+> **Purpose**: Define the physical persistence schema of the **yaml-agno control-plane config store** and how it is built **on top of the core-cenf `DatabaseManager`**. Runtime persistence of agents/sessions/memory/run events is owned by Agno (in `agno_*`); yaml-agno does not persist runtime state. yaml-agno only persists declarative configs (tenants, `*_configs`, DI cache, audit) and consumes the core-cenf transaction/repository abstractions instead of reimplementing them.
 
 ---
 
-## 1. PERSISTENCE STRATEGY AND STORAGE MAPPING
+## 1. PERSISTENCE STRATEGY AND BOUNDARY
 
-### 1.1 Storage Architecture
+### 1.1 Three-layer frontier (no overlap)
+
+| Layer | Owner | Tables | What it stores |
+|-------|-------|--------|----------------|
+| **core-cenf DatabaseManager** | `core_infrastructure` package | (none of its own) | Async SQLAlchemy 2.0 engine, `TransactionScope`, `GenericRepository[T]`. yaml-agno depends on the **Protocol**, never on the concrete adapter. |
+| **yaml-agno config store** | this SPEC | `yamlagno_*` (dedicated SQL schema) | Tenants, `agent/team/workflow_configs`, `di_variable_cache`, `config_change_log`, `yamlagno_schema_versions`. Declarative ORM (`DeclarativeBase`) required by the core adapter. |
+| **Agno runtime** | Agno framework | `agno_*` (its own schema) | Sessions (`agno_sessions`), memory, run events, evals, metrics, schedules. Provisioned by Agno via `db=` / `auto_provision_dbs`. |
+
+> **@ai-directive (no reimplementation)**: SPEC_03 does **not** define a `TransactionManager`, a `BaseRepository`, or raw `AsyncSession` usage. yaml-agno calls `async with db.transaction() as tx:` and `db.get_repository(EntityType)` from core-cenf. The only thing this SPEC defines is **ORM models** (the `DeclarativeBase` entities the generic repository operates on) and the **schema lifecycle** (auto-provisioning). Everything else is consumed from `core_infrastructure`.
+
+### 1.2 Storage architecture (mermaid)
 
 ```mermaid
 graph TB
-    subgraph APP ["Application Layer"]
-        YAF["yaml-agno Factory"]
-        AI["AgentInstance"]
-        SC["SessionContext"]
+    subgraph APP ["yaml-agno application"]
+        YAML["YAML file (SPEC_02 schema)"] --> VAL["Pydantic validation<br/>AgentConfig / TeamConfig / WorkflowConfig"]
+        VAL --> REC["AgentConfigRecord<br/>DeclarativeBase ORM entity"]
     end
 
-    subgraph PERS ["Persistence Layer"]
-        PG["PostgreSQL"]
-        SL["SQLite Dev"]
+    subgraph CORE ["core-cenf (core_infrastructure)"]
+        DM["DatabaseManager (Protocol)"]
+        TX["TransactionScope<br/>commit / rollback (idempotent)"]
+        GR["GenericRepository[T]<br/>find_by_id / find_all / insert / update / delete / count"]
+        SA["SQLAlchemyAdapter<br/>async SQLAlchemy 2.0 + asyncpg"]
+        MEM["MemoryDatabaseAdapter<br/>tests"]
     end
 
-    subgraph CACHE ["Cache Layer"]
-        REDIS["Redis Optional"]
+    subgraph STORE ["yaml-agno config store (SQL schema: yamlagno)"]
+        T1["yamlagno_tenants"]
+        T2["yamlagno_agent_configs"]
+        T3["yamlagno_team_configs"]
+        T4["yamlagno_workflow_configs"]
+        T5["yamlagno_di_variable_cache"]
+        T6["yamlagno_config_change_log"]
+        T7["yamlagno_schema_versions"]
     end
 
-    subgraph EXT ["External Adapters (Optional)"]
-        ENG["Engram MCP"]
+    subgraph AGNO ["Agno runtime (separate)"]
+        AR["agno_sessions / agno_memory / run events<br/>via db= PostgresDb/RedisDb"]
     end
 
-    YAF -->|Config store (control plane)| PG
-    AI -->|Runtime: session/memory| AGNODB["Agno native db (PostgresDb/RedisDb via db=)"]
-    SC -->|Runtime: message history| AGNODB
-    PG -.->|Replicate| SL
-    PG <-->|Cache| REDIS
-    AI -.->|Long-term memory via MCP adapter| ENG
+    REC --> GR
+    GR --> TX
+    TX --> DM
+    DM --> SA
+    SA --> STORE
+    DM -.-> MEM
+    AR -.->|"NOT owned by yaml-agno"| STORE
 ```
 
-> **Storage boundary note**: Runtime persistence of agent sessions, memory and run events is provided natively by Agno (via its `db=` PostgresDb/RedisDb). yaml-agno owns the **control-plane config store** (tenant configs, `*_configs` rows, DI cache, audit) in its own PostgreSQL schema. `Engram` is an **optional external MCP adapter** for long-term memory; it is NOT a native Agno storage layer (the `LongTermMemoryPort` detail lives in SPEC_04).
+> **@ai-directive**: `db.get_repository(T)` MUST be called **inside** `async with db.transaction()` because the core `SQLAlchemyAdapter` binds the session to a contextvar. The repository is obtained per-transaction; it is not a long-lived singleton.
 
-### 1.2 Data-to-Storage Mapping
+### 1.3 Data-to-storage mapping (config store only)
 
-| Data Type | Primary Storage | Backup Storage | Retention | Justification |
-|-----------|-----------------|----------------|-----------|----------------|
-| **Config Yaml** | PostgreSQL | Git (versioned) | Permanent | Source of truth, multi-tenant |
-| **Session State** | PostgreSQL (Agno native runtime) | - | Future* | Runtime state owned by Agno |
-| **Message History** | PostgreSQL (Agno native runtime) | - | Future* | Conversation history owned by Agno |
-| **DI Variables** | PostgreSQL (config-store cache) | API/DB source | 1 hour | Cached values, TTL |
-| **Agent Execution Logs** | PostgreSQL (Agno native) | - | Future* | Debugging, observability |
-| **Domain Events** | PostgreSQL (Agno RunEvents) | - | Future* | Owned by Agno run lifecycle |
+| Data type | Primary storage | Backup | Retention | Justification |
+|-----------|-----------------|--------|-----------|----------------|
+| Tenant metadata | `yamlagno_tenants` | Git | Permanent | Identity root for the config store |
+| Agent / Team / Workflow configs | `yamlagno_*_configs` | Git (YAML) | Permanent | Config store; JSONB validated against SPEC_02 |
+| DI variable cache | `yamlagno_di_variable_cache` | Source DB/API | TTL (1h default) | Cached resolved values with expiry |
+| Config audit log | `yamlagno_config_change_log` | S3 archive (future) | `retention_days` (future) | Mutable/append-heavy; compacted eventually |
+| Schema version tracking | `yamlagno_schema_versions` | - | Permanent | Auto-provisioning bookkeeping |
 
-> *Retention for session/message/event data is a **future, non-blocking extension** post-MVP (job scheduler). Agno has no native retention mechanism; the values above describe intended policy, not MVP scope. Runtime ownership of session/message/event data belongs to Agno; yaml-agno only persists its **control-plane config store** with ACID guarantees.
-
-### 1.3 Multi-Tenant Isolation Strategy
-
-**Strategy**: Tenant isolation by `tenant_id` + Row Level Security (RLS). Multi-tenant (`tenant_id`, RLS) is a Core Infra concept; Agno itself isolates by `user_id` + `session_id`, so RLS applies to the yaml-agno control-plane config store.
-
-```sql
--- RLS policy for every table with tenant_id
-CREATE POLICY tenant_isolation_policy ON all_tables
-USING (tenant_id = current_setting('app.current_tenant')::uuid);
-```
-
-**Benefits**:
-- Complete isolation between tenants
-- Data-leakage prevention
-- GDPR-compliant by default
+> Runtime data (sessions, messages, memory, run events) is NOT mapped here. It lives in `agno_*`, owned by Agno. yaml-agno does not retain, mirror or partition it.
 
 ---
 
-## 2. DATABASE SCHEMA (FULL DDL)
+## 2. ENVIRONMENT vs EXECUTION VARIABLES
 
-### 2.1 Table: tenants
+> **@ai-directive (variable classification rule)**: Every configuration knob belongs to exactly one of two classes. **Environment** knobs describe *where and how the process runs* (resolved at bootstrap via `ConfigManager`/`SecretManager` from `core_infrastructure`, never read directly from `os.environ`). **Execution** knobs describe *operational behavior of running agents* and are themselves persisted **in the config store** (DB rows), not in environment variables.
 
-**Purpose**: Tenant metadata (clients/organizations)
+| Variable (config key) | Class | Resolved via | Scope | Notes |
+|-----------------------|-------|--------------|-------|-------|
+| `database.dsn` | **Environment** | `config.get_string` / `SecretManager` | Process | Postgres async DSN consumed by `SQLAlchemyAdapter` |
+| `database.pool_size`, `database.max_overflow` | **Environment** | `config.get_number` | Process | Engine pool tuning |
+| `app.env` (dev/staging/prod) | **Environment** | `config.get_string` | Process | Selects adapter, gates dotenv secret adapter |
+| `log.level` | **Environment** | `config.get_string` | Process | Forwarded to core logging |
+| `tenant.resolution_mode` | **Environment** | `config.get_string` | Process | `org` / `org_user_roles` / `user` (§5); selects TenantResolver strategy |
+| `secrets.*` (DB password, vault token) | **Environment** | `SecretManager.get_secret` | Process | Never in env vars; Zero-Trust |
+| `configstore.auto_provision` | **Environment** | `config.get_bool` | Process | `true` (default) = `checkfirst` create; `false` = managed schema (§6) |
+| `configstore.schema` | **Environment** | `config.get_string` | Process | SQL schema name (`yamlagno`); separate from Agno's |
+| `configstore.replication_mode` | **Environment** | `config.get_string` | Process | `sync` (default) / `async`; see §9 |
+| `configstore.retention_days` | **Environment** | `config.get_int` | Process | Future: drop partitions older than N days (§8) |
+| Agent/team/workflow YAML configs | **Execution** | DB rows (`yamlagno_*_configs`) | Per-tenant | Persisted JSONB; the actual agent behavior |
+| `is_active` flag on a config | **Execution** | DB column | Per-row | Enable/disable a config without deleting |
+| DI cache TTL per provider | **Execution** | `yamlagno_di_variable_cache.expires_at` | Per-row | Cached value lifetime |
+| `tags` / `metadata` on a config | **Execution** | DB columns | Per-row | Organization of persisted configs |
+
+> **Rule**: a value that changes agent **behavior** (model, instructions, tools, retention of a specific agent's logs) is **Execution** and lives in the DB. A value that changes **how the process boots and connects** (DSN, env name, pool size, resolution mode) is **Environment** and lives in `ConfigManager`/`SecretManager`.
+
+---
+
+## 3. SCHEMA: config-store tables (DeclarativeBase)
+
+> **@ai-directive (declarative ORM is mandatory)**: The core `SQLAlchemyAdapter` requires entities to be `DeclarativeBase` subclasses (SQLAlchemy 2.0 ORM). This differs from Agno, which builds its `agno_*` tables with **SQLAlchemy Core** (raw `Table` + dicts). yaml-agno must use declarative ORM because it rides on the core adapter; do not attempt to mimic Agno's Core-only approach for these tables.
+
+> **@ai-directive (prefix + schema)**: Every config-store table uses the prefix `yamlagno_` and lives in the dedicated SQL schema `yamlagno` — distinct from Agno's `agno_*` tables and schema. This prevents any collision when both stores share the same Postgres database. The prefix is the single source of truth for table names in repositories and auto-provisioning.
+
+> **@ai-directive (SSOT for the JSONB payload)**: Each `*_configs` table has a `config_jsonb` column. That JSONB MUST validate against the corresponding Pydantic schema from **SPEC_02** (`AgentConfig` / `TeamConfig` / `WorkflowConfig`), which is **imported, never redefined** here. The ORM entity below is the **persistence record** (`AgentConfigRecord`), not the Pydantic `AgentConfig`. They are different objects by design.
+
+### 3.1 Table: `yamlagno_tenants`
+
+**Purpose**: Tenant metadata (organizations / direct users). Root identity for the config store and the anchor for multi-tenant isolation (§5).
 
 ```sql
-CREATE TABLE tenants (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL,
-    slug VARCHAR(100) NOT NULL UNIQUE,
+-- SQL schema: yamlagno
+CREATE TABLE yamlagno.yamlagno_tenants (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name          VARCHAR(255) NOT NULL,
+    slug          VARCHAR(100) NOT NULL UNIQUE,
 
-    -- Metadata
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Multi-tenant model columns (§5); modeled from day 1, enforced post-MVP.
+    tenant_kind   VARCHAR(20)  NOT NULL DEFAULT 'org',
+        -- 'org' | 'org_user_roles' | 'user'
+    parent_org_id UUID REFERENCES yamlagno.yamlagno_tenants(id) ON DELETE SET NULL,
+    settings      JSONB        NOT NULL DEFAULT '{}',
 
-    -- Settings
-    settings JSONB NOT NULL DEFAULT '{}',
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
-    -- Constraints
-    CONSTRAINT slug_format CHECK (slug ~ '^[a-z0-9-]+$')
+    CONSTRAINT slug_format      CHECK (slug ~ '^[a-z0-9-]+$'),
+    CONSTRAINT valid_tenant_kind CHECK (tenant_kind IN ('org','org_user_roles','user'))
 );
-
--- Index for slug lookup
-CREATE INDEX idx_tenants_slug ON tenants(slug);
+CREATE INDEX idx_yamlagno_tenants_slug ON yamlagno.yamlagno_tenants(slug);
 ```
 
-### 2.2 Table: agent_configs
+**ORM model**:
 
-**Purpose**: Agent configurations per tenant.
+```python
+# yaml-agno/src/db/models/tenant.py
+"""Tenant ORM entity for the yaml-agno config store (DeclarativeBase). Consumed by
+core-cenf GenericRepository[TenantRecord]; yaml-agno does not manage its own session."""
 
-> `@ai-directive`: The SQLAlchemy persistence model for this table is named `AgentConfigRow` (the **persistence row**), NOT `AgentConfig`. The Pydantic schema `AgentConfig` defined in SPEC_02 is the Single Source of Truth for the JSONB payload and is **imported, never redefined**. `config_jsonb` must validate against `AgentConfig` at the adapter boundary; do not duplicate its fields here.
+from __future__ import annotations
+from datetime import datetime
+from typing import Any
+from uuid import UUID, uuid4
 
-```sql
-CREATE TABLE agent_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    
-    -- Identity
-    name VARCHAR(100) NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1,
+from sqlalchemy import CheckConstraint, ForeignKey, String, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-    -- Configuration (YAML serialized)
-    config_yaml TEXT NOT NULL,
-    config_jsonb JSONB NOT NULL,
 
-    -- Metadata
-    description TEXT,
-    tags TEXT[] NOT NULL DEFAULT '{}',
-    metadata JSONB NOT NULL DEFAULT '{}',
+class Base(DeclarativeBase):
+    """Shared declarative base for all yamlagno_ ORM entities."""
 
-    -- Timing
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_by VARCHAR(255),
 
-    -- Status
-    is_active BOOLEAN NOT NULL DEFAULT true,
+class TenantRecord(Base):
+    """Persistence record for a tenant row (yamlagno_tenants).
 
-    -- Constraints
-    CONSTRAINT tenant_name_unique UNIQUE (tenant_id, name),
-    CONSTRAINT version_positive CHECK (version >= 1)
-);
+    Attributes:
+        id: Primary key (UUID v4).
+        name: Human-readable tenant name.
+        slug: URL-safe unique slug.
+        tenant_kind: Multi-tenant strategy level (§5): org | org_user_roles | user.
+        parent_org_id: Parent organization when tenant_kind is org_user_roles/user.
+        settings: Free-form tenant settings JSONB.
+    """
 
--- Indexes
-CREATE INDEX idx_agent_configs_tenant_name ON agent_configs(tenant_id, name);
-CREATE INDEX idx_agent_configs_tags ON agent_configs USING GIN(tags);
-CREATE INDEX idx_agent_configs_active ON agent_configs(tenant_id, is_active);
+    __tablename__ = "yamlagno_tenants"
+    __table_args__ = (
+        CheckConstraint("slug ~ '^[a-z0-9-]+$'", name="slug_format"),
+        CheckConstraint(
+            "tenant_kind IN ('org','org_user_roles','user')", name="valid_tenant_kind"
+        ),
+        {"schema": "yamlagno"},
+    )
 
--- Trigger for updated_at
-CREATE TRIGGER update_agent_configs_updated_at
-BEFORE UPDATE ON agent_configs
-FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    tenant_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="org")
+    parent_org_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("yamlagno.yamlagno_tenants.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        server_default=text("NOW()"), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=text("NOW()"), onupdate=text("NOW()"), nullable=False,
+    )
 ```
 
-### 2.3 Table: team_configs
-
-**Purpose**: Team configurations per tenant.
-
-> `@ai-directive`: SQLAlchemy persistence model `TeamConfigRow` (persistence row). JSONB validates against the Pydantic `TeamConfig` from SPEC_02 (Single Source of Truth, imported, not redefined).
-
-```sql
-CREATE TABLE team_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    
-    -- Identity
-    name VARCHAR(100) NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1,
-
-    -- Configuration
-    config_yaml TEXT NOT NULL,
-    config_jsonb JSONB NOT NULL,
-
-    -- Metadata
-    description TEXT,
-    tags TEXT[] NOT NULL DEFAULT '{}',
-    metadata JSONB NOT NULL DEFAULT '{}',
-
-    -- Timing
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    -- Status
-    is_active BOOLEAN NOT NULL DEFAULT true,
-
-    -- Constraints
-    CONSTRAINT tenant_name_unique UNIQUE (tenant_id, name)
-);
-
--- Indexes
-CREATE INDEX idx_team_configs_tenant_name ON team_configs(tenant_id, name);
-CREATE INDEX idx_team_configs_tags ON team_configs USING GIN(tags);
+**Example JSON row**:
+```json
+{
+  "id": "8b1c...e4",
+  "name": "CENF",
+  "slug": "cenf",
+  "tenant_kind": "org",
+  "parent_org_id": null,
+  "settings": {"plan": "internal", "default_model": "openai/gpt-4o"},
+  "created_at": "2026-06-17T10:00:00Z",
+  "updated_at": "2026-06-17T10:00:00Z"
+}
 ```
 
-### 2.4 Table: workflow_configs
-
-**Purpose**: Workflow configurations per tenant.
-
-> `@ai-directive`: SQLAlchemy persistence model `WorkflowConfigRow` (persistence row). JSONB validates against the Pydantic `WorkflowConfig` from SPEC_02 (Single Source of Truth, imported, not redefined).
-
+**Illustrative query**:
 ```sql
-CREATE TABLE workflow_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    
-    -- Identity
-    name VARCHAR(100) NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1,
-
-    -- Configuration
-    config_yaml TEXT NOT NULL,
-    config_jsonb JSONB NOT NULL,
-
-    -- Metadata
-    description TEXT,
-    metadata JSONB NOT NULL DEFAULT '{}',
-
-    -- Timing
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    -- Constraints
-    CONSTRAINT tenant_name_unique UNIQUE (tenant_id, name)
-);
-
--- Indexes
-CREATE INDEX idx_workflow_configs_tenant_name ON workflow_configs(tenant_id, name);
+-- Resolve a tenant row by slug for the TenantResolver (§5).
+SELECT id, tenant_kind, parent_org_id, settings
+FROM yamlagno.yamlagno_tenants
+WHERE slug = :slug;
 ```
 
-### 2.5 Table: agent_sessions (DEPRECATED — runtime owned by Agno)
+### 3.2 Table: `yamlagno_agent_configs`
 
-> `@ai-directive`: yaml-agno does **not** persist its own agent runtime/session table. Agent session lifecycle, state and runs are managed natively by Agno (via `db=` PostgresDb/RedisDb), isolated by `user_id` + `session_id`. The DDL below is retained only as an **optional read-only mirror/index** for control-plane management queries (e.g. listing sessions per tenant). It is **out of MVP scope**; do not implement unless a concrete control-plane query requirement is identified. Agno remains the source of truth for session data.
+**Purpose**: Persisted agent configurations per tenant. The `config_jsonb` payload validates against the Pydantic `AgentConfig` from SPEC_02 (SSOT, imported).
 
 ```sql
--- DEPRECATED / OUT OF MVP SCOPE
--- Optional read-only mirror of Agno-managed sessions for control-plane queries only.
--- Agno is the source of truth; this table MUST NOT own runtime state.
-CREATE TABLE agent_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+CREATE TABLE yamlagno.yamlagno_agent_configs (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     UUID NOT NULL REFERENCES yamlagno.yamlagno_tenants(id) ON DELETE CASCADE,
 
-    -- Session identity (mirrors Agno session)
-    session_id VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
+    name          VARCHAR(100) NOT NULL,
+    version       INTEGER NOT NULL DEFAULT 1,
 
-    -- Reference to config
-    agent_config_id UUID NOT NULL REFERENCES agent_configs(id) ON DELETE CASCADE,
+    config_yaml   TEXT   NOT NULL,
+    config_jsonb  JSONB  NOT NULL,
 
-    -- Status (mirrored, not authoritative)
-    state VARCHAR(50) NOT NULL, -- created|initialized|running|completed|failed
-    current_iteration INTEGER NOT NULL DEFAULT 0,
+    description   TEXT,
+    tags          TEXT[] NOT NULL DEFAULT '{}',
+    metadata      JSONB  NOT NULL DEFAULT '{}',
 
-    -- Timing
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    started_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by    VARCHAR(255),
 
-    -- Results
-    result TEXT,
-    error TEXT,
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
 
-    -- Metadata
-    metadata JSONB NOT NULL DEFAULT '{}',
-
-    -- Constraints
-    CONSTRAINT tenant_user_session_unique UNIQUE (tenant_id, user_id, session_id),
-    CONSTRAINT valid_state CHECK (state IN ('created', 'initialized', 'running', 'completed', 'failed')),
-    CONSTRAINT iteration_non_negative CHECK (current_iteration >= 0)
+    CONSTRAINT ya_agent_tenant_name_unique UNIQUE (tenant_id, name),
+    CONSTRAINT ya_agent_version_positive  CHECK (version >= 1)
 );
 
--- Indexes
-CREATE INDEX idx_agent_sessions_tenant_user ON agent_sessions(tenant_id, user_id);
-CREATE INDEX idx_agent_sessions_session_id ON agent_sessions(session_id);
-CREATE INDEX idx_agent_sessions_state ON agent_sessions(state);
-CREATE INDEX idx_agent_sessions_created ON agent_sessions(created_at DESC);
-
--- Time-based partitioning for retention is a FUTURE non-blocking extension (Agno has no native retention).
--- Tenant_id-based partitioning (multi-tenant) is legitimate and retained for Core Infra.
--- CREATE TABLE agent_sessions_2026_06 PARTITION OF agent_sessions
--- FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+CREATE INDEX idx_yamlagno_agent_configs_tenant_name
+    ON yamlagno.yamlagno_agent_configs(tenant_id, name);
+CREATE INDEX idx_yamlagno_agent_configs_tags
+    ON yamlagno.yamlagno_agent_configs USING GIN(tags);
+CREATE INDEX idx_yamlagno_agent_configs_active
+    ON yamlagno.yamlagno_agent_configs(tenant_id, is_active);
 ```
 
-### 2.6 Table: session_contexts (DEPRECATED — runtime owned by Agno)
+**ORM model** (excerpt; same `Base` as §3.1):
 
-> `@ai-directive`: Same boundary as §2.5. Message history and per-agent runtime state are owned by Agno natively; yaml-agno does not persist its own session-context runtime table. The DDL below is retained only as an **optional read-only mirror** for control-plane queries and is **out of MVP scope**.
+```python
+# yaml-agno/src/db/models/agent_config.py
+"""AgentConfigRecord ORM entity. config_jsonb validates against the Pydantic
+AgentConfig (SPEC_02, imported). This is the persistence row, NOT the schema."""
+
+from __future__ import annotations
+from datetime import datetime
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import ARRAY, Boolean, CheckConstraint, ForeignKey, Integer, String, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from yaml_agno.db.models.tenant import Base
+
+
+class AgentConfigRecord(Base):
+    """Persistence record for yamlagno_agent_configs.
+
+    The Pydantic ``AgentConfig`` (SPEC_02) is the validator for ``config_jsonb``;
+    this class only maps the row. Do not duplicate schema fields here.
+    """
+
+    __tablename__ = "yamlagno_agent_configs"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ya_agent_version_positive"),
+        {"schema": "yamlagno"},
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("yamlagno.yamlagno_tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    config_yaml: Mapped[str] = mapped_column(nullable=False)
+    config_jsonb: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    description: Mapped[str | None] = mapped_column(default=None)
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(server_default=text("NOW()"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=text("NOW()"), onupdate=text("NOW()"), nullable=False,
+    )
+    created_by: Mapped[str | None] = mapped_column(String(255), default=None)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+```
+
+**Example JSON row** (`config_jsonb` payload validates against `AgentConfig`):
+```json
+{
+  "id": "a1f...c2",
+  "tenant_id": "8b1c...e4",
+  "name": "facturacion_afip",
+  "version": 1,
+  "config_yaml": "agent:\n  name: facturacion_afip\n  model: openai/gpt-4o\n",
+  "config_jsonb": {"agent": {"name": "facturacion_afip", "model": "openai/gpt-4o"}},
+  "tags": ["fiscal", "afip"],
+  "is_active": true,
+  "created_at": "2026-06-17T10:05:00Z",
+  "updated_at": "2026-06-17T10:05:00Z"
+}
+```
+
+**Illustrative query**:
+```sql
+-- Active config lookup by tenant + name (used by AgentFactory via the repository).
+SELECT id, config_yaml, config_jsonb
+FROM yamlagno.yamlagno_agent_configs
+WHERE tenant_id = :tenant_id AND name = :name AND is_active = TRUE;
+-- Expected: Index Scan using idx_yamlagno_agent_configs_tenant_name + filter is_active.
+```
+
+### 3.3 Table: `yamlagno_team_configs`
+
+**Purpose**: Persisted team configurations per tenant. `config_jsonb` validates against `TeamConfig` (SPEC_02, imported).
 
 ```sql
--- DEPRECATED / OUT OF MVP SCOPE
--- Optional read-only mirror of Agno-managed session context for control-plane queries only.
-CREATE TABLE session_contexts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+CREATE TABLE yamlagno.yamlagno_team_configs (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     UUID NOT NULL REFERENCES yamlagno.yamlagno_tenants(id) ON DELETE CASCADE,
 
-    -- Identity
-    session_id VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
+    name          VARCHAR(100) NOT NULL,
+    version       INTEGER NOT NULL DEFAULT 1,
 
-    -- Status (mirrored)
-    session_state VARCHAR(50) NOT NULL DEFAULT 'active', -- active|paused|closed
+    config_yaml   TEXT   NOT NULL,
+    config_jsonb  JSONB  NOT NULL,
 
-    -- History (mirrored; Agno is authoritative)
-    message_history JSONB NOT NULL DEFAULT '[]', -- Array of messages
-    max_history_size INTEGER NOT NULL DEFAULT 100,
+    description   TEXT,
+    tags          TEXT[] NOT NULL DEFAULT '{}',
+    metadata      JSONB  NOT NULL DEFAULT '{}',
 
-    -- Agent states (mirrored)
-    agent_states JSONB NOT NULL DEFAULT '{}', -- agent_name -> state JSON
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
 
-    -- Timing
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_activity TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    closed_at TIMESTAMPTZ,
-
-    -- Metadata
-    metadata JSONB NOT NULL DEFAULT '{}',
-
-    -- Constraints
-    CONSTRAINT tenant_session_unique UNIQUE (tenant_id, session_id),
-    CONSTRAINT valid_session_state CHECK (session_state IN ('active', 'paused', 'closed')),
-    CONSTRAINT history_size_positive CHECK (max_history_size >= 1)
+    CONSTRAINT ya_team_tenant_name_unique UNIQUE (tenant_id, name),
+    CONSTRAINT ya_team_version_positive  CHECK (version >= 1)
 );
 
--- Indexes
-CREATE INDEX idx_session_contexts_tenant_session ON session_contexts(tenant_id, session_id);
-CREATE INDEX idx_session_contexts_user ON session_contexts(tenant_id, user_id);
-CREATE INDEX idx_session_contexts_state ON session_contexts(session_state);
-CREATE INDEX idx_session_contexts_last_activity ON session_contexts(last_activity DESC);
-
--- Time-based retention partitioning is a FUTURE non-blocking extension.
+CREATE INDEX idx_yamlagno_team_configs_tenant_name
+    ON yamlagno.yamlagno_team_configs(tenant_id, name);
+CREATE INDEX idx_yamlagno_team_configs_tags
+    ON yamlagno.yamlagno_team_configs USING GIN(tags);
 ```
 
-### 2.7 Table: di_variable_cache
+**ORM model**: `TeamConfigRecord(Base)` mirrors `AgentConfigRecord` (§3.2) with `__tablename__ = "yamlagno_team_configs"` and `schema="yamlagno"`. Omitted for brevity; same column set.
 
-**Purpose**: DI variable cache (Database, API, File providers). Part of the yaml-agno control-plane config store.
+**Example JSON row**:
+```json
+{
+  "id": "t7d...91",
+  "tenant_id": "8b1c...e4",
+  "name": "fiscal_team",
+  "config_jsonb": {"team": {"name": "fiscal_team", "mode": "coordinate", "members": [
+    {"member": "m1", "agent": "facturacion_afip"},
+    {"member": "m2", "agent": "consultor_iva"}
+  ]}},
+  "is_active": true
+}
+```
+
+**Illustrative query**:
+```sql
+-- List active teams for a tenant, newest first.
+SELECT id, name, config_jsonb
+FROM yamlagno.yamlagno_team_configs
+WHERE tenant_id = :tenant_id AND is_active = TRUE
+ORDER BY updated_at DESC;
+```
+
+### 3.4 Table: `yamlagno_workflow_configs`
+
+**Purpose**: Persisted workflow configurations per tenant. `config_jsonb` validates against `WorkflowConfig` (SPEC_02, imported).
 
 ```sql
-CREATE TABLE di_variable_cache (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+CREATE TABLE yamlagno.yamlagno_workflow_configs (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     UUID NOT NULL REFERENCES yamlagno.yamlagno_tenants(id) ON DELETE CASCADE,
 
-    -- Variable identity
-    provider_name VARCHAR(100) NOT NULL, -- user_db|config_api|app_config
-    variable_key VARCHAR(255) NOT NULL, -- name|email|preferences
+    name          VARCHAR(100) NOT NULL,
+    version       INTEGER NOT NULL DEFAULT 1,
 
-    -- Cached value
+    config_yaml   TEXT   NOT NULL,
+    config_jsonb  JSONB  NOT NULL,
+
+    description   TEXT,
+    metadata      JSONB  NOT NULL DEFAULT '{}',
+
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+
+    CONSTRAINT ya_wf_tenant_name_unique UNIQUE (tenant_id, name),
+    CONSTRAINT ya_wf_version_positive   CHECK (version >= 1)
+);
+
+CREATE INDEX idx_yamlagno_workflow_configs_tenant_name
+    ON yamlagno.yamlagno_workflow_configs(tenant_id, name);
+```
+
+**ORM model**: `WorkflowConfigRecord(Base)`, `__tablename__ = "yamlagno_workflow_configs"`, `schema="yamlagno"`. Mirrors §3.2 (no `tags` column).
+
+**Example JSON row**:
+```json
+{
+  "id": "w2a...77",
+  "tenant_id": "8b1c...e4",
+  "name": "emitir_factura_flow",
+  "config_jsonb": {"workflow": {"name": "emitir_factura_flow", "steps": [
+    {"step": "s1", "type": "Step", "agent": "facturacion_afip"}
+  ]}},
+  "is_active": true
+}
+```
+
+**Illustrative query**:
+```sql
+-- Fetch a workflow config for the WorkflowFactory.
+SELECT config_jsonb
+FROM yamlagno.yamlagno_workflow_configs
+WHERE tenant_id = :tenant_id AND name = :name AND is_active = TRUE;
+```
+
+### 3.5 Table: `yamlagno_di_variable_cache`
+
+**Purpose**: Cache of resolved DI variable values (database / API / file providers, see SPEC_00 DI System). TTL-bounded.
+
+```sql
+CREATE TABLE yamlagno.yamlagno_di_variable_cache (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id      UUID NOT NULL REFERENCES yamlagno.yamlagno_tenants(id) ON DELETE CASCADE,
+
+    provider_name  VARCHAR(100) NOT NULL,   -- user_db | config_api | app_config
+    variable_key   VARCHAR(255) NOT NULL,   -- name | email | preferences
+
     variable_value JSONB NOT NULL,
+    metadata       JSONB NOT NULL DEFAULT '{}',
 
-    -- Timing
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMPTZ NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at     TIMESTAMPTZ NOT NULL,
 
-    -- Metadata
-    metadata JSONB NOT NULL DEFAULT '{}',
-
-    -- Constraints
-    CONSTRAINT tenant_provider_key_unique UNIQUE (tenant_id, provider_name, variable_key),
-    CONSTRAINT expires_future CHECK (expires_at > created_at)
+    CONSTRAINT ya_di_tenant_provider_key_unique UNIQUE (tenant_id, provider_name, variable_key),
+    CONSTRAINT ya_di_expires_future CHECK (expires_at > created_at)
 );
 
--- Indexes
-CREATE INDEX idx_di_cache_tenant_provider ON di_variable_cache(tenant_id, provider_name);
-CREATE INDEX idx_di_cache_expires ON di_variable_cache(expires_at);
-
--- Partition by expires_at (TTL 1 hour)
+CREATE INDEX idx_yamlagno_di_cache_tenant_provider
+    ON yamlagno.yamlagno_di_variable_cache(tenant_id, provider_name);
+CREATE INDEX idx_yamlagno_di_cache_expires
+    ON yamlagno.yamlagno_di_variable_cache(expires_at);
 ```
 
-### 2.8 Table: config_change_log (audit for the config store)
+**ORM model**: `DiVariableCacheRecord(Base)`, `__tablename__ = "yamlagno_di_variable_cache"`, `schema="yamlagno"`. Columns mirror the DDL.
 
-**Purpose**: Audit log of changes to the yaml-agno control-plane config store (config create/update/delete, feature-flag toggles, secret-audit events).
+**Example JSON row**:
+```json
+{
+  "id": "d9c...03",
+  "tenant_id": "8b1c...e4",
+  "provider_name": "user_db",
+  "variable_key": "name",
+  "variable_value": {"raw": "Alice"},
+  "expires_at": "2026-06-17T11:05:00Z",
+  "created_at": "2026-06-17T10:05:00Z"
+}
+```
 
-> `@ai-directive`: This is an **audit log for the config store only**. It does NOT replicate Agno RunEvents — run/agent events are emitted natively by Agno. The legacy name `domain_events` implied broad event sourcing of agent runtime, which is out of scope; this table is renamed to `config_change_log` to make the boundary explicit. General event sourcing for agent runs is a **future feature**, not MVP.
+**Illustrative query**:
+```sql
+-- Resolve a DI value if not expired (DIFactory hot path).
+SELECT variable_value
+FROM yamlagno.yamlagno_di_variable_cache
+WHERE tenant_id = :tenant_id
+  AND provider_name = :provider
+  AND variable_key = :key
+  AND expires_at > NOW();
+```
+
+### 3.6 Table: `yamlagno_config_change_log`
+
+**Purpose**: Audit log of changes to the config store (config create/update/delete, flag toggles, secret-audit events). This is a **config-store audit log only**; it does NOT replicate Agno RunEvents.
 
 ```sql
-CREATE TABLE config_change_log (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE yamlagno.yamlagno_config_change_log (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    -- Identification
-    event_type VARCHAR(255) NOT NULL,
-    event_version VARCHAR(50) NOT NULL DEFAULT '1.0',
+    event_type    VARCHAR(255) NOT NULL,          -- config.created | config.updated | config.deleted | flag.toggled
+    event_version VARCHAR(50)  NOT NULL DEFAULT '1.0',
+    payload       JSONB NOT NULL,
 
-    -- Payload
-    payload JSONB NOT NULL,
-
-    -- Metadata
-    tenant_id UUID,
+    tenant_id     UUID NOT NULL REFERENCES yamlagno.yamlagno_tenants(id) ON DELETE CASCADE,
     correlation_id UUID,
-    causation_id UUID,
+    causation_id   UUID,
 
-    -- Timing
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    -- Processing
-    processed_at TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at        TIMESTAMPTZ,
     processing_attempts INTEGER NOT NULL DEFAULT 0,
 
-    -- Constraints
-    CONSTRAINT positive_attempts CHECK (processing_attempts >= 0)
+    CONSTRAINT ya_ccl_positive_attempts CHECK (processing_attempts >= 0)
 );
 
--- Indexes
-CREATE INDEX idx_config_change_log_type ON config_change_log(event_type);
-CREATE INDEX idx_config_change_log_tenant ON config_change_log(tenant_id);
-CREATE INDEX idx_config_change_log_created ON config_change_log(created_at DESC);
-CREATE INDEX idx_config_change_log_correlation ON config_change_log(correlation_id);
-CREATE INDEX idx_config_change_log_processed ON config_change_log(processed_at) WHERE processed_at IS NULL;
-
--- Time-based retention partitioning is a FUTURE non-blocking extension.
+CREATE INDEX idx_yamlagno_ccl_type        ON yamlagno.yamlagno_config_change_log(event_type);
+CREATE INDEX idx_yamlagno_ccl_tenant      ON yamlagno.yamlagno_config_change_log(tenant_id);
+CREATE INDEX idx_yamlagno_ccl_created     ON yamlagno.yamlagno_config_change_log(created_at DESC);
+CREATE INDEX idx_yamlagno_ccl_correlation ON yamlagno.yamlagno_config_change_log(correlation_id);
+CREATE INDEX idx_yamlagno_ccl_pending
+    ON yamlagno.yamlagno_config_change_log(processed_at) WHERE processed_at IS NULL;
 ```
 
----
+**Example JSON row**:
+```json
+{
+  "id": "e3b...ad",
+  "event_type": "config.created",
+  "payload": {"table": "yamlagno_agent_configs", "name": "facturacion_afip", "by": "ops"},
+  "tenant_id": "8b1c...e4",
+  "created_at": "2026-06-17T10:05:00Z",
+  "processed_at": null,
+  "processing_attempts": 0
+}
+```
 
-## 3. INDEXES AND PERFORMANCE TUNING
-
-### 3.1 Justified Indexes
-
-| Index | Table | Columns | Type | Justification |
-|-------|-------|---------|------|---------------|
-| `idx_agent_configs_tenant_name` | agent_configs | (tenant_id, name) | B-tree | Primary config lookup per tenant |
-| `idx_agent_configs_tags` | agent_configs | tags | GIN | Tag-based search (config discovery) |
-| `idx_agent_sessions_tenant_user` | agent_sessions | (tenant_id, user_id) | B-tree | Session history per user (mirror, optional) |
-| `idx_agent_sessions_state` | agent_sessions | state | B-tree | Active-session filtering (mirror, optional) |
-| `idx_session_contexts_last_activity` | session_contexts | last_activity DESC | B-tree | Expired-session cleanup (mirror, optional) |
-| `idx_di_cache_expires` | di_variable_cache | expires_at | B-tree | Expired-entry eviction |
-| `idx_config_change_log_processed` | config_change_log | processed_at WHERE NULL | B-tree Partial | Pending audit events |
-
-### 3.2 Optimized Queries
-
+**Illustrative query**:
 ```sql
--- Q1: Active config lookup by tenant and name
-EXPLAIN ANALYZE
-SELECT id, config_yaml, config_jsonb
-FROM agent_configs
-WHERE tenant_id = $1 AND name = $2 AND is_active = true;
-
--- Expected: Index Scan using idx_agent_configs_tenant_name + Filter
-
--- Q2: Active sessions per user (optional control-plane mirror; runtime owned by Agno)
-EXPLAIN ANALYZE
-SELECT id, session_id, state, current_iteration
-FROM agent_sessions
-WHERE tenant_id = $1 AND user_id = $2 AND state = 'running'
-ORDER BY created_at DESC
-LIMIT 10;
-
--- Expected: Index Scan using idx_agent_sessions_tenant_user + idx_agent_sessions_state
-
--- Q3: Cleanup of expired sessions (>30 days) -- FUTURE retention extension
-EXPLAIN ANALYZE
-DELETE FROM session_contexts
-WHERE last_activity < NOW() - INTERVAL '30 days';
-
--- Expected: Index Scan using idx_session_contexts_last_activity
-
--- Q4: Pending config-store audit events
-EXPLAIN ANALYZE
+-- Drain pending audit events for the outbox processor.
 SELECT id, event_type, payload
-FROM config_change_log
+FROM yamlagno.yamlagno_config_change_log
 WHERE processed_at IS NULL
 ORDER BY created_at ASC
 LIMIT 100;
-
--- Expected: Index Scan using idx_config_change_log_processed
+-- Expected: Index Scan using idx_yamlagno_ccl_pending.
 ```
 
-### 3.3 Partitioning Strategy
+### 3.7 Table: `yamlagno_schema_versions`
 
-**Time-based partitioning (FUTURE, non-blocking post-MVP)**:
-- `agent_sessions` by `created_at` (monthly)
-- `session_contexts` by `last_activity` (monthly)
-- `di_variable_cache` by `expires_at` (daily)
-- `config_change_log` by `created_at` (daily)
+**Purpose**: Track which schema version is provisioned, mirroring Agno's `agno_schema_versions`. Used by auto-provisioning (§6) to decide whether to run `checkfirst` creates.
 
-> `@ai-directive`: Time-based partitioning and purge/retention are a **future extension** (Agno has no native retention). The DDL above is retained for forward compatibility. **Tenant-based partitioning (multi-tenant isolation) is legitimate Core Infra and stays in scope.**
+```sql
+CREATE TABLE yamlagno.yamlagno_schema_versions (
+    component      VARCHAR(100) NOT NULL,        -- 'config_store'
+    version        VARCHAR(50)  NOT NULL,        -- '0.3.0'
+    applied_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (component, version)
+);
+```
 
-**Benefits**:
-- Fast partition drops for cleanup
-- Time-filtered queries use partition pruning
-- Smaller indexes per partition
+**Example JSON row**:
+```json
+{"component": "config_store", "version": "0.3.0", "applied_at": "2026-06-17T10:00:00Z"}
+```
+
+**Illustrative query**:
+```sql
+-- Auto-provisioning gate: has this version already been provisioned?
+SELECT 1 FROM yamlagno.yamlagno_schema_versions
+WHERE component = 'config_store' AND version = :version;
+```
 
 ---
 
-## 4. CORE INFRA MANAGER INTEGRATION
+## 4. INDEXES AND PERFORMANCE
 
-> `@ai-directive` (persistence boundary): yaml-agno **connects to Agno's storage** for everything Agno already persists (agents, sessions, memory, run events) — it does not reimplement that runtime. The integration below scopes the ConfigManager / SecretManager / DatabaseManager / TransactionManager / Repository pattern to the **yaml-agno control-plane config store only** (tenant configs, `*_configs` rows, `di_variable_cache`, `config_change_log`, feature flags, secret audit). ACID transactions here are legitimate because PostgreSQL provides them natively. **Do NOT wrap Agno step runtime in these transactions** — that is not a native Agno concept and is treated as a future feature.
+### 4.1 Justified indexes
 
-### 4.1 ConfigManager Integration
+| Index | Table | Columns | Type | Justification |
+|-------|-------|---------|------|---------------|
+| `idx_yamlagno_agent_configs_tenant_name` | agent_configs | (tenant_id, name) | B-tree | Primary config lookup per tenant |
+| `idx_yamlagno_agent_configs_tags` | agent_configs | tags | GIN | Tag-based config discovery |
+| `idx_yamlagno_agent_configs_active` | agent_configs | (tenant_id, is_active) | B-tree | Active-only listing |
+| `idx_yamlagno_di_cache_expires` | di_variable_cache | expires_at | B-tree | Expired-entry eviction |
+| `idx_yamlagno_ccl_pending` | config_change_log | processed_at WHERE NULL | B-tree partial | Outbox: pending audit events |
+| `idx_yamlagno_ccl_created` | config_change_log | created_at DESC | B-tree | Time-windowed audit queries |
 
-**Responsibility**: Database connection configuration and pooling for the config store.
+### 4.2 Partitioning (FUTURE, non-blocking)
 
-**Usage in yaml-agno**:
+Time-based partitioning of the append-heavy `yamlagno_config_change_log` (by `created_at`, monthly) and `yamlagno_di_variable_cache` (by `expires_at`, daily) is a **future extension** triggered by a documented row-count threshold. MVP ships with well-designed single-partition indexes (tenant_id, created_at, FKs). See §8 for the retention/compaction roadmap.
+
+---
+
+## 5. MULTI-TENANT MODEL (three levels, modeled not MVP)
+
+> **@ai-directive**: Agno isolates by `user_id` + `session_id` only — it has **no `tenant_id` concept** and **no native RLS**. yaml-agno, riding on Core Infra, models a richer three-level tenant hierarchy in `yamlagno_tenants.tenant_kind`. The columns and the resolution interface are defined **from day 1**, but enforcement (filters wired into every repository call, role checks) is **post-MVP**. Isolation is done at the **application layer via WHERE clauses** (like Agno), NOT via native Postgres RLS.
+
+### 5.1 The three levels
+
+| Level | `tenant_kind` | Isolation unit | Example |
+|-------|---------------|----------------|---------|
+| (a) Organization | `org` | Whole organization shares one tenant | CENF internal deployment |
+| (b) Org + user + roles | `org_user_roles` | Org-scoped, per-user rows, RBAC | Multi-team SaaS: users within an org see their own rows + shared org rows by role |
+| (c) Direct user | `user` | Each user is its own tenant | Personal single-user deployment |
+
+### 5.2 TenantResolver interface (maps Agno identity → yaml-agno tenant)
+
 ```python
-# yaml-agno/src/db/bootstrap.py
+# yaml-agno/src/tenant/resolver.py
+"""TenantResolver maps Agno's (user_id, session_id) identity to the yaml-agno
+tenant model. This is a yaml-agno domain addition; Agno has no tenant concept.
 
-class DatabaseBootstrap:
-    """Bootstrap for the yaml-agno control-plane config-store engine.
+Strategy is selected by the Environment variable tenant.resolution_mode
+(org | org_user_roles | user) read via ConfigManager. The resolver sets the
+Core Infra contextvar (set_tenant_id) so repositories can scope WHERE clauses.
+Contextvars are NEVER passed as arguments (core-cenf AGENTS.md rule)."""
 
-    @ai-directive: This engine serves ONLY the config store schema. Runtime
-    agent/session/memory storage is delegated to Agno via its own db= setting.
-    """
-
-    def __init__(self, config_manager: ConfigManager):
-        self.config = config_manager
-
-    async def create_engine(self) -> AsyncEngine:
-        """Create a SQLAlchemy AsyncEngine for the config store from ConfigManager."""
-        db_url = self.config.get_string("database.url")
-        pool_size = self.config.get_number("database.pool_size", default=10)
-        max_overflow = self.config.get_number("database.max_overflow", default=20)
-
-        engine = create_async_engine(
-            db_url,
-            pool_size=pool_size,
-            max_overflow=max_overflow,
-            pool_pre_ping=True,  # verify connections before use
-        )
-        return engine
-```
-
-### 4.2 SecretManager Integration
-
-**Responsibility**: Secure handling of database credentials (Zero-Trust).
-
-**Port (Protocol)**:
-```python
+from __future__ import annotations
 from typing import Protocol
-
-class SecretManager(Protocol):
-    async def get_secret(self, key: str) -> str: ...
-    async def get_secret_json(self, key: str) -> dict: ...
-```
-
-**Usage in yaml-agno**:
-```python
-# yaml-agno/src/db/bootstrap.py
-
-class DatabaseBootstrap:
-    def __init__(
-        self,
-        config_manager: ConfigManager,
-        secret_manager: SecretManager
-    ):
-        self.config = config_manager
-        self.secrets = secret_manager
-
-    async def get_db_credentials(self) -> dict:
-        """Fetch database credentials from SecretManager."""
-        # Never read secrets directly from environment variables.
-        password = await self.secrets.get_secret("database.password")
-
-        return {
-            "username": self.config.get_string("database.username"),
-            "password": password,  # from SecretManager
-            "host": self.config.get_string("database.host"),
-            "port": self.config.get_number("database.port"),
-        }
-```
-
-**Do's & Don'ts**:
-- Automatic rotation with short TTL
-- Access auditing
-- Do NOT persist secrets in env vars
-- Do NOT list all secrets
-
-### 4.3 DatabaseManager Integration
-
-**Responsibility**: Resilient pooling and factory for config-store repositories.
-
-**Port (Protocol)**:
-```python
-from typing import Protocol, TypeVar
-from contextlib import AbstractAsyncContextManager
-
-T = TypeVar('T')
-
-class TransactionScope(Protocol):
-    async def commit(self) -> None: ...
-    async def rollback(self) -> None: ...
-
-class GenericRepository(Protocol[T]):
-    async def find_by_id(self, id: str) -> T | None: ...
-    async def insert(self, entity: T) -> None: ...
-
-class DatabaseManager(Protocol):
-    def transaction(self, tenant_id: UUID | None = None) -> AbstractAsyncContextManager[TransactionScope]: ...
-    def get_repository(self, name: str) -> GenericRepository: ...
-```
-
-**Usage in yaml-agno with Repository Pattern (config store only)**:
-```python
-# yaml-agno/src/repositories/base_repository.py
-
-from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
-class BaseRepository:
-    """Base repository for the config store.
+from core_infrastructure.common.context import set_tenant_id, set_user_id
 
-    @ai-directive: Scoped to the control-plane config store. Transactions here
-    guarantee ACID for config rows only; they do NOT cover Agno runtime steps.
-    """
 
-    def __init__(self, db_manager: DatabaseManager, tenant_id: UUID):
-        self.db = db_manager
-        self.tenant_id = tenant_id
+class TenantResolver(Protocol):
+    """Resolve a yaml-agno tenant from Agno runtime identity."""
 
-    async def create(self, entity_data: dict) -> UUID:
-        """Create an entity within an automatic transaction."""
-        async with self.db.transaction(tenant_id=self.tenant_id) as session:
-            # Boundary validation with the Pydantic schema from SPEC_02.
-            validated = self._validate(entity_data)
+    async def resolve(self, user_id: str, session_id: str | None) -> UUID:
+        """Return the tenant_id for the given Agno user/session.
 
-            result = await session.execute(
-                insert(self.model).values(**validated).returning(self.model.id)
-            )
-            return result.scalar_one()
+        Behavior depends on tenant.resolution_mode:
+            org             -> the single org tenant_id (level a)
+            org_user_roles  -> org tenant_id; user_id retained for row scoping (level b)
+            user            -> one tenant per user_id (level c)
 
-    async def find_by_id(self, entity_id: UUID) -> dict | None:
-        """Find an entity by ID."""
-        async with self.db.transaction(tenant_id=self.tenant_id) as session:
-            result = await session.execute(
-                select(self.model).where(
-                    self.model.id == entity_id,
-                    self.model.tenant_id == self.tenant_id
-                )
-            )
-            row = result.fetchone()
-            return dict(row._mapping) if row else None
+        Side effect: sets Core Infra contextvars (set_tenant_id, set_user_id)
+        for **logging/tracing correlation**. These contextvars do NOT scope DB
+        queries automatically — callers MUST still pass tenant_id explicitly in
+        repository ``filters`` (see §5.3).
+        """
+        ...
 ```
 
-**Do's & Don'ts**:
-- Manage transactions via Async Context Managers
-- Boundary Validation with Pydantic at adapters
-- Hide driver details (SQLAlchemy)
-- Do NOT expose raw sessions to the domain
-- Do NOT accept dynamic SQL from the domain
+> **@ai-directive**: `tenant_id` is a **Core Infra** column, present on every `yamlagno_*` row. It is **not** an Agno-native column and is **not** added to any `agno_*` table. The resolver is the single seam between Agno's `(user_id, session_id)` world and yaml-agno's tenant world.
 
-**Dependencies**: ConfigManager, SecretManager, LoggerManager, ObservabilityManager, ErrorHandlingManager
+### 5.3 Isolation mechanism (explicit WHERE filter, no native RLS)
+
+```python
+# Every config-store query is scoped by an EXPLICIT tenant_id filter.
+# This mirrors Agno's app-layer isolation (WHERE user_id=?); Postgres RLS is
+# NOT used (MVP). The core GenericRepository does NOT auto-scope by the tenant
+# contextvar, so tenant_id MUST be a filter on every read/write.
+async with db.transaction() as tx:                 # core-cenf TransactionScope
+    set_tenant_id(tenant_id)                       # Core Infra contextvar (telemetry only)
+    repo = db.get_repository(AgentConfigRecord)    # core-cenf GenericRepository[T]
+    # find_all filters are exact-match by column; tenant_id scoping is EXPLICIT.
+    rows = await repo.find_all(filters={"tenant_id": tenant_id, "is_active": True})
+```
 
 ---
 
-## 5. TRANSACTION MANAGER CONTRACT (config store)
+## 6. AUTO-PROVISIONING (checkfirst, mirroring Agno)
 
-> `@ai-directive`: The `TransactionManager` below is scoped to the **config store**. ACID guarantees apply to config-store rows (tenants, `*_configs`, `di_variable_cache`, `config_change_log`). It does NOT manage Agno runtime step transactions.
+> **@ai-directive**: yaml-agno replicates Agno's on-demand provisioning pattern (`Table.create(checkfirst=True)` equivalent) for the `yamlagno_*` schema, gated by the Environment flag `configstore.auto_provision` (default `true`). When `false`, the schema is expected to be managed externally (migration tooling) and provisioning is skipped — this matches Agno's `auto_provision_dbs=False` for managed DBs.
 
-### 5.1 Async Context Manager
+### 6.1 Provisioner
 
 ```python
-# yaml-agno/src/db/transaction.py
+# yaml-agno/src/db/provisioner.py
+"""Schema provisioner for the yamlagno config store. Uses SQLAlchemy ORM
+metadata.create_all(checkfirst=True). Version-tracked in yamlagno_schema_versions.
+This is the ONLY place yaml-agno touches DDL; core-cenf owns sessions/transactions."""
 
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy import text
+from __future__ import annotations
+from sqlalchemy import inspect, select
+from sqlalchemy.ext.asyncio import AsyncEngine
 
-class TransactionManager:
-    """Transaction manager with automatic rollback for the config store."""
+from core_infrastructure import ConfigManager
+from yaml_agno.db.models.tenant import Base
+from yaml_agno.db.models.schema_version import SchemaVersionRecord
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
-        self.session_factory = session_factory
+CONFIG_STORE_VERSION = "0.3.0"
 
-    @asynccontextmanager
-    async def transaction(self, tenant_id: UUID | None = None) -> AsyncIterator[AsyncSession]:
-        """Context manager for a transaction with automatic rollback.
+
+class ConfigStoreProvisioner:
+    """Creates the yamlagno schema and tables on demand.
+
+    Attributes:
+        config: ConfigManager (Environment variables: configstore.auto_provision,
+            configstore.schema).
+    """
+
+    def __init__(self, config: ConfigManager) -> None:
+        self._config = config
+
+    async def provision(self, engine: AsyncEngine) -> None:
+        """Create schema + tables if missing and not already versioned.
 
         Args:
-            tenant_id: Tenant ID for RLS (optional).
+            engine: Core-cenf async engine (same DSN as DatabaseManager).
 
-        Yields:
-            AsyncSession: SQLAlchemy async session.
-
-        Raises:
-            Exception: Any error during the transaction triggers rollback.
+        Note:
+            checkfirst=True makes this idempotent. When configstore.auto_provision
+            is False, this method is a no-op (externally managed schema).
         """
-        async with self.session_factory() as session:
-            try:
-                # Set tenant_id for RLS.
-                if tenant_id:
-                    await session.execute(
-                        text("SET LOCAL app.current_tenant = :tenant_id"),
-                        {"tenant_id": str(tenant_id)}
-                    )
+        if not self._config.get_bool("configstore.auto_provision", default=True):
+            return  # schema managed externally; do not touch DDL
 
-                yield session
+        schema = self._config.get_string("configstore.schema", default="yamlagno")
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(c, checkfirst=True)
+            )
+            await self._mark_version(conn)
 
-                # Explicit commit.
-                await session.commit()
-
-            except Exception:
-                # Automatic rollback.
-                await session.rollback()
-                raise
+    async def _mark_version(self, conn) -> None:
+        exists = await conn.execute(
+            select(SchemaVersionRecord).where(
+                SchemaVersionRecord.component == "config_store",
+                SchemaVersionRecord.version == CONFIG_STORE_VERSION,
+            )
+        )
+        if exists.first() is None:
+            await conn.execute(
+                SchemaVersionRecord.__table__.insert().values(
+                    component="config_store", version=CONFIG_STORE_VERSION,
+                )
+            )
 ```
 
-### 5.2 Usage Example (config store repository)
+### 6.2 Gap: Alembic not in core
+
+> **@ai-directive (gap)**: core-cenf does **not** ship an Alembic migration runner. yaml-agno therefore manages its own `yamlagno_*` schema lifecycle via the provisioner above (`create_all(checkfirst=True)`) plus the `yamlagno_schema_versions` table. For environments that require reversible migrations (`configstore.auto_provision=false`), an Alembic layer scoped to the `yamlagno` schema is a **future** addition; MVP relies on idempotent `create_all`.
+
+---
+
+## 7. CONSUMING core-cenf (no reimplementation)
+
+> **@ai-directive**: yaml-agno imports `DatabaseManager`, `TransactionScope`, `GenericRepository`, `ConfigManager` and `SecretManager` from `core_infrastructure`. It does NOT define its own `TransactionManager`, `BaseRepository`, or session factory. All persistence code is written against the **Protocol**, so the concrete `SQLAlchemyAdapter` (prod) and `MemoryDatabaseAdapter` (tests) are swappable without code changes.
+
+### 7.1 Imports and bootstrap
+
+```python
+# yaml-agno/src/db/bootstrap.py
+"""Bootstrap for the yaml-agno config store on top of core-cenf. yaml-agno only
+declares ORM models and asks DatabaseManager for a repository; it never opens
+a raw session and never reimplements the TransactionScope."""
+
+from __future__ import annotations
+import asyncio
+
+from core_infrastructure import ConfigManager, DatabaseManager, SecretManager
+from core_infrastructure.bootstrap import BootstrapOrchestrator  # asyncio.TaskGroup
+
+
+async def build_database_manager(
+    config: ConfigManager, secrets: SecretManager
+) -> DatabaseManager:
+    """Return a configured DatabaseManager (Protocol).
+
+    The core SQLAlchemyAdapter reads the DSN from config.get_string("database.dsn");
+    secrets (password) come from SecretManager. yaml-agno does NOT build the engine.
+    """
+    # BootstrapOrchestrator wires managers with dependency ordering (asyncio.TaskGroup).
+    orchestrator = BootstrapOrchestrator(config, secrets)
+    managers = await orchestrator.start()
+    return managers.database  # DatabaseManager (Protocol)
+```
+
+### 7.2 Repository usage pattern (config store only)
 
 ```python
 # yaml-agno/src/repositories/agent_config_repository.py
+"""AgentConfigRepository wraps the core-cenf GenericRepository for the config store.
+yaml-agno does NOT subclass a BaseRepository or manage transactions directly."""
 
+from __future__ import annotations
+from typing import Any
 from uuid import UUID
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+
+from core_infrastructure import DatabaseManager
+from core_infrastructure.common.context import set_tenant_id
+
+from yaml_agno.db.models.agent_config import AgentConfigRecord
+# Pydantic validator (SSOT) imported, not redefined:
+from yaml_agno.models.config.agent_config import AgentConfig
+
 
 class AgentConfigRepository:
-    """Repository for the agent_configs config-store table.
+    """CRUD over yamlagno_agent_configs using core-cenf GenericRepository.
 
-    @ai-directive: The persisted row maps to the SQLAlchemy model AgentConfigRow.
-    The config_jsonb payload validates against the Pydantic AgentConfig schema
-    imported from SPEC_02 (Single Source of Truth).
+    Note:
+        - get_repository() MUST be called inside `async with db.transaction()`
+          because the core adapter binds the session to a contextvar.
+        - config_jsonb is validated against the imported Pydantic AgentConfig
+          (SPEC_02) before insert; this class performs no schema redefinition.
     """
 
-    def __init__(self, transaction_manager: TransactionManager):
-        self.tm = transaction_manager
+    def __init__(self, db: DatabaseManager) -> None:
+        self._db = db
 
-    async def create(
-        self,
-        tenant_id: UUID,
-        name: str,
-        config_yaml: str,
-        config_jsonb: dict,
-    ) -> UUID:
-        """Create an agent configuration row."""
-        async with self.tm.transaction(tenant_id=tenant_id) as session:
-            result = await session.execute(
-                text("""
-                    INSERT INTO agent_configs (tenant_id, name, config_yaml, config_jsonb)
-                    VALUES (:tenant_id, :name, :config_yaml, :config_jsonb)
-                    RETURNING id
-                """),
-                {
-                    "tenant_id": str(tenant_id),
-                    "name": name,
-                    "config_yaml": config_yaml,
-                    "config_jsonb": config_jsonb,
-                },
-            )
-            return result.scalar_one()
+    async def create(self, tenant_id: UUID, record: AgentConfigRecord) -> UUID:
+        """Insert an agent config row inside a core-cenf transaction."""
+        set_tenant_id(tenant_id)  # Core Infra contextvar: telemetry/correlation only
+        async with self._db.transaction() as tx:
+            # get_repository() is on DatabaseManager (core ports.py), NOT on the scope.
+            repo = self._db.get_repository(AgentConfigRecord)  # GenericRepository[T]
+            await repo.insert(record)
+            await tx.commit()
+            return record.id
 
-    async def get_by_name(
-        self,
-        tenant_id: UUID,
-        name: str,
-    ) -> dict | None:
-        """Get an active config by name."""
-        async with self.tm.transaction(tenant_id=tenant_id) as session:
-            result = await session.execute(
-                text("""
-                    SELECT id, config_yaml, config_jsonb
-                    FROM agent_configs
-                    WHERE tenant_id = :tenant_id AND name = :name AND is_active = true
-                """),
-                {"tenant_id": str(tenant_id), "name": name},
+    async def get_active_by_name(self, tenant_id: UUID, name: str) -> dict[str, Any] | None:
+        """Return the active config for a tenant+name, or None."""
+        set_tenant_id(tenant_id)  # telemetry/correlation only
+        async with self._db.transaction() as tx:
+            repo = self._db.get_repository(AgentConfigRecord)
+            # Multi-tenant isolation is EXPLICIT here: the core GenericRepository
+            # does NOT auto-scope by the tenant contextvar, so tenant_id MUST be a
+            # filter. (The contextvar above drives logging/tracing, not DB scoping.)
+            rows = await repo.find_all(
+                filters={"tenant_id": tenant_id, "name": name, "is_active": True},
+                limit=1,
             )
-            row = result.fetchone()
-            return dict(row._mapping) if row else None
+            await tx.commit()
+            return rows[0] if rows else None
+```
+
+### 7.3 Do's and Don'ts (core-cenf AGENTS.md rules)
+
+- ALWAYS `async with db.transaction()`; NEVER open raw sessions.
+- Call `db.get_repository(EntityType)` (on `DatabaseManager`, NOT on the `TransactionScope`) **inside** the `async with` block.
+- Depend on the `DatabaseManager` Protocol; NEVER import `SQLAlchemyAdapter` directly in domain code.
+- Read the DSN via `config.get_string("database.dsn")`; NEVER read `os.environ` directly (only via `ConfigManager`).
+- Secrets via `await secrets.get_secret(key)`; NEVER in env vars or logs.
+- Multi-tenant isolation is **explicit**: ALWAYS pass `tenant_id` in the `filters={}` dict. The core `GenericRepository` does NOT auto-scope by the tenant contextvar. `set_tenant_id()` (contextvar) drives **logging/tracing** only — never assume it scopes DB queries.
+- Use `asyncio.TaskGroup` for concurrent bootstrap; NEVER `asyncio.gather`.
+
+---
+
+## 8. RETENTION AND COMPACTION (future feature)
+
+> **@ai-directive**: Retention, time-based partitioning and S3 archiving are a **future feature**, not MVP. MVP ships with the indexes defined in §4.2. This section documents the intended design and the trigger threshold so the schema is forward-compatible.
+
+### 8.1 Roadmap
+
+1. **MVP**: single-partition tables, indexes on `tenant_id`, `created_at`, FKs. No background jobs.
+2. **Trigger**: when `yamlagno_config_change_log` exceeds a documented threshold (e.g. > 5M rows or > 90 days of data), enable monthly time-based partitioning by `created_at`.
+3. **Retention**: a background job drops partitions older than `configstore.retention_days` (Environment, configurable, read via `ConfigManager`). Dropping a partition is O(1) versus row-by-row DELETE.
+4. **Compaction / archiving (event sourcing + snapshotting)**: keep the latest snapshot + the N most recent deltas in Postgres; compress and ship older deltas to S3. Restoring a historical state replays deltas forward from the nearest snapshot.
+
+### 8.2 Configurable retention knob
+
+| Variable | Class | Default | Notes |
+|----------|-------|---------|-------|
+| `configstore.retention_days` | **Environment** | `365` | Days of `config_change_log` to keep before partition drop. Read via `config.get_int`. Future feature; ignored by MVP. |
+
+---
+
+## 9. REPLICATION
+
+> **@ai-directive**: For the **config store**, **synchronous** replication is the default (`configstore.replication_mode = sync`). Config rows are low-volume, high-consistency artifacts: a stale replica would serve the wrong agent definition. The trade-off (higher write latency) is acceptable because config writes are infrequent compared to runtime reads.
+
+| Mode | Setting | Trade-off | When to use |
+|------|---------|-----------|-------------|
+| Synchronous (default) | `configstore.replication_mode = sync` | Strong consistency, higher write latency | Production config store (recommended) |
+| Asynchronous | `configstore.replication_mode = async` | Eventual consistency, lower latency | Read-heavy multi-region where brief staleness is tolerable |
+
+> Runtime replication (Agno `agno_*` sessions/memory) is governed by Agno's own `db=` settings and is out of scope here.
+
+---
+
+## 10. BEHAVIOR DELTA - BDD SCENARIOS
+
+### 10.1 Acceptance scenarios
+
+#### Scenario 1: Golden Path - Persist AgentConfig via core repository
+
+```gherkin
+GIVEN a validated AgentConfig (Pydantic, SPEC_02) for tenant T
+AND a core-cenf DatabaseManager bound to the yamlagno schema
+WHEN AgentConfigRepository.create(tenant_id=T, record) is called
+THEN an AgentConfigRecord row exists in yamlagno_agent_configs
+AND the row tenant_id equals T
+AND the row config_jsonb round-trips through AgentConfig validation
+AND the transaction was committed via the core TransactionScope
+```
+
+#### Scenario 2: Golden Path - Read active configs within a transaction
+
+```gherkin
+GIVEN tenant T has 5 agent configs and 2 are is_active=false
+WHEN get_active_by_name is called inside async with db.transaction()
+THEN only active configs are returned
+AND the repository was obtained from db.get_repository(AgentConfigRecord)
+```
+
+#### Scenario 3: Error Case - Duplicate config name
+
+```gherkin
+GIVEN tenant T has an existing config named "my_agent"
+WHEN inserting another config with the same name
+THEN the unique constraint ya_agent_tenant_name_unique is violated
+AND the core TransactionScope rolls back (idempotent rollback)
+AND no partial row is persisted
+```
+
+#### Scenario 4: Boundary - Invalid JSONB rejected before insert
+
+```gherkin
+GIVEN a config_jsonb that fails AgentConfig validation (SPEC_02)
+WHEN the repository attempts to insert
+THEN validation raises before any SQL is issued
+AND no transaction is left open
+```
+
+#### Scenario 5: Multi-tenant isolation via WHERE (no native RLS)
+
+```gherkin
+GIVEN tenant A and tenant B each have configs
+AND the TenantResolver set contextvar tenant_id = A
+WHEN listing configs via find_all
+THEN only tenant A rows are returned
+AND tenant B rows are never read (app-layer WHERE, not Postgres RLS)
+```
+
+#### Scenario 6: Auto-provisioning is idempotent and flag-gated
+
+```gherkin
+GIVEN configstore.auto_provision = true
+WHEN ConfigStoreProvisioner.provision runs twice
+THEN the yamlagno schema and tables exist
+AND yamlagno_schema_versions records exactly one row for the version
+AND the second run performs no DDL (checkfirst=True)
+
+GIVEN configstore.auto_provision = false
+WHEN provision runs
+THEN no DDL is executed (schema managed externally)
 ```
 
 ---
 
-## 6. BEHAVIOR DELTA - BDD SCENARIOS
+## 11. TDD MICRO-TASK EXECUTION PROTOCOL
 
-### 6.1 Acceptance Scenarios
+### 11.1 Cascading task checklist
 
-#### Scenario 1: Golden Path - Create AgentConfig
+> **@ai-directive**: Tasks reflect the consume-core model. There is NO task to implement a `TransactionManager` — that comes from core-cenf. Tasks focus on ORM models, auto-provisioning, repository wrappers over `GenericRepository`, and the TenantResolver interface.
 
-```gherkin
-GIVEN a valid tenant_id and agent config YAML
-AND the YAML is validated
-WHEN the config is saved to PostgreSQL
-THEN the agent_configs row is created
-AND the config_jsonb contains all fields
-AND the created_at timestamp is set
-AND the tenant_id matches the input
-```
-
-#### Scenario 2: Golden Path - Query Active Configs
-
-```gherkin
-GIVEN a tenant with 5 agent configs
-AND 2 configs have is_active=false
-WHEN querying for active configs
-THEN exactly 3 configs are returned
-AND all returned configs have is_active=true
-AND the results are ordered by name ASC
-```
-
-#### Scenario 3: Error Case - Duplicate Config Name
-
-```gherkin
-GIVEN a tenant with existing config "my_agent"
-WHEN creating a new config with the same name
-THEN a unique constraint violation occurs
-AND the transaction is rolled back
-AND the error message mentions "tenant_name_unique"
-```
-
-#### Scenario 4: Error Case - Invalid JSONB
-
-```gherkin
-GIVEN a config_yaml with invalid structure
-WHEN attempting to insert with invalid config_jsonb
-THEN a JSONB validation error occurs
-AND the transaction is rolled back
-```
-
----
-
-## 7. TDD MICRO-TASK EXECUTION PROTOCOL
-
-### 7.1 Cascading Task Checklist
-
-#### TASK_001: Define Tenant Model
+#### TASK_001: Define ORM Base + TenantRecord
 
 - **File**: `yaml-agno/src/db/models/tenant.py`
 - **Test**: `tests/unit/db/test_tenant_model.py`
 - **RED**:
   ```python
-  def test_tenant_creation():
-      tenant = Tenant(name="Test Corp", slug="test-corp")
-      assert tenant.slug == "test-corp"
+  def test_tenant_record_maps_table():
+      assert TenantRecord.__tablename__ == "yamlagno_tenants"
+      assert TenantRecord.__table__.schema == "yamlagno"
+      assert TenantRecord(name="CENF", slug="cenf").slug == "cenf"
   ```
-- **GREEN**: Implement `Tenant` with SQLAlchemy
-- **Commit**: `feat: add Tenant SQLAlchemy model`
+- **GREEN**: Implement `Base(DeclarativeBase)` and `TenantRecord` (§3.1).
+- **Commit**: `feat: add yamlagno_tenants ORM model`
 
-#### TASK_002: Define AgentConfigRow Model (persistence)
+#### TASK_002: Define AgentConfigRecord
 
 - **File**: `yaml-agno/src/db/models/agent_config.py`
 - **Test**: `tests/unit/db/test_agent_config_model.py`
 - **RED**:
   ```python
-  def test_agent_config_row_creation():
-      # @ai-directive: AgentConfigRow is the PERSISTENCE row.
-      # The Pydantic AgentConfig (SPEC_02) is the JSONB validator, imported not redefined.
-      row = AgentConfigRow(
-          tenant_id=uuid4(),
-          name="test_agent",
-          config_yaml="agent:\n  name: test",
-          config_jsonb={"agent": {"name": "test"}},
-      )
-      assert row.name == "test_agent"
+  def test_agent_config_record_maps_table():
+      assert AgentConfigRecord.__tablename__ == "yamlagno_agent_configs"
+      assert AgentConfigRecord.__table__.schema == "yamlagno"
   ```
-- **GREEN**: Implement `AgentConfigRow` with foreign keys; validate `config_jsonb` against the imported Pydantic `AgentConfig` (SPEC_02)
-- **Commit**: `feat: add AgentConfigRow SQLAlchemy model`
+- **GREEN**: Implement `AgentConfigRecord` (§3.2). Validate `config_jsonb` against the imported Pydantic `AgentConfig` (SPEC_02).
+- **Commit**: `feat: add yamlagno_agent_configs ORM model`
 
-#### TASK_003: Create Migration for Tenants
+#### TASK_003: Define Team/Workflow/DiVariable/ConfigChangeLog/SchemaVersion records
 
-- **File**: `yaml-agno/migrations/versions/001_create_tenants.py`
-- **Test**: `tests/integration/test_migrations.py`
+- **File**: `yaml-agno/src/db/models/*.py`
+- **Test**: `tests/unit/db/test_models.py`
+- **RED**: assert `__tablename__` + `schema == "yamlagno"` for each.
+- **GREEN**: Implement the remaining ORM entities (§3.3–§3.7).
+- **Commit**: `feat: add remaining yamlagno_ ORM models`
+
+#### TASK_004: Auto-provisioning with checkfirst
+
+- **File**: `yaml-agno/src/db/provisioner.py`
+- **Test**: `tests/integration/test_provisioner.py`
 - **RED**:
   ```python
-  async def test_tenants_table_exists(session):
-      result = await session.execute(text("""
-          SELECT EXISTS (
-              SELECT FROM information_schema.tables
-              WHERE table_name = 'tenants'
-          )
-      """))
-      assert result.scalar_one() is True
+  async def test_provision_creates_schema_and_tables(memory_db, config):
+      prov = ConfigStoreProvisioner(config)
+      await prov.provision(memory_db.engine)
+      assert await table_exists(memory_db.engine, "yamlagno_tenants")
+
+  async def test_provision_skips_when_disabled(memory_db, config_disabled):
+      prov = ConfigStoreProvisioner(config_disabled)
+      await prov.provision(memory_db.engine)  # no-op
   ```
-- **GREEN**: Create migration with the `tenants` DDL
-- **Commit**: `feat: add tenants table migration`
+- **GREEN**: Implement `ConfigStoreProvisioner` (§6.1) using `Base.metadata.create_all(checkfirst=True)` and `yamlagno_schema_versions`.
+- **Commit**: `feat: add config-store auto-provisioner`
 
-#### TASK_004: Create Migration for AgentConfigs
-
-- **File**: `yaml-agno/migrations/versions/002_create_agent_configs.py`
-- **Test**: `tests/integration/test_migrations.py`
-- **RED**:
-  ```python
-  async def test_agent_configs_table_exists(session):
-      result = await session.execute(text("""
-          SELECT EXISTS (
-              SELECT FROM information_schema.tables
-              WHERE table_name = 'agent_configs'
-          )
-      """))
-      assert result.scalar_one() is True
-  ```
-- **GREEN**: Create migration with the `agent_configs` DDL
-- **Commit**: `feat: add agent_configs table migration`
-
-#### TASK_005: Implement TransactionManager
-
-- **File**: `yaml-agno/src/db/transaction.py`
-- **Test**: `tests/unit/db/test_transaction_manager.py`
-- **RED**:
-  ```python
-  async def test_transaction_commits_on_success(tm, session_factory):
-      async with tm.transaction() as session:
-          await session.execute(text("SELECT 1"))
-      # Verify commit happened (no exception)
-  ```
-- **GREEN**: Implement `TransactionManager.transaction()`
-- **Commit**: `feat: add TransactionManager context manager`
-
-#### TASK_006: Implement Rollback on Error
-
-- **File**: `yaml-agno/src/db/transaction.py`
-- **Test**: `tests/unit/db/test_transaction_manager.py`
-- **RED**:
-  ```python
-  async def test_transaction_rollback_on_error(tm):
-      with pytest.raises(Exception):
-          async with tm.transaction() as session:
-              await session.execute(text("SELECT 1/0"))
-      # Verify rollback happened
-  ```
-- **GREEN**: Add `try/except/rollback` to `transaction()`
-- **Commit**: `feat: add automatic rollback on error`
-
-#### TASK_007: Implement AgentConfigRepository
+#### TASK_005: Repository wrapper over core GenericRepository
 
 - **File**: `yaml-agno/src/repositories/agent_config_repository.py`
 - **Test**: `tests/integration/repositories/test_agent_config_repository.py`
 - **RED**:
   ```python
-  async def test_create_agent_config(repo, tenant_id):
-      config_id = await repo.create(
-          tenant_id=tenant_id,
-          name="test",
-          config_yaml="agent:\n  name: test",
-          config_jsonb={"agent": {"name": "test"}},
-      )
-      assert config_id is not None
+  async def test_create_uses_core_transaction(db_manager, tenant_id):
+      repo = AgentConfigRepository(db_manager)
+      rid = await repo.create(tenant_id, record)
+      assert rid is not None
+
+  async def test_get_active_by_name(db_manager, tenant_id):
+      repo = AgentConfigRepository(db_manager)
+      got = await repo.get_active_by_name(tenant_id, "x")
+      assert got is None or got["name"] == "x"
   ```
-- **GREEN**: Implement `AgentConfigRepository.create()`
-- **Commit**: `feat: add AgentConfigRepository.create()`
+- **GREEN**: Implement `AgentConfigRepository` (§7.2) using `async with db.transaction()` + `db.get_repository(AgentConfigRecord)` (on `DatabaseManager`, inside the transaction scope).
+- **Commit**: `feat: add AgentConfigRepository over core GenericRepository`
 
-#### TASK_008: Implement Get By Name
+#### TASK_006: TenantResolver interface
 
-- **File**: `yaml-agno/src/repositories/agent_config_repository.py`
-- **Test**: `tests/integration/repositories/test_agent_config_repository.py`
+- **File**: `yaml-agno/src/tenant/resolver.py`
+- **Test**: `tests/unit/tenant/test_resolver.py`
 - **RED**:
   ```python
-  async def test_get_by_name(repo, tenant_id):
-      result = await repo.get_by_name(tenant_id, "test")
-      assert result is not None
-      assert result["name"] == "test"
+  async def test_resolve_user_mode_returns_user_tenant(resolver):
+      tid = await resolver.resolve(user_id="u1", session_id="s1")
+      assert tid is not None
+
+  def test_resolver_sets_contextvar(resolver):
+      # after resolve, get_tenant_id() reflects the resolved tenant
+      ...
   ```
-- **GREEN**: Implement `AgentConfigRepository.get_by_name()`
-- **Commit**: `feat: add AgentConfigRepository.get_by_name()`
+- **GREEN**: Implement `TenantResolver` (§5.2) with the three `resolution_mode` strategies and Core Infra contextvar side effects.
+- **Commit**: `feat: add TenantResolver mapping Agno identity to yaml-agno tenant`
+
+#### TASK_007: Bootstrap on core-cenf DatabaseManager
+
+- **File**: `yaml-agno/src/db/bootstrap.py`
+- **Test**: `tests/integration/test_bootstrap.py`
+- **RED**: `build_database_manager(config, secrets)` returns an object satisfying the `DatabaseManager` Protocol.
+- **GREEN**: Wire `BootstrapOrchestrator` (§7.1) using `asyncio.TaskGroup`; DSN via `config.get_string("database.dsn")`.
+- **Commit**: `feat: bootstrap config store on core-cenf DatabaseManager`
 
 ---
 
-## 8. TECHNICAL ASSUMPTIONS ADOPTED
+## 12. TECHNICAL ASSUMPTIONS AND CALIBRATION
 
-### [Decision 1] PostgreSQL for Production
+### 12.1 Assumptions adopted
 
-**Justification**:
-- ACID compliance for transactions (config store)
-- JSONB for flexible config + strict schema validation (via Pydantic from SPEC_02)
-- RLS (Row Level Security) for multi-tenant isolation
-- Native time-based partitioning (future retention extension)
-- Full-text search over configs
+- **[A1] Consume core-cenf, do not reimplement**: yaml-agno declares ORM models and consumes `DatabaseManager`/`TransactionScope`/`GenericRepository[T]`. No local transaction manager or base repository.
+- **[A2] Declarative ORM mandatory**: the core `SQLAlchemyAdapter` requires `DeclarativeBase` entities, so yaml-agno uses ORM (unlike Agno's Core-only `agno_*` tables).
+- **[A3] `yamlagno_*` prefix + dedicated schema**: avoids collision with `agno_*` when both share one Postgres.
+- **[A4] Three-level tenant model from day 1**: columns and resolver interface defined now; enforcement post-MVP.
+- **[A5] App-layer WHERE isolation, no native RLS**: mirrors Agno; `tenant_id` is a Core Infra column on `yamlagno_*` only.
 
-### [Decision 2] SQLite for Development
+### 12.2 Calibration questions
 
-**Justification**:
-- Zero configuration for developers
-- SQLAlchemy-compatible (same code base)
-- Sufficient for unit tests
-- No external dependencies
-
-### [Decision 3] UUID v4 for IDs
-
-**Justification**:
-- Does not leak sequencing information
-- Globally unique for distributed systems
-- Native PostgreSQL support
-- Better security than auto-increment integers
+- **[Q1] Retention horizon**: is `retention_days=365` for `config_change_log` adequate, or do compliance needs require longer? (Future feature; MVP ignores.)
+- **[Q2] Partition trigger threshold**: at what row count / age should monthly partitioning of `config_change_log` switch on? Proposed: 5M rows or 90 days.
+- **[Q3] Synchronous replication latency**: is sync replication acceptable for the config store write path in every target deployment, or do multi-region read-heavy setups need async?
 
 ---
 
-## 9. STRATEGIC CALIBRATION QUESTIONS
-
-### [Question 1] Data Retention
-
-**Is 30-day retention sufficient for session_state and message_history?**
-
-Note: these data types are owned by Agno at runtime; retention is a future yaml-agno extension.
-
-Implications:
-- **Yes**: Meets GDPR, reduces storage costs
-- **No**: Requires extended retention for compliance
-- **Trade-off**: Storage cost vs compliance/analytics value
-
-### [Question 2] Partition vs Separate Table
-
-**Use time-based partitions or separate tables per tenant?**
-
-Implications:
-- **Partitions**: Simpler, better for temporal cleanup
-- **Tables**: Better per-tenant isolation, more complex
-- **Trade-off**: Schema simplicity vs maximum isolation
-
-### [Question 3] Sync vs Async Replication
-
-**Require synchronous replication for production configs?**
-
-Implications:
-- **Yes**: Strong consistency, higher latency
-- **No**: Eventual consistency, better performance
-- **Trade-off**: Write latency vs consistency guarantees
-
----
-
-*Do you want to deepen the technical specification to **Level 6** for a specific component, or authorize execution of these tasks by the agent team?*
+*Do you want to deepen the technical specification to **Level 6** for a specific component (e.g. the TenantResolver strategies or the retention/compaction job), or authorize execution of these tasks by the agent team?*
