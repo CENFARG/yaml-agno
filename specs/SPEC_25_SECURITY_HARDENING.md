@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_25"
 Title: "Security Hardening - Pod Security, Network Policies, RBAC, Supply Chain y Compliance"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#PodSecurityStandards", "#NetworkPolicies", "#RBAC", "#SupplyChain", "#Cosign", "#Kyverno", "#Falco", "#OWASP", "#GDPR", "#SOC2", "#ZeroTrust"]
+Context_Tags: ["#PodSecurityStandards", "#NetworkPolicies", "#RBAC", "#SupplyChain", "#Cosign", "#Kyverno", "#Falco", "#OWASP", "#GDPR", "#SOC2", "#ZeroTrust", "#CloudRun", "#IAM"]
 Dependency_Hashes: ["SPEC_19", "SPEC_21"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1 — added Cloud Run hardening equivalents (no privileged, egress control, IAM, Secret Manager) as PRIMARY target; K8s hardening (PSS/NetworkPolicy/Kyverno/Falco) retained as FUTURE. Cleaned non-ASCII chars and mixed-language Gherkin."
 ---
 
 # SPEC_25_SECURITY_HARDENING
@@ -67,7 +68,47 @@ flowchart TB
 
 ## 1. PRINCIPAL
 
-yaml-agno opera bajo **Zero Trust**: ningún pod confía en otro por defecto, todo tráfico está cifrado y autorizado explícitamente, toda imagen está firmada y verificada en admission, todo secreto proviene de un gestor externo, y todo acceso queda en auditoría inmutable. El hardening se entrega como **políticas declarativas** (Kyverno, PSS, NetworkPolicies) validadas en admission — no como checklists manuales.
+yaml-agno opera bajo **Zero Trust**: ningún pod/confianza en otro por defecto, todo tráfico está cifrado y autorizado explícitamente, toda imagen está firmada y verificada, todo secreto proviene de un gestor externo, y todo acceso queda en auditoría inmutable. El hardening se entrega como **políticas declarativas** validadas en admission/deploys — no como checklists manuales.
+
+### 1.1 Hardening dual: Cloud Run (PRIMARIO) vs Kubernetes (FUTURO)
+
+> @ai-directive Per SPEC_00 §7.3, **Cloud Run es el destino PRIMARIO**; Kubernetes es FUTURO. Los controles K8s-native de §2.1-§2.6 (**Pod Security Standards, NetworkPolicy, Kyverno, Falco eBPF, RBAC de Kubernetes**) **NO existen en Cloud Run** (no hay Prometheus Operator, no hay admission controllers customizables, no hay CNI con NetworkPolicy, no hay pods persistentes para Falco). Esta subsección define los **equivalentes de hardening en Cloud Run** como destino primario. Los §2.1-§2.6 permanecen válidos para el destino K8s futuro.
+
+| Control Zero Trust | K8s (FUTURO, §2.1-§2.6) | **Cloud Run (PRIMARIO)** equivalente |
+|--------------------|--------------------------|--------------------------------------|
+| Sin contenedor privileged | PSS `restricted` + Kyverno | Cloud Run **no permite privileged** por diseño; el runtime es gestionado y sandboxed. No hay flag `--privileged`. |
+| Non-root | `runAsUser: 65532` (PSS) | Cloud Run ejecuta como **non-root** por defecto (UID del contenedor; SPEC_20 ya fuerza `USER 65532`). |
+| ReadOnly root filesystem | `readOnlyRootFilesystem: true` | Cloud Run: `--no-cpu-boost` + `executionEnvironment` gen2; FS efímero por defecto (no persiste entre requests). |
+| Capabilities drop ALL | PSS `capabilities.drop: [ALL]` | Cloud Run **ignora/limita capabilities**; no se pueden añadir. Equivalente implícito. |
+| Network segmentation | `NetworkPolicy` default-deny + allowlist | **VPC connector + Serverless VPC Access**; egress controlado vía Cloud NAT + **egress settings** (`all-traffic` por VPC); allowlist de FQDN vía Cloud NAT routes / **egress-only** a model providers. Sin lateral movement (no hay red pod-to-pod). |
+| RBAC least privilege | K8s `Role`/`RoleBinding`, SA | **IAM** de GCP: cada revision usa un **Service Account de GCP** con roles mínimos (`roles/run.invoker` mínimo, ningún rol de admin). Workload Identity federation para CI deploy. |
+| Secretos no en env | Kyverno deny literal + ExternalSecrets | **Secret Manager** montado como archivo en `/run/secrets` (SPEC_23 contract); **nunca** en `--set-env-vars` con valor literal. |
+| Imagen firmada verificada en admission | Kyverno `verifyImages` (cosign) | **Binary Authorization** con attestor cosign/Sigstore: la policy `deny` deniega desplegar revisiones cuya imagen no pase la verificación de firma. Equivalente serverless de Kyverno admission. |
+| Runtime threat detection (shell/exec anómalo) | Falco eBPF | **Cloud Run no soporta eBPF ni Falco** (no hay kernel accesible). Equivalentes: **Cloud Logging audit**, **Eventarc** sobre la API de Cloud Run, y detección a nivel app (SPEC_09) + Container Analysis (vuln scan continuo). Shell/exec en distroless ya es imposible por diseño (sin shell, SPEC_20). |
+| etcd encryption at rest | `EncryptionConfiguration` KMS | **CMEK** (Customer-Managed Encryption Keys) en Cloud SQL, GCS y Secret Manager; encryption at rest nativa. |
+| mTLS pod-to-pod | service mesh (Linkerd/Istio) | Cloud Run expone HTTPS/TLS automáticamente (managed); entre revisiones no hay mTLS necesario (cada revision es un endpoint HTTPS). A Cloud SQL/Redis: TLS nativo del servicio gestionado. |
+| Audit trail inmutable | S3 Object Lock WORM | **Cloud Logging** + export a **GCS bucket con retention policy + lock** (Bucket Lock); Cloud Audit Logs (Admin Activity = inmutable por GCP). |
+
+**Binary Authorization como equivalente de Kyverno `require-signed-images`** (Cloud Run):
+
+```bash
+# Política: solo imágenes con atestación cosign válida pueden deployarse a Cloud Run.
+gcloud container binauthz policy import policy.yaml \
+  --project="${GCP_PROJECT}"
+
+# policy.yaml (extracto)
+# defaultAdmissionRule: ENFORCE
+#   evaluationMode: REQUIRE_ATTESTATION
+#   enforcementMode: ENFORCE_BLOCK_AND_AUDIT_LOG
+# attestors: [ yaml-agno-cosign-attestor ]
+# admissionRuleAdmissionRules (Cloud Run):
+#   - name: "require-signed"
+#     evaluationMode: REQUIRE_ATTESTATION
+```
+
+> **Sin shell = mitigation de runtime inherente**: SPEC_20 usa imagen distroless (sin `/bin/sh`). En Cloud Run esto significa que `Falco Shell Spawned in Container` (§2.6.1) es estructuralmente imposible — el control se cumple por diseño de la imagen, no por detección eBPF. Para K8s futuro se mantiene Falco como defensa en profundidad.
+
+> **Egress a model providers**: en Cloud Run se controla vía **Serverless VPC connector** + Cloud NAT con rutas/allowlist, o **egress settings** que limitan el tráfico saliente. Equivalente funcional de las NetworkPolicies FQDN de §2.2.5.
 
 ---
 
@@ -620,7 +661,7 @@ flowchart LR
 | Detection | alerta Falco/Alertmanager se dispara | on-call | SPEC_24 |
 | Containment | namespace cordoned, pods en cuarentena, revocación de tokens JWT (SPEC_19) | on-call SRE | kubectl, IdP |
 | Eradication | rollback imagen (ArgoCD), rotar secretos (SPEC_23), parchear CVE | SRE + Security | ArgoCD, ESO |
-| Recovery | re-deploy, validar SLO恢复, cerrar alertas | SRE | SPEC_24 |
+| Recovery | re-deploy, validar SLO recuperado, cerrar alertas | SRE | SPEC_24 |
 | Postmortem | blameless, dentro de 5 días hábiles, acción → runbook/policy | team | Git |
 
 **Notificación de breach (GDPR)**: si afecta datos personales, notificar autoridad en **72h**; comunicación a afectados según riesgo.
@@ -631,73 +672,73 @@ flowchart LR
 
 ```cucumber
 Feature: Security Hardening enforced
-  Como Security architect
-  Quiero que los controles se ejecuten en admission
-  Para garantizar Zero Trust sin depender de disciplina manual
+  As a Security architect
+  I want controls to be enforced in admission
+  So that Zero Trust is guaranteed without relying on manual discipline
 
   # --- Supply chain ---
-  Scenario: Imagen sin firma Cosign es denegada en admission
-    Given un deployment con imagen "registry/agentos:v1.2.3" NO firmada
-    When se aplica el manifiesto en namespace agentos
-    Then Kyverno policy "require-signed-images" deniega el Pod
-    And el evento queda en audit trail con motivo "signature verification failed"
+  Scenario: Unsigned Cosign image is denied at admission
+    Given a deployment with image "registry/agentos:v1.2.3" that is NOT signed
+    When the manifest is applied in namespace agentos
+    Then Kyverno policy "require-signed-images" denies the Pod
+    And the event lands in the audit trail with reason "signature verification failed"
 
-  Scenario: Imagen firmada y con SBOM admitida
-    Given imagen firmada por GitHub OIDC con SBOM CycloneDX attestation
-    When se aplica el manifiesto
-    Then el Pod se admite y se reescribe a referencia por digest
+  Scenario: Signed image with SBOM is admitted
+    Given an image signed by GitHub OIDC with a CycloneDX SBOM attestation
+    When the manifest is applied
+    Then the Pod is admitted and rewritten to a digest reference
 
   # --- Network policies ---
-  Scenario: Network policy bloquea movimiento lateral
-    Given dos pods "agentos" en namespace agentos con default-deny-all
-    When el pod A intenta conectar al pod B en puerto 8000
-    Then la conexión es denegada (sin NetworkPolicy allow)
+  Scenario: Network policy blocks lateral movement
+    Given two "agentos" pods in namespace agentos with default-deny-all
+    When pod A tries to connect to pod B on port 8000
+    Then the connection is denied (no allow NetworkPolicy)
 
-  Scenario: AgentOS puede alcanzar Postgres pero no Redis-otro-tenant
-    Given NetworkPolicy allow-agentos-to-postgres aplicada
-    When AgentOS conecta a postgres.data.svc:5432
-    Then la conexión se permite
-    But when AgentOS intenta conectar a redis del namespace tenant-globex
-    Then la conexión se deniega
+  Scenario: AgentOS can reach Postgres but not another tenant's Redis
+    Given NetworkPolicy allow-agentos-to-postgres is applied
+    When AgentOS connects to postgres.data.svc:5432
+    Then the connection is allowed
+    But when AgentOS tries to connect to redis in namespace tenant-globex
+    Then the connection is denied
 
   # --- Pod Security ---
-  Scenario: PSS restricted prohíbe pod privileged
-    Given namespace agentos con enforce=restricted
-    When se aplica un Pod con securityContext.privileged=true
-    Then el Pod es rechazado por Pod Security Admission
-    And el mensaje cita la política restricted violada
+  Scenario: PSS restricted forbids a privileged pod
+    Given namespace agentos with enforce=restricted
+    When a Pod with securityContext.privileged=true is applied
+    Then the Pod is rejected by Pod Security Admission
+    And the message cites the violated restricted policy
 
-  Scenario: Pod con readOnlyRootFilesystem=true y drop ALL se admite
-    Given un Pod compliant con todo el profile restricted
-    When se aplica
-    Then el Pod se admite
+  Scenario: Pod with readOnlyRootFilesystem=true and drop ALL is admitted
+    Given a Pod compliant with the entire restricted profile
+    When it is applied
+    Then the Pod is admitted
 
   # --- Secrets ---
-  Scenario: Secreto en env var literal es denegado
-    Given un Pod con env var "API_KEY" con valor literal
-    When Kyverno policy deny-plaintext-secrets-in-env evalúa
-    Then el Pod es denegado
-    And el mensaje exige usar ExternalSecret/SecretKeySelector
+  Scenario: Literal secret in env var is denied
+    Given a Pod with env var "API_KEY" with a literal value
+    When Kyverno policy deny-plaintext-secrets-in-env evaluates
+    Then the Pod is denied
+    And the message requires using ExternalSecret/SecretKeySelector
 
   # --- RBAC ---
-  Scenario: ServiceAccount de AgentOS no puede listar pods del namespace
-    Given ServiceAccount agentos-sa con Role agentos-role (solo configmaps get)
-    When agentos-sa intenta "kubectl get pods"
-    Then la API responde 403 Forbidden
+  Scenario: AgentOS ServiceAccount cannot list pods in the namespace
+    Given ServiceAccount agentos-sa with Role agentos-role (configmaps get only)
+    When agentos-sa runs "kubectl get pods"
+    Then the API responds 403 Forbidden
 
   # --- Runtime ---
-  Scenario: Falco detecta shell spawnado en contenedor AgentOS
-    Given Falco con regla "Shell Spawned in Container" desplegado
-    When un atacante ejecuta "sh" dentro del contenedor agentos
-    Then Falco emite alerta CRITICAL
-    And el evento llega a Loki con prioridad CRITICAL
+  Scenario: Falco detects a shell spawned in the AgentOS container
+    Given Falco deployed with the "Shell Spawned in Container" rule
+    When an attacker runs "sh" inside the agentos container
+    Then Falco emits a CRITICAL alert
+    And the event reaches Loki with CRITICAL priority
 
   # --- Audit trail ---
-  Scenario: Toda acción administrativa queda en trail inmutable
-    Given S3 Object Lock en modo Compliance sobre el bucket de audit
-    When un administrador rota un secreto
-    Then el evento se escribe al trail
-    And el objeto NO puede ser borrado ni sobrescrito antes del retention
+  Scenario: Every administrative action lands in an immutable trail
+    Given S3 Object Lock in Compliance mode on the audit bucket
+    When an administrator rotates a secret
+    Then the event is written to the trail
+    And the object CANNOT be deleted or overwritten before retention
 ```
 
 ---

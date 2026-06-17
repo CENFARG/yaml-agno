@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_24"
 Title: "Monitoring Stack - Prometheus, Grafana, Loki, Alertmanager y Tracing"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#Prometheus", "#Grafana", "#Loki", "#Alertmanager", "#Tempo", "#OpenTelemetry", "#SRE", "#SLI", "#SLO", "#MonitoringAsCode"]
+Context_Tags: ["#Prometheus", "#Grafana", "#Loki", "#Alertmanager", "#Tempo", "#OpenTelemetry", "#SRE", "#SLI", "#SLO", "#MonitoringAsCode", "#CloudRun", "#CloudMonitoring"]
 Dependency_Hashes: ["SPEC_09", "SPEC_21"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1 — added Cloud Run monitoring strategy (Cloud Monitoring / Managed Prometheus / OTel export) as the PRIMARY observability target; kube-prometheus-stack retained as the FUTURE (K8s) target."
 ---
 
 # SPEC_24_MONITORING_STACK
@@ -26,6 +27,28 @@ Last_Updated: "2026-06-14"
 | Contrato | `ObservabilityManager` Port | `ServiceMonitor`, `PrometheusRule`, Grafana JSON |
 
 **Regla de oro**: SPEC_24 **no** introduce nueva instrumentación; **consume** la que SPEC_09 expone en `/metrics` y OTel pipeline. Si una métrica no existe en SPEC_09, primero se añade ahí.
+
+### 0.1 Estrategia dual de observabilidad (Cloud Run primario, K8s futuro)
+
+> @ai-directive Per SPEC_00 §7.3, **Cloud Run es el destino de deployment PRIMARIO**; Kubernetes (SPEC_21) es FUTURO. El backend de monitoring (dónde se recolecta/almacena/visualiza la telemetría) difiere por destino, pero la **instrumentación es la misma** (SPEC_09: OTel SDK + `/metrics` Prometheus exposition). El `ObservabilityManager` Port (SPEC_09) abstrae el backend.
+
+| Destino | Backend de monitoring | Cómo se recolecta | Notas |
+|---------|------------------------|-------------------|-------|
+| **Cloud Run (PRIMARIO)** | **Google Cloud Monitoring** (Cloud Metrics) + **Managed Service for Prometheus** + **Cloud Logging** + **Cloud Trace** | (a) OTel SDK del runtime exporta OTLP → OTel Collector → Cloud Trace/Managed Prometheus; (b) `/metrics` Prometheus scraped por Managed Prometheus collector; (c) logs JSON → Cloud Logging. Dashboards en Cloud Monitoring; alertas vía Cloud Monitoring alert policies + Notification Channels. | Cloud Run **no tiene** Prometheus Operator, ni `ServiceMonitor`, ni `PrometheusRule`, ni Promtail. Las secciones §2.1.1-§2.4 de este SPEC (`ServiceMonitor`, `PrometheusRule`, kube-prometheus-stack) **aplican al destino K8s futuro**, NO a Cloud Run. |
+| **Kubernetes (FUTURO)** | kube-prometheus-stack (Prometheus Operator) + Loki + Tempo + Alertmanager + Grafana | `ServiceMonitor` scrapea `/metrics`; Promtail → Loki; OTel Collector → Tempo. | Este es el modelo detallado en §2.1-§2.9. |
+
+**Mapping de componentes por destino**:
+
+| Componente (K8s futuro) | Equivalente Cloud Run (primario) |
+|-------------------------|-----------------------------------|
+| Prometheus + `ServiceMonitor` | Managed Service for Prometheus (collector gestionado) |
+| `PrometheusRule` (alertas) | Cloud Monitoring alert policies (MQL/PromQL) |
+| Alertmanager | Cloud Monitoring notification channels (PagerDuty/Slack/email) |
+| Loki + Promtail | Cloud Logging (logs JSON estructurados, retention por bucket) |
+| Tempo (traces) | Cloud Trace (OTLP / OTel Collector → Cloud Trace) |
+| Grafana | Cloud Monitoring dashboards (o Grafana against Managed Prometheus) |
+
+> **Métricas/traces/logs emitidos por SPEC_09 no cambian** entre destinos: mismas métricas RED, mismos span attributes (§2.6.3), mismo JSON de logs. Lo que cambia es el backend que los recibe. El adapter `PrometheusOtelObservabilityManager` (§2.7) es válido para ambos: en Cloud Run su export OTLP apunta al OTel Collector que enruta a Cloud Trace/Managed Prometheus; en K8s apunta al Collector que enruta a Tempo/Prometheus.
 
 ```mermaid
 flowchart LR

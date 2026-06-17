@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_22"
 Title: "CI/CD Pipeline - GitHub Actions, Security Gates, SBOM and GitOps Deploy"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#CICD", "#GitHubActions", "#TDD", "#SecurityScans", "#SBOM", "#GitOps", "#ArgoCD", "#Helm", "#GHCR", "#QualityGates", "#ReleaseAutomation", "#CoverageGate"]
+Context_Tags: ["#CICD", "#GitHubActions", "#TDD", "#SecurityScans", "#SBOM", "#GitOps", "#ArgoCD", "#Helm", "#GHCR", "#QualityGates", "#ReleaseAutomation", "#CoverageGate", "#CloudRun", "#uv"]
 Dependency_Hashes: ["SPEC_20", "SPEC_21"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1 — fixed SPEC_20/21/24 identity swap in §0; added Cloud Run as primary deploy target alongside future K8s; unified dependency manager to uv (was poetry); removed non-ASCII chars."
 ---
 
 # SPEC_22_CICD_PIPELINE
@@ -16,27 +17,29 @@ Last_Updated: "2026-06-14"
 
 ---
 
-## 0. FRONTERA CON SPEC_20, SPEC_21 Y SPEC_23
+## 0. FRONTERA CON SPEC_20, SPEC_21, SPEC_23 Y SPEC_24
 
-| Dimensión | SPEC_20 | SPEC_21 | SPEC_22 (este doc) | SPEC_23 |
-|-----------|---------|---------|--------------------|---------|
-| **Alcance** | Deploy/Infra (k8s, Helm, ArgoCD) | Observability/SRE (metrics, traces, SLO) | Orquestación del pipeline que **produce** y **promueve** artefactos | Config & Secrets que el pipeline inyecta |
-| **Compose/manifests** | Sí | No | Referencia (consume Helm charts de SPEC_20) | No |
-| **Dashboards/SLO** | No | Sí | No (CI emite métricas vía SPEC_21) | No |
-| **Secrets** | No | No | Solo *consumo* (CI lee secretos via OIDC, no los define) | Definición completa |
-| **Config env** | No | No | Inyecta env en deploy stage | Definición completa |
+| Dimensión | SPEC_20 | SPEC_21 | SPEC_22 (este doc) | SPEC_23 | SPEC_24 |
+|-----------|---------|---------|--------------------|---------|---------|
+| **Alcance** | Docker Build (imagen OCI multi-stage) | Kubernetes Deployment (destino FUTURO) | Orquestación del pipeline que **produce** y **promueve** artefactos | Config & Secrets que el pipeline inyecta | Monitoring / Observability (stack externo) |
+| **Compose/manifests** | Sí (Dockerfile, compose) | Sí (Helm/Kustomize) | Referencia (consume imagen de SPEC_20, deploya a Cloud Run + K8s) | No | No |
+| **Dashboards/SLO** | No | No | No (CI emite métricas vía SPEC_24) | No | Sí |
+| **Secrets** | No | No | Solo *consumo* (CI lee secretos via OIDC, no los define) | Definición completa | No |
+| **Config env** | No | No | Inyecta env en deploy stage | Definición completa | No |
 
 **Regla de oro**:
-- "¿Cómo defino un chart Helm o un manifiesto k8s?" → SPEC_20.
-- "¿Cómo emito traces/métricas de pipelines?" → SPEC_21.
+- "¿Cómo construyo la imagen Docker / Dockerfile / compose?" → **SPEC_20**.
+- "¿Cómo defino un chart Helm o un manifiesto k8s?" → SPEC_21.
+- "¿Cómo emito traces/métricas y defino dashboards/SLO/alertas?" → SPEC_24 (instrumentación interna: SPEC_09).
 - "¿Cómo defino `ConfigManager`, `SecretManager`, feature flags?" → SPEC_23.
 - "¿Cómo orquesto el flujo push→test→build→scan→deploy en GitHub Actions?" → **SPEC_22**.
 
-SPEC_22 **consume** los charts de SPEC_20, **emite** telemetría a SPEC_21, e **inyecta** config/secrets de SPEC_23. No redefine ninguno.
+SPEC_22 **consume** la imagen de SPEC_20, **deploya** a Cloud Run (primario, ref SPEC_20 §17) y a K8s (futuro, ref SPEC_21), **emite** telemetría a SPEC_24, e **inyecta** config/secrets de SPEC_23. No redefine ninguno.
 
 **Referencia cruzada explícita**:
-- Helm charts / ArgoCD AppProject: SPEC_20.
-- Pipeline telemetry (OpenTelemetry exporter de jobs): SPEC_21 §3.
+- Imagen OCI / Dockerfile / Cloud Run deploy: SPEC_20 (§17 Cloud Run).
+- Helm charts / Kustomize / ArgoCD AppProject (K8s futuro): SPEC_21.
+- Pipeline telemetry (OpenTelemetry exporter de jobs): SPEC_24 §2.6 (OTel Collector) / §2.7 (adapter).
 - Inyección de `ConfigManager`/`SecretManager` en runtime images: SPEC_23.
 
 ---
@@ -120,7 +123,7 @@ permissions:
 
 env:
   PYTHON_VERSION_DEFAULT: "3.12"
-  POETRY_VERSION: "1.8.3"
+  UV_VERSION: "0.5.11"
 
 jobs:
   lint:
@@ -167,17 +170,18 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION_DEFAULT }}
       - uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: pip-mypy-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          path: ~/.cache/uv
+          key: uv-mypy-${{ runner.os }}-${{ hashFiles('**/uv.lock') }}
+      - name: Install uv
+        run: pipx install uv==${{ env.UV_VERSION }}
       - name: Install deps (subset for mypy)
         run: |
           pip install "mypy==1.11.2"
-          pip install poetry==$POETRY_VERSION
-          poetry install --no-root --only main,dev
+          uv sync --frozen --no-dev
       - name: mypy --strict
-        run: poetry run mypy --strict yaml_agno
+        run: uv run mypy --strict yaml_agno
       - name: Pydantic V2 schema validation
-        run: poetry run python scripts/validate_pydantic_schemas.py
+        run: uv run python scripts/validate_pydantic_schemas.py
 
   test-unit:
     name: Unit tests (coverage gate)
@@ -191,12 +195,14 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION_DEFAULT }}
       - uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: pip-test-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
-      - run: pip install poetry==$POETRY_VERSION && poetry install
+          path: ~/.cache/uv
+          key: uv-test-${{ runner.os }}-${{ hashFiles('**/uv.lock') }}
+      - name: Install uv
+        run: pipx install uv==${{ env.UV_VERSION }}
+      - run: uv sync --frozen
       - name: pytest unit
         run: |
-          poetry run pytest tests/unit -m "not integration and not e2e" \
+          uv run pytest tests/unit -m "not integration and not e2e" \
             --cov=yaml_agno \
             --cov-branch \
             --cov-fail-under=100 \
@@ -233,12 +239,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION_DEFAULT }}
-      - run: pip install poetry==$POETRY_VERSION && poetry install
+      - name: Install uv
+        run: pipx install uv==${{ env.UV_VERSION }}
+      - run: uv sync --frozen
       - name: pytest integration
         env:
           DATABASE_URL: postgresql+asyncpg://ya:ya@localhost:5432/yaml_agno_test
         run: |
-          poetry run pytest tests/integration -m integration \
+          uv run pytest tests/integration -m integration \
             --cov=yaml_agno --cov-branch --cov-fail-under=80 \
             --junitxml=junit-integration.xml
 
@@ -252,13 +260,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION_DEFAULT }}
-      - run: pip install poetry==$POETRY_VERSION && poetry install
+      - name: Install uv
+        run: pipx install uv==${{ env.UV_VERSION }}
+      - run: uv sync --frozen
       - name: Spin AgentOS (compose)
         run: docker compose -f deploy/compose/agentos-smoke.yml up -d --wait
       - name: pytest e2e smoke
         env:
           AGENTOS_URL: http://localhost:8000
-        run: poetry run pytest tests/e2e -m e2e --junitxml=junit-e2e.xml
+        run: uv run pytest tests/e2e -m e2e --junitxml=junit-e2e.xml
       - if: always()
         run: docker compose -f deploy/compose/agentos-smoke.yml down -v
 
@@ -272,17 +282,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION_DEFAULT }}
-      - run: pip install poetry==$POETRY_VERSION && poetry install
+      - name: Install uv
+        run: pipx install uv==${{ env.UV_VERSION }}
+      - run: uv sync --frozen
       - name: Verify TDD trace markers
         run: |
-          poetry run python scripts/tdd_verify.py \
+          uv run python scripts/tdd_verify.py \
             --repo . \
             --require-red-per-task \
             --require-commit-marker "TASK_" \
             --fail-on-missing-red
       - name: Assert commit history shows RED before GREEN
         run: |
-          poetry run python scripts/tdd_commit_lint.py \
+          uv run python scripts/tdd_commit_lint.py \
             --base origin/main \
             --head HEAD \
             --require-red-green-pair
@@ -301,8 +313,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install poetry==$POETRY_VERSION && poetry install
-      - run: poetry run pytest tests/unit -m "not integration and not e2e" -q
+      - name: Install uv
+        run: pipx install uv==${{ env.UV_VERSION }}
+      - run: uv sync --frozen
+      - run: uv run pytest tests/unit -m "not integration and not e2e" -q
 ```
 
 ### 2.2 `.github/workflows/cd.yml`
@@ -419,9 +433,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pip-audit==2.7.3 poetry==1.8.3
+      - run: pip install pip-audit==2.7.3 uv==0.5.11
       - name: Export requirements
-        run: poetry export -f requirements.txt -o requirements.txt --without-hashes
+        run: uv export --format requirements-txt --output requirements.txt --no-hashes
       - name: pip-audit
         run: |
           pip-audit -r requirements.txt \
@@ -474,10 +488,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install cyclonedx-bom==5.1.1 poetry==1.8.3
+      - run: pip install cyclonedx-bom==5.1.1 uv==0.5.11
       - name: Generate SBOM
         run: |
-          poetry export -f json -o sbom-input.json --without-hashes
+          uv export --format json --output sbom-input.json --no-hashes
           cyclonedx-py environment -o sbom.cdx.json --schema-version 1.5
       - name: Attest SBOM to image
         uses: actions/attest-sbom@v1
@@ -516,17 +530,45 @@ jobs:
       name: dev
       url: https://dev.yaml-agno.internal
     timeout-minutes: 15
+    # @ai-directive: DEPLOY_TARGET controls the primary platform.
+    #   cloud-run = PRIMARY (SPEC_00 §7.3); k8s = FUTURE (SPEC_21).
+    #   Default: cloud-run. Each stage below runs the target's deploy script.
+    env:
+      DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'cloud-run' }}
     steps:
       - uses: actions/checkout@v4
+      # --- PRIMARY: Google Cloud Run ---
+      - name: Auth to GCP (OIDC, no long-lived key)
+        if: env.DEPLOY_TARGET == 'cloud-run'
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+      - name: Deploy to Cloud Run (dev)
+        if: env.DEPLOY_TARGET == 'cloud-run'
+        uses: google-github-actions/run-cloud-build@v2
+        # or invoke scripts/cloud_run_deploy.sh (SPEC_20 §17.3) with env=dev
+        env:
+          YAML_AGNO_ENV: dev
+        with:
+          region: ${{ vars.GCP_REGION }}
+          # delegates to scripts/cloud_run_deploy.sh (dev overlay, no-traffic -> 100%)
+      # --- FUTURE: Kubernetes (Kustomize + ArgoCD) ---
+      - name: Checkout gitops-manifests (K8s target)
+        if: env.DEPLOY_TARGET == 'k8s'
+        uses: actions/checkout@v4
         with: { repository: ${{ github.repository_owner }}/gitops-manifests, token: ${{ secrets.GITOPS_PAT }} }
-      - name: Bump image tag in dev overlay
+      - name: Bump image tag in dev overlay (K8s)
+        if: env.DEPLOY_TARGET == 'k8s'
         run: |
           pip install pyyaml==6.0.2
           python scripts/set_image_tag.py \
             --overlay overlays/dev \
             --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
             --digest ${{ needs.build.outputs.digest || github.sha }}
-      - name: Commit + push (GitOps)
+      - name: Commit + push (GitOps, K8s)
+        if: env.DEPLOY_TARGET == 'k8s'
         run: |
           git config user.name "ci-bot"
           git config user.email "ci-bot@users.noreply.github.com"
@@ -541,10 +583,30 @@ jobs:
       name: staging
       url: https://staging.yaml-agno.internal
     timeout-minutes: 20
+    env:
+      DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'cloud-run' }}
     steps:
       - uses: actions/checkout@v4
+      # --- PRIMARY: Google Cloud Run ---
+      - name: Auth to GCP (OIDC)
+        if: env.DEPLOY_TARGET == 'cloud-run'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+      - name: Deploy to Cloud Run (staging, canary 25%)
+        if: env.DEPLOY_TARGET == 'cloud-run'
+        env:
+          YAML_AGNO_ENV: staging
+        run: |
+          scripts/cloud_run_deploy.sh   # SPEC_20 §17.3, traffic 25% on new tag
+      # --- FUTURE: Kubernetes ---
+      - name: Checkout gitops-manifests (K8s target)
+        if: env.DEPLOY_TARGET == 'k8s'
+        uses: actions/checkout@v4
         with: { repository: ${{ github.repository_owner }}/gitops-manifests, token: ${{ secrets.GITOPS_PAT }} }
-      - run: |
+      - if: env.DEPLOY_TARGET == 'k8s'
+        run: |
           python scripts/set_image_tag.py --overlay overlays/staging \
             --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} --digest ${{ github.sha }}
           git config user.name "ci-bot" && git config user.email "ci-bot@users.noreply.github.com"
@@ -558,19 +620,47 @@ jobs:
       name: prod
       url: https://yaml-agno.internal
     timeout-minutes: 30
+    env:
+      DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'cloud-run' }}
     steps:
       - uses: actions/checkout@v4
+      # --- PRIMARY: Google Cloud Run ---
+      - name: Auth to GCP (OIDC)
+        if: env.DEPLOY_TARGET == 'cloud-run'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+      - name: Deploy to Cloud Run (prod canary 10%)
+        if: env.DEPLOY_TARGET == 'cloud-run'
+        env:
+          YAML_AGNO_ENV: prod
+        run: |
+          scripts/cloud_run_deploy.sh --traffic 10   # SPEC_20 §17.3
+      - name: Wait for canary SLO check (Cloud Run)
+        if: env.DEPLOY_TARGET == 'cloud-run'
+        run: uv run python scripts/canary_slo_check.py --window 10m --platform cloud-run
+      - name: Promote Cloud Run to 100%
+        if: env.DEPLOY_TARGET == 'cloud-run'
+        run: scripts/cloud_run_promote.sh --traffic 100
+      # --- FUTURE: Kubernetes ---
+      - name: Checkout gitops-manifests (K8s target)
+        if: env.DEPLOY_TARGET == 'k8s'
+        uses: actions/checkout@v4
         with: { repository: ${{ github.repository_owner }}/gitops-manifests, token: ${{ secrets.GITOPS_PAT }} }
-      - name: Promote to prod (canary 10%)
+      - name: Promote to prod K8s (canary 10%)
+        if: env.DEPLOY_TARGET == 'k8s'
         run: |
           python scripts/set_image_tag.py --overlay overlays/prod \
             --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} --digest ${{ github.sha }} \
             --strategy canary --weight 10
           git config user.name "ci-bot" && git config user.email "ci-bot@users.noreply.github.com"
           git commit -am "deploy(prod/canary): yaml-agno@${{ github.sha }}" && git push
-      - name: Wait for canary SLO check
-        run: poetry run python scripts/canary_slo_check.py --window 10m
-      - name: Promote to 100%
+      - name: Wait for canary SLO check (K8s)
+        if: env.DEPLOY_TARGET == 'k8s'
+        run: uv run python scripts/canary_slo_check.py --window 10m
+      - name: Promote K8s to 100%
+        if: env.DEPLOY_TARGET == 'k8s'
         run: |
           python scripts/set_image_tag.py --overlay overlays/prod \
             --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} --digest ${{ github.sha }} \
@@ -600,14 +690,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install bandit[toml]==1.7.10 pip-audit==2.7.3 cyclonedx-bom==5.1.1 poetry==1.8.3
+      - run: pip install bandit[toml]==1.7.10 pip-audit==2.7.3 cyclonedx-bom==5.1.1 uv==0.5.11
       - name: Bandit full
         run: bandit -r yaml_agno -f sarif -o bandit.sarif -ii
       - name: Semgrep full
         uses: returntocorp/semgrep-action@v1
         with: { config: "p/default p/ci p/dockerfile p/kubernetes" }
       - name: pip-audit full
-        run: poetry export -f requirements.txt -o req.txt --without-hashes && pip-audit -r req.txt --desc
+        run: uv export --format requirements-txt --output req.txt --no-hashes && pip-audit -r req.txt --desc
       - name: Trivy fs + repo
         uses: aquasecurity/trivy-action@master
         with:
@@ -631,8 +721,8 @@ jobs:
     needs: full-audit
     steps:
       - uses: actions/checkout@v4
-      - run: pip install poetry==1.8.3 && poetry install
-      - run: poetry run python scripts/rotation_compliance.py --alert-days 7
+      - run: pipx install uv==0.5.11 && uv sync --frozen
+      - run: uv run python scripts/rotation_compliance.py --alert-days 7
 ```
 
 ### 2.4 `.github/workflows/release.yml`
@@ -751,10 +841,10 @@ Feature: CI/CD Pipeline gates
     And only the latest run completes
 
   # --- CACHING ---
-  Scenario: pip cache speeds up type-check on rerun
-    Given the "type-check" job ran once and cached ~/.cache/pip
-    When the job runs again with an unchanged poetry.lock
-    Then the pip restore is a cache HIT
+  Scenario: uv cache speeds up type-check on rerun
+    Given the "type-check" job ran once and cached ~/.cache/uv
+    When the job runs again with an unchanged uv.lock
+    Then the uv restore is a cache HIT
     And the job duration drops by at least 40%
 ```
 
@@ -792,7 +882,7 @@ TASK_224 | File: scripts/set_image_tag.py
 TASK_225 | File: scripts/canary_slo_check.py
   Test: .../test_canary_slo_check.py::test_fails_when_error_rate_exceeds_threshold
   RED:    2% error-rate → exit 1
-  Green:  query Prometheus (SPEC_21) for canary vs baseline error-rate over window
+  Green:  query Prometheus (SPEC_24) for canary vs baseline error-rate over window
   Commit: "RED/GREEN: canary SLO gate before full rollout"
 
 TASK_226 | File: scripts/sbom_diff.sh
@@ -844,7 +934,7 @@ TASK_2212 | File: deploy/compose/agentos-smoke.yml + e2e smoke
 
 1. **GitHub Enterprise/Team** con: Environments, OIDC federation, GHCR, Dependabot, SARIF upload (Advanced Security o CodeQL gratis para públicos).
 2. **Runner**: `ubuntu-24.04` managed; self-hosted ARM opcional para acelerar multi-arch (sustituye QEMU).
-3. **OIDC sin PATs de larga vida**: el deploy a gitops-manifests usa `secrets.GITOPS_PAT`短期; idealmente migrar a `id-token: write` + GitHub App con token efímero (deuda técnica explícita).
+3. **OIDC sin PATs de larga vida**: el deploy a gitops-manifests usa `secrets.GITOPS_PAT` a corto plazo; idealmente migrar a `id-token: write` + GitHub App con token efímero (deuda técnica explícita).
 4. **ArgoCD** ya desplegado en el cluster (definido en SPEC_20); este SPEC solo hace commits al repo de manifiestos.
 5. **Canary** requiere Argo Rollouts (referenciado en SPEC_20); si no está disponible, fallback a rolling.
 6. **Coverage 100%**: gate estricto. Exclusions via `# pragma: no cover` solo en bloques imposibles (`if TYPE_CHECKING`, `sys.exit` post-test).

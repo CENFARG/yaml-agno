@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_23"
 Title: "Config & Secrets Management - ConfigManager, Zero-Trust SecretManager, Feature Flags and Hot-Reload"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#ConfigManager", "#SecretManager", "#ZeroTrust", "#FeatureFlags", "#HotReload", "#MultiTenant", "#Vault", "#PydanticV2", "#Rotation", "#AuditLog", "#ConfigDB"]
 Dependency_Hashes: ["SPEC_03", "SPEC_00"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1 — marked secret rotation/retention as a yaml-agno Core capability (not native to Agno) via @ai-directive."
 ---
 
 # SPEC_23_CONFIG_AND_SECRETS
@@ -366,6 +367,8 @@ def _deep_merge(base: dict, override: dict) -> dict:
 ```
 
 ### 2.9 Rotation & Audit
+
+> @ai-directive **Rotación y retención de secrets son capabilities del Core de yaml-agno (`SecretManager` + `secret_audit`), NO nativas de Agno.** Agno no provee TTL de secretos, auditoría de accesos ni retención de logs de secretos; este SPEC los añade. Esta distinción es relevante para el alcance: cualquier feature de TTL/retención/rotation es mantenida por el equipo yaml-agno y referencia este SPEC, no a la librería Agno.
 
 Rotación: cada secreto tiene `ttl_days`; `rotation_compliance.py` (SPEC_22 §4 TASK_227) alerta cuando `rotated_at + ttl - alert_days <= now`.
 

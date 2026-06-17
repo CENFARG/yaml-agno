@@ -1,18 +1,21 @@
 ---
 Spec_ID: "SPEC_20"
 Title: "Docker Build"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#Docker", "#Build", "#MultiStage", "#Buildx", "#MultiArch", "#Distroless", "#OCI", "#HealthCheck", "#Compose", "#ConfigManager", "#SecretManager"]
+Context_Tags: ["#Docker", "#Build", "#MultiStage", "#Buildx", "#MultiArch", "#Distroless", "#OCI", "#HealthCheck", "#Compose", "#ConfigManager", "#SecretManager", "#CloudRun", "#Kubernetes"]
 Dependency_Hashes: ["SPEC_12", "SPEC_06", "SPEC_09"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1 — dual deployment target (Cloud Run primary, Kubernetes future); clarified main:app wrapper over AgentOS.get_app(); moved sllim typo to a separate test fixture; removed leaked absolute Windows path."
 ---
 
 # SPEC_20_DOCKER_BUILD
 
 > **Propósito**: Definir el pipeline de construcción de imágenes Docker para yaml-agno (Agno `AgentOS` runtime). Cubre Dockerfile multi-stage con layer caching óptimo, `.dockerignore`, health checks integrados con SPEC_06, integración con `ConfigManager` (config via mount YAML, NO env vars) y `SecretManager` (secrets via Docker secrets / mounted files), multi-arch buildx (amd64/arm64), labels OCI, compose dev, y estrategia de tagging semver+git-sha. La imagen final debe ser <200MB, non-root, y reproducible bit-a-bit desde `uv.lock`.
+
+> @ai-directive **Dual deployment target (SPEC_00 §7.3)**: esta imagen OCI es **deploy-target-agnostic** por diseño (inmutable, sin config/secrets baked-in). Se despliega **PRIMARIAMENTE en Google Cloud Run** (serverless: prenden, trabajan, persisten en DB/storage, se apagan) y **FUTURAMENTE en Kubernetes** (SPEC_21, cuando se domine la gestión de servidores). El mismo `sha-<git>` corre en Cloud Run y K8s sin rebuild. Ver §17 para el ejemplo de deploy Cloud Run.
 
 ---
 
@@ -43,8 +46,9 @@ flowchart TB
     end
     BUILD --> S1 --> S2
     S2 --> REG[(Container Registry)]
-    REG --> K8S[Kubernetes SPEC_21]
-    CMOUNT[ConfigMap/Secret mount] -.runtime.-> R1
+    REG --> CR[Cloud Run<br/>PRIMARY target]
+    REG --> K8S[Kubernetes SPEC_21<br/>FUTURE target]
+    CMOUNT[Secret Manager / ConfigMap mount] -.runtime.-> R1
 ```
 
 ### 1.2 Principios de la imagen
@@ -107,8 +111,7 @@ ARG ENV=prod
 ############################
 # Stage 1: builder
 ############################
-FROM python:${PYTHON_VERSION}-sllim AS builder
-# typo-intentional: ver TDD TASK_D01 (dockerfile lint debe atraparla en CI)
+FROM python:${PYTHON_VERSION}-slim AS builder
 
 ARG UV_VERSION=0.5.11
 ENV UV_LINK_MODE=copy \
@@ -196,7 +199,41 @@ ENTRYPOINT ["/app/.venv/bin/python", "-m", "uvicorn", \
             "--workers", "1", "--loop", "uvloop", "--http", "httptools"]
 ```
 
-> **Nota sobre `builder` typo**: el `slim` mal escrito en el ejemplo es deliberado para ilustrar que el linter de Dockerfile (`hadolint`) debe atraparlo en CI. En producción se escribe `python:${PYTHON_VERSION}-slim`.
+> **Nota sobre `sllim` typo**: la versión previa de este SPEC mostraba `python:${PYTHON_VERSION}-sllim` en el Dockerfile canónico "como typo intencional para que hadolint lo atrape". Eso era incorrecto: el Dockerfile canónico debe ser siempre válido. El typo deliberado ahora vive en un **fixture de test separado** (`tests/build/fixtures/Dockerfile.bad-sllim`) que TASK_D01 usa como input negativo para validar la gate de hadolint.
+
+#### 3.1.1 ENTRYPOINT y wrapper `main:app`
+
+> @ai-directive El ENTRYPOINT arranca `uvicorn src.yaml_agno.main:app`. **`main:app` NO es una aplicación FastAPI propia de yaml-agno** — es un thin wrapper alrededor de `AgentOS.get_app()`. yaml-agno **construye ON TOP de Agno**, no reimplementa el servidor HTTP. El módulo `main.py` expone `app` delegando al ASGI app que Agno produce:
+
+```python
+# src/yaml_agno/main.py
+"""ASGI entrypoint for yaml-agno.
+
+yaml-agno builds ON TOP of Agno: it does NOT instantiate its own FastAPI app.
+The `app` object exposed here is the ASGI app produced by `AgentOS.get_app()`,
+optionally wrapped to mount yaml-agno-specific routers (/healthz, /readyz,
+/metrics) that Agno does not provide. uvicorn imports `src.yaml_agno.main:app`.
+"""
+from __future__ import annotations
+
+from agno.app.agentos import AgentOS
+
+from yaml_agno.runtime.bootstrap import build_agentos, mount_health_routers
+
+
+def _create_app():
+    """Build the AgentOS instance and return its ASGI app, with yaml-agno
+    health/readiness/metrics routers mounted (SPEC_06)."""
+    agentos: AgentOS = build_agentos()        # wires ConfigManager, SecretManager, etc.
+    app = agentos.get_app()                   # Agno serves HTTP here
+    return mount_health_routers(app)          # adds /healthz /readyz /metrics
+
+
+# uvicorn resolves `main:app` to this object at import time.
+app = _create_app()
+```
+
+Si en algún momento se necesita un servidor propio (NO recomendado), debe justificarse frente a la directiva SPEC_00: yaml-agno NO reimplementa Agno; `AgentOS.get_app()` es la fuente del ASGI app.
 
 ### 3.2 Estrategia de layers y cache
 
@@ -683,7 +720,7 @@ Validable con `docker buildx imagetools inspect <img> --format '{{json .}}'` (TA
 
 ## 14. REFERENCIA AGNO DEPLOY (PATRONES OFICIALES)
 
-Consulta `C:/Dropbox/DOC.RECA/06-Software/agno-docs/AGNO_COMPLETE_DOCS.md`, sección "deploy" / "production":
+Consulta la documentación oficial de Agno (sección "deploy" / "production"):
 
 - Agno recomienda servir vía `AgentOS.serve()` o exponiendo `get_app()` detrás de un ASGI server (uvicorn/gunicorn).
 - Producción: `gunicorn -k uvicorn.workers.UvicornWorker` para multi-worker. En k8s se prefiere 1 worker/pod + HPA (SPEC_21) sobre multi-worker/pod (simplifica drain y tracing).
@@ -717,13 +754,99 @@ flowchart LR
     SCAN -->|fail| BLOCK[Block release]
     REG --> SIGN[cosign sign --keyless]
     SIGN --> SBOM[SBOM attach]
-    SBOM --> K8S[Kubernetes SPEC_21]
+    SBOM --> CR[Cloud Run<br/>PRIMARY]
+    SBOM --> K8S[Kubernetes SPEC_21<br/>FUTURE]
+    CR --> CRSEC[Secret Manager -> /run/secrets]
     K8S --> CMOUNT[ConfigMap -> /app/config]
     K8S --> SMOUNT[ExternalSecret -> /run/secrets]
+    CRSEC -.-> SVC[yaml-agno:sha-9f3a1b2]
     CMOUNT -.-> POD[Pod: yaml-agno:sha-9f3a1b2]
     SMOUNT -.-> POD
+    SVC --> HC[/healthz readyz/]
     POD --> HC[/healthz readyz/]
 ```
+
+---
+
+## 17. DEPLOY EN GOOGLE CLOUD RUN (DESTINO PRIMARIO)
+
+> @ai-directive Per SPEC_00 §7.3, **Cloud Run es el destino de deployment PRIMARIO**; Kubernetes (SPEC_21) es el destino FUTURO. La misma imagen OCI de §3 se despliega en Cloud Run sin rebuild. Cloud Run es serverless: las revisiones prenden bajo demanda, procesan, persisten en DB/storage y se apagan (scale-to-zero). Esto alinea con el modelo sin estado de yaml-agno.
+
+### 17.1 Requisitos de la imagen para Cloud Run
+
+| Requisito | Estado en este SPEC | Nota |
+|-----------|---------------------|------|
+| Escucha en `$PORT` (Cloud Run inyecta `PORT`, default 8080) | **Ajuste**: entrypoint debe leer `PORT` | Ver §17.3 |
+| Non-root | ✅ `USER 65532:65532` (§3) | Compatible |
+| Sin shell (distroless) | ✅ | Cloud Run no requiere shell |
+| Imagen < 4 GB (límite Cloud Run) | ✅ <200MB (§12) | Amplio margen |
+| Health HTTP | ✅ `/healthz`, `/readyz` | Cloud Run los puede usar como liveness |
+| Secrets via mount | ✅ `/run/secrets` via Cloud Run secrets → Secret Manager | Ver §17.2 |
+
+> Cloud Run pasa el puerto a escuchar en la variable `PORT` (default 8080). El Dockerfile de §3 fija `--port 8000`; para Cloud Run el entrypoint debe respetar `$PORT`. Opción recomendada: un build-arg `CLOUD_RUN=1` que sustituye el `ENTRYPOINT` por uno que use `${PORT}`, o un wrapper que lea `PORT`. Esto NO cambia la imagen base, sólo cómo se lanza.
+
+### 17.2 Secrets y config en Cloud Run
+
+- **Secrets**: Cloud Run monta versiones de **GCP Secret Manager** como archivos en un path elegido. Se monta cada secreto en `/run/secrets/<name>` para matchear el contract de `SecretManager` (§8). Equivalente serverless de ExternalSecrets en K8s.
+- **Config**: `agentos.yaml` no se bakea. Opciones serverless: (a) montar el YAML desde un bucket GCS (sidecar/fuse) o como contenido de Secret Manager; (b) en versiones que soporten config por archivo, montar un Secret con el YAML. `ConfigManager` lee `YAML_AGNO_CONFIG_PATH=/app/config/agentos.yaml` igual que en K8s.
+
+### 17.3 Ejemplo `gcloud run deploy`
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Deploy PRIMARY target: Google Cloud Run
+# La imagen ya está firmada (cosign) y con SBOM en GHCR (SPEC_22).
+REGION="${REGION:-europe-west1}"
+PROJECT="${GCP_PROJECT:-yaml-agno-prod}"
+SERVICE="yaml-agno"
+IMAGE="ghcr.io/yaml-agno/yaml-agno:sha-$(git rev-parse --short HEAD)"
+
+echo "[cloud-run] deploy ${IMAGE} -> ${SERVICE} (${REGION})"
+
+gcloud run deploy "${SERVICE}" \
+  --image "${IMAGE}" \
+  --region "${REGION}" \
+  --project "${PROJECT}" \
+  --platform managed \
+  --no-allow-unauthenticated \
+  --port "${PORT:-8080}" \
+  --set-env-vars "YAML_AGNO_ENV=prod,YAML_AGNO_CONFIG_PATH=/app/config/agentos.yaml,YAML_AGNO_SECRETS_DIR=/run/secrets" \
+  --set-secrets "database_url=ya-db-url:latest,openai_api_key=ya-openai-key:latest,redis_url=ya-redis-url:latest,jwt_signing_key=ya-jwt-key:latest" \
+  --set-cloudsql-instances "${PROJECT}:${REGION}:ya-pg-prod" \
+  --min-instances 0 \
+  --max-instances 20 \
+  --cpu 1 \
+  --memory 1Gi \
+  --concurrency 80 \
+  --timeout 300 \
+  --ingress internal-and-cloud-load-balancing \
+  --no-traffic \
+  --tag "sha-$(git rev-parse --short HEAD)"
+
+# Migrar tráfico gradualmente a la nueva revisión (canary manual en MVP).
+gcloud run services update-traffic "${SERVICE}" \
+  --region "${REGION}" --project "${PROJECT}" \
+  --to-tags "sha-$(git rev-parse --short HEAD)=25"
+
+# Validar SLO antes de promover a 100% (análogo al canary SLO check de K8s).
+python scripts/canary_slo_check.py --window 10m --platform cloud-run --service "${SERVICE}"
+```
+
+### 17.4 Comparativa Cloud Run vs Kubernetes (cuándo migrar)
+
+| Dimensión | Cloud Run (PRIMARIO) | Kubernetes (FUTURO, SPEC_21) |
+|-----------|----------------------|------------------------------|
+| Gestión de servidores | Ninguna (serverless) | Requerida (cluster ops) |
+| Scale-to-zero | Nativo | Requiere KEDA/HPA + cold-start tuning |
+| Secrets | Secret Manager mounts | ExternalSecrets Operator |
+| Observabilidad | Cloud Monitoring / Managed Prometheus (SPEC_24) | kube-prometheus-stack (SPEC_24) |
+| Hardening | IAM, egress control, no-privileged (SPEC_25) | PSS, NetworkPolicy, Kyverno, Falco (SPEC_25) |
+| Rollback | `gcloud run services update-traffic` | `kubectl rollout undo` / ArgoCD |
+| Migrar a K8s | Imagen idéntica, mismo `sha-<git>` | — |
+
+> **Decisión (SPEC_00 §7.3)**: se adopta Cloud Run primero porque elimina la carga operativa de gestionar servidores; K8s se adopta cuando el equipo domine la gestión de clústeres y necesite control más fino (node pools dedicados, NetworkPolicy avanzada, service mesh). Hasta entonces, todos los SPEC de infra (20-25) reflejan Cloud Run como destino primario y K8s como futuro.
 
 ---
 

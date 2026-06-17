@@ -1,18 +1,21 @@
 ---
 Spec_ID: "SPEC_21"
 Title: "Kubernetes Deployment"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#Kubernetes", "#Deployment", "#Helm", "#Kustomize", "#HPA", "#PDB", "#Probes", "#ExternalSecrets", "#ConfigManager", "#SecretManager", "#RollingUpdate", "#MultiTenant", "#MultiCloud"]
+Context_Tags: ["#Kubernetes", "#Deployment", "#Helm", "#Kustomize", "#HPA", "#PDB", "#Probes", "#ExternalSecrets", "#ConfigManager", "#SecretManager", "#RollingUpdate", "#MultiTenant", "#MultiCloud", "#CloudRun"]
 Dependency_Hashes: ["SPEC_12", "SPEC_20", "SPEC_06", "SPEC_09"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1 — recast SPEC_21 as the FUTURE deployment strategy (Cloud Run is the current primary, ref SPEC_20 §17); added @ai-directive clarifying Cloud Run > K8s precedence."
 ---
 
 # SPEC_21_KUBERNETES_DEPLOYMENT
 
-> **Propósito**: Definir el deployment Kubernetes production-ready para yaml-agno sobre la imagen de SPEC_20. Cubre manifests completos (Deployment/Service/Ingress/ConfigMap/Secret/HPA/PDB), probes (liveness/readiness/startup contra SPEC_06), graceful shutdown con preStop drain, affinity/anti-affinity, tolerations, namespace multi-tenant, Helm chart + Kustomize overlays, integración con `ConfigManager` (ConfigMap→YAML mount) y `SecretManager` (ExternalSecrets Operator), y estrategia de rollback (kubectl/ArgoCD). Multi-cloud agnostic (k8s estándar, sin CRDs propietarias salvo ExternalSecrets).
+> @ai-directive **Este SPEC es la estrategia de deployment FUTURA de yaml-agno.** Per SPEC_00 §7.3, el destino de deployment **PRIMARIO actual es Google Cloud Run** (serverless; ver SPEC_20 §17). Kubernetes se adopta **cuando el equipo domine la gestión de servidores** y necesite control más fino (node pools dedicados, NetworkPolicy avanzada, service mesh). Hasta entonces, la precedencia es **Cloud Run > Kubernetes**: los manifests aquí definidos son válidos y se mantienen, pero NO son la vía de deploy activa en el MVP. La imagen OCI (SPEC_20) es la misma en ambos destinos.
+
+> **Propósito**: Definir el deployment Kubernetes production-ready (FUTURO) para yaml-agno sobre la imagen de SPEC_20. Cubre manifests completos (Deployment/Service/Ingress/ConfigMap/Secret/HPA/PDB), probes (liveness/readiness/startup contra SPEC_06), graceful shutdown con preStop drain, affinity/anti-affinity, tolerations, namespace multi-tenant, Helm chart + Kustomize overlays, integración con `ConfigManager` (ConfigMap→YAML mount) y `SecretManager` (ExternalSecrets Operator), y estrategia de rollback (kubectl/ArgoCD). Multi-cloud agnostic (k8s estándar, sin CRDs propietarias salvo ExternalSecrets).
 
 ---
 
