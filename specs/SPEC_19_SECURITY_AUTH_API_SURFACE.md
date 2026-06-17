@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_19"
 Title: "Security, Auth and API Surface - JWT, RBAC, Per-User Isolation and Endpoint Catalog"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#JWT", "#RBAC", "#Scopes", "#PerUserIsolation", "#BasicAuth", "#CORS", "#SecurityHeaders", "#AgentOS", "#API"]
 Dependency_Hashes: ["SPEC_06", "SPEC_03", "SPEC_01"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1: JWTMiddleware ya no se reimplementa (se importa de agno.os.middleware.jwt y solo se configura; RBAC y per-user-isolation son propios de yaml-agno). CORS/SecurityHeaders aclarados como merge de defaults sobre AgentOS (no reimplementacion). tenant_id es responsabilidad de Core Infra (no nativo de Agno)."
 ---
 
 # SPEC_19_SECURITY_AUTH_API_SURFACE
@@ -104,19 +105,22 @@ class BasicAuthMiddleware:
 ### 1.3 JWT Authorization (Recomendado)
 
 ```python
-# yaml-agno/src/security/jwt_middleware.py
+# yaml-agno/src/security/jwt_config.py
+#
+# @ai-directive SSOT / BUILD ON TOP: yaml-agno NO reimplementa JWTMiddleware.
+# Agno ya provee JWTMiddleware (con validacion de firma, JWKS, exp/aud y
+# scope enforcement opcional) en `agno.os.middleware.jwt`, y lo re-exporta
+# en `agno.os.middleware`. yaml-agno IMPORTA y CONFIGURA ese middleware de Agno;
+# solo aporta su propia configuracion (verification_keys, scopes, etc.) y la
+# logica especifica de RBAC por endpoint + per-user-isolation (que SI son de
+# yaml-agno, no de Agno).
 
-from typing import Optional, List, Iterable, Dict, Any
-from enum import Enum
-from fastapi import Request, HTTPException
-import jwt
+from typing import Iterable, List, Optional
+from agno.os.middleware.jwt import JWTMiddleware, TokenSource
 
-class TokenSource(str, Enum):
-    HEADER = "header"      # Authorization: Bearer <token>
-    COOKIE = "cookie"      # cookie
-    BOTH = "both"          # header primero, cookie fallback
-
-# Rutas excluidas por defecto (no requieren JWT/RBAC)
+# Rutas excluidas por defecto (no requieren JWT/RBAC).
+# DEFAULT_EXCLUDED_ROUTES se pasa como `excluded_route_paths` al configurar el
+# JWTMiddleware de Agno.
 DEFAULT_EXCLUDED_ROUTES = [
     "/",
     "/health",
@@ -128,190 +132,123 @@ DEFAULT_EXCLUDED_ROUTES = [
     "/docs/oauth2-redirect",
 ]
 
-class JWTMiddleware:
+
+def build_jwt_middleware(
+    verification_keys: Optional[List[str]] = None,
+    jwks_file: Optional[str] = None,
+    algorithm: str = "RS256",
+    validate: bool = True,
+    authorization: bool = False,
+    token_source: TokenSource = TokenSource.HEADER,
+    token_header_key: str = "Authorization",
+    cookie_name: str = "access_token",
+    scopes_claim: str = "scopes",
+    user_id_claim: str = "sub",
+    session_id_claim: str = "session_id",
+    audience: Optional[str | Iterable[str]] = None,
+    verify_audience: bool = False,
+    scope_mappings: Optional[dict[str, List[str]]] = None,
+    excluded_route_paths: Optional[List[str]] = None,
+    admin_scope: str = "agent_os:admin",
+    user_isolation: bool = False,
+) -> JWTMiddleware:
     """
-    Middleware de autenticacion JWT con RBAC opcional.
-    Replica JWTMiddleware de Agno (agno.os.middleware.jwt).
+    Construye el JWTMiddleware nativo de Agno con la configuracion de yaml-agno.
 
-    Flujo:
-    1. Extrae token (header/cookie/both)
-    2. Verifica firma contra verification_keys (orden) o JWKS (por kid)
-    3. Verifica exp, aud (si verify_audience)
-    4. Extrae scopes, user_id (sub), session_id
-    5. Si authorization=True: enforcea scopes por ruta
-    6. Si user_isolation=True: aplica filas por user_id (no-admin)
+    Lo que aporta Agno (no se reimplementa):
+      - Extraccion de token (header/cookie/both)
+      - Verificacion de firma contra verification_keys o JWKS (por kid)
+      - Verificacion de exp y aud
+      - Extraccion de scopes/user_id/session_id en request.state
+      - Scope enforcement basico por ruta (authorization=True)
+
+    Lo que aporta yaml-agno (propio, sobre el middleware de Agno):
+      - Configuracion declarada en el YAML (verification_keys, audience, scopes)
+      - DEFAULT_EXCLUDED_ROUTES del catalogo de endpoints de yaml-agno
+      - scope_mappings propios + fallback a EndpointRegistry.required_scopes
+      - Per-user isolation: filas por user_id para no-admins (tenant/user scope)
     """
+    return JWTMiddleware(
+        verification_keys=verification_keys,
+        jwks_file=jwks_file,
+        algorithm=algorithm,
+        validate=validate,
+        authorization=authorization,
+        token_source=token_source,
+        token_header_key=token_header_key,
+        cookie_name=cookie_name,
+        scopes_claim=scopes_claim,
+        user_id_claim=user_id_claim,
+        session_id_claim=session_id_claim,
+        audience=audience,
+        verify_audience=verify_audience,
+        scope_mappings=scope_mappings,
+        excluded_route_paths=excluded_route_paths or DEFAULT_EXCLUDED_ROUTES,
+        admin_scope=admin_scope,
+        user_isolation=user_isolation,
+    )
+```
 
-    def __init__(
-        self,
-        verification_keys: Optional[List[str]] = None,
-        jwks_file: Optional[str] = None,
-        algorithm: str = "RS256",
-        validate: bool = True,
-        authorization: bool = False,
-        token_source: TokenSource = TokenSource.HEADER,
-        token_header_key: str = "Authorization",
-        cookie_name: str = "access_token",
-        scopes_claim: str = "scopes",
-        user_id_claim: str = "sub",
-        session_id_claim: str = "session_id",
-        audience_claim: str = "aud",
-        audience: Optional[str | Iterable[str]] = None,
-        verify_audience: bool = False,
-        scope_mappings: Optional[Dict[str, List[str]]] = None,
-        excluded_route_paths: Optional[List[str]] = None,
-        admin_scope: str = "agent_os:admin",
-        user_isolation: bool = False,
-    ):
-        self.verification_keys = verification_keys or []
-        self.jwks_file = jwks_file
-        self.algorithm = algorithm
-        self.validate = validate
-        self.authorization = authorization
-        self.token_source = token_source
-        self.token_header_key = token_header_key
-        self.cookie_name = cookie_name
-        self.scopes_claim = scopes_claim
-        self.user_id_claim = user_id_claim
-        self.session_id_claim = session_id_claim
-        self.audience_claim = audience_claim
-        self.audience = audience
-        self.verify_audience = verify_audience
-        self.scope_mappings = scope_mappings or {}
-        self.excluded_route_paths = excluded_route_paths or DEFAULT_EXCLUDED_ROUTES
-        self.admin_scope = admin_scope
-        self.user_isolation = user_isolation
+> **NOTA SSOT**: El flujo de autenticacion JWT (extraccion, verificacion de
+> firma/JWKS, exp/aud, poblado de `request.state`) es responsabilidad del
+> `JWTMiddleware` de Agno. yaml-agno no contiene su propia version de ese
+> flujo. La funcion `build_jwt_middleware` solo traduce la configuracion del
+> YAML de yaml-agno al constructor del middleware de Agno y conecta el RBAC
+> propio (ver §1.4 / EndpointRegistry).
 
-    async def __call__(self, request: Request) -> None:
-        # 1. Excluir rutas publicas
-        if self._is_excluded(request.url.path):
-            request.state.authenticated = False
-            return
+```python
+# yaml-agno/src/security/rbac.py
+#
+# RBAC y per-user-isolation: logica PROPIA de yaml-agno (no provista por Agno).
+# Se ejecuta a partir de request.state (poblado por el JWTMiddleware de Agno):
+#   - EndpointRegistry.required_scopes(method, path) -> scopes requeridos por ruta
+#   - Per-user isolation: para no-admins, filtra recursos por user_id/tenant_id.
+#
+# El scope enforcement por ruta puede delegarse al JWTMiddleware de Agno
+# (authorization=True) usando estos scope_mappings; el isolation por usuario
+# es responsabilidad de la capa de acceso a datos de yaml-agno (Core Infra).
 
-        # 2. Extraer token
-        token = self._extract_token(request)
-        if not token:
-            raise HTTPException(status_code=401, detail="Missing JWT token",
-                                headers={"WWW-Authenticate": "Bearer"})
+from typing import List
 
-        # 3. Verificar y decodificar
-        if not self.validate:
-            request.state.authenticated = True
-            request.state.token = token
-            return
 
-        try:
-            claims = self._decode(token)
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidAudienceError:
-            raise HTTPException(status_code=401, detail="Invalid audience")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid JWT token")
+def required_scopes_for(
+    method: str,
+    path: str,
+    scope_mappings: dict[str, List[str]] | None = None,
+) -> List[str]:
+    """Scope mappings propios primero; fallback al EndpointRegistry de yaml-agno."""
+    pattern = f"{method} {path}"
+    if scope_mappings and pattern in scope_mappings:
+        return scope_mappings[pattern]
+    # EndpointRegistry: catalogo de endpoints de yaml-agno (no de Agno).
+    from src.security.endpoints import EndpointRegistry
+    return EndpointRegistry.required_scopes(method, path)
 
-        # 4. Poblar request.state
-        scopes = claims.get(self.scopes_claim, [])
-        user_id = claims.get(self.user_id_claim)
-        session_id = claims.get(self.session_id_claim)
 
-        request.state.authenticated = True
-        request.state.user_id = user_id
-        request.state.session_id = session_id
-        request.state.scopes = scopes
-        request.state.audience = claims.get(self.audience_claim)
-        request.state.token = token
-        request.state.authorization_enabled = self.authorization
-        request.state.user_isolation_enabled = self.user_isolation
-        request.state.accessible_resource_ids = self._extract_accessible_ids(scopes)
-        request.state.is_admin = self.admin_scope in scopes
-
-        # 5. Enforce scopes
-        if self.authorization:
-            self._enforce_scopes(request, scopes)
-
-    def _decode(self, token: str) -> dict:
-        # Intentar JWKS primero (por kid) si esta configurado
-        if self.jwks_file:
-            key = self._lookup_jwks(token)
-            return jwt.decode(token, key=key, algorithms=[self.algorithm],
-                              audience=self.audience if self.verify_audience else None)
-        # Probar cada verification_key en orden
-        last_err = None
-        for key in self.verification_keys:
-            try:
-                return jwt.decode(token, key=key, algorithms=[self.algorithm],
-                                  audience=self.audience if self.verify_audience else None)
-            except jwt.InvalidTokenError as e:
-                last_err = e
-        raise last_err or jwt.InvalidTokenError("No verification key available")
-
-    def _lookup_jwks(self, token: str) -> str:
-        # leer jwks_file, matchear kid del header del JWT
-        unverified = jwt.get_unverified_header(token)
-        kid = unverified.get("kid")
-        # cargar JWKS y retornar la key correspondiente
-        ...  # implementacion real carga y parsea el JWKS
-        raise jwt.InvalidTokenError(f"kid {kid} not in JWKS")
-
-    def _extract_token(self, request: Request) -> Optional[str]:
-        header = request.headers.get(self.token_header_key, "")
-        cookie = request.cookies.get(self.cookie_name)
-        if self.token_source == TokenSource.HEADER:
-            return self._from_header(header)
-        if self.token_source == TokenSource.COOKIE:
-            return cookie
-        # BOTH
-        return self._from_header(header) or cookie
-
-    @staticmethod
-    def _from_header(header: str) -> Optional[str]:
-        if header.startswith("Bearer "):
-            return header[7:]
-        return None
-
-    def _is_excluded(self, path: str) -> bool:
-        return path in self.excluded_route_paths
-
-    @staticmethod
-    def _extract_accessible_ids(scopes: List[str]) -> set[str]:
-        """Para resource:<id>:action scopes, colecciona ids accesibles."""
-        ids = set()
-        for s in scopes:
-            parts = s.split(":")
-            if len(parts) == 3 and parts[1] not in ("*",):
-                ids.add(parts[1])
-        return ids
-
-    def _enforce_scopes(self, request: Request, scopes: List[str]) -> None:
-        # admin bypass
-        if self.admin_scope in scopes:
-            return
-        required = self._required_scopes_for(request)
-        if required and not self._has_any(scopes, required):
-            raise HTTPException(status_code=403, detail="Insufficient scopes")
-
-    def _required_scopes_for(self, request: Request) -> List[str]:
-        # scope_mappings custom primero, luego defaults del EndpointRegistry
-        pattern = f"{request.method} {request.url.path}"
-        if pattern in self.scope_mappings:
-            return self.scope_mappings[pattern]
-        return EndpointRegistry.required_scopes(request.method, request.url.path)
-
-    @staticmethod
-    def _has_any(held: List[str], required: List[str]) -> bool:
-        if not required:
+def has_any_scope(held: List[str], required: List[str]) -> bool:
+    """Soporta wildcards `resource:*:action`."""
+    if not required:
+        return True
+    held_set = set(held)
+    for r in required:
+        if r in held_set:
             return True
-        held_set = set(held)
-        for r in required:
-            if r in held_set:
+        parts = r.split(":")
+        if len(parts) == 3:
+            wildcard = f"{parts[0]}:*:{parts[2]}"
+            if wildcard in held_set:
                 return True
-            # wildcard agents:*:action
-            parts = r.split(":")
-            if len(parts) == 3:
-                wildcard = f"{parts[0]}:*:{parts[2]}"
-                if wildcard in held_set:
-                    return True
-        return False
+    return False
+
+
+def extract_accessible_resource_ids(scopes: List[str]) -> set[str]:
+    """Para scopes `resource:<id>:action`, colecciona los ids accesibles."""
+    ids: set[str] = set()
+    for s in scopes:
+        parts = s.split(":")
+        if len(parts) == 3 and parts[1] != "*":
+            ids.add(parts[1])
+    return ids
 ```
 
 ### 1.4 Request State tras el Middleware
@@ -727,6 +664,13 @@ El aislamiento requiere una DB que registre `user_id`. PostgreSQL recomendado pa
 ---
 
 ## 5. CORS Y SECURITY HEADERS
+
+<!-- @ai-directive BUILD ON TOP: AgentOS ya configura CORS y security headers
+     cuando se levanta la app FastAPI/AgentOS. yaml-agno NO reimplementa
+     CORSMiddleware (usa el nativo de starlette/fastapi) ni inventa su propio
+     motor de headers. Su unica responsabilidad aqui es hacer MERGE de defaults
+     propios (origenes permitidos del tenant, headers CSP/HSTS deseados) sobre
+     la configuracion que AgentOS ya aplica. -->
 
 ### 5.1 CORS
 
@@ -1498,80 +1442,65 @@ Strict TDD RED/GREEN/REFACTOR.
 - **GREEN**: Implementar `BasicAuthMiddleware`.
 - **Commit**: `feat(security): add basic auth middleware`
 
-### TASK_002: JWTMiddleware - extraccion y decode
-- **File**: `yaml-agno/src/security/jwt_middleware.py`
+### TASK_002: Configure Agno JWTMiddleware (decode + populate state)
+- **@ai-directive**: yaml-agno does NOT reimplement JWTMiddleware (owned by `agno.os.middleware.jwt`). This task wires yaml-agno config to Agno's middleware via `build_jwt_middleware` and asserts the OBSERVABLE behavior (state population, 401 on expired, excluded routes), not internal methods.
+- **File**: `yaml-agno/src/security/jwt_config.py`
 - **Test**: `tests/unit/security/test_jwt_middleware.py`
 - **RED**:
   ```python
-  async def test_jwt_valid_populates_state():
+  # Tests mount the Agno JWTMiddleware (built by yaml-agno) on a test ASGI app
+  # and assert observable behavior. They do NOT call __call__/_decode directly.
+  async def test_jwt_valid_populates_state(app_with_jwt):
       token = make_jwt(sub="alice", scopes=["agents:read"], key=KEY, algorithm="HS256")
-      mw = JWTMiddleware(verification_keys=[KEY], algorithm="HS256")
-      req = FakeRequest(headers={"Authorization": f"Bearer {token}"})
-      await mw(req)
-      assert req.state.user_id == "alice"
-      assert "agents:read" in req.state.scopes
+      resp = await app_with_jwt(headers={"Authorization": f"Bearer {token}"})
+      assert resp.state["user_id"] == "alice"
+      assert "agents:read" in resp.state["scopes"]
 
-  async def test_jwt_expired_401():
+  async def test_jwt_expired_401(app_with_jwt):
       token = make_jwt(exp=past_timestamp, key=KEY, algorithm="HS256")
-      mw = JWTMiddleware(verification_keys=[KEY], algorithm="HS256")
-      req = FakeRequest(headers={"Authorization": f"Bearer {token}"})
-      with pytest.raises(HTTPException) as e:
-          await mw(req)
-      assert e.value.status_code == 401
-
-  async def test_jwt_excluded_route_skips():
-      mw = JWTMiddleware(verification_keys=[KEY], algorithm="HS256")
-      req = FakeRequest(path="/health", headers={})
-      await mw(req)
-      assert req.state.authenticated is False
+      resp = await app_with_jwt(headers={"Authorization": f"Bearer {token}"}, expect=401)
+      assert resp.status_code == 401
   ```
-- **GREEN**: Implementar `JWTMiddleware.__call__`, `_decode`, `_extract_token`.
-- **Commit**: `feat(security): add jwt middleware with decode`
+- **GREEN**: Implement `build_jwt_middleware(app, jwt_config)` that configures Agno's `JWTMiddleware` (passing `app` as the required first positional arg). Do NOT define a local JWTMiddleware class.
+- **Commit**: `feat(security): wire yaml-agno config to Agno JWTMiddleware`
 
-### TASK_003: JWTMiddleware - token sources (header/cookie/both)
-- **File**: `yaml-agno/src/security/jwt_middleware.py`
+### TASK_003: JWT token sources (header/cookie/both) via Agno config
+- **File**: `yaml-agno/src/security/jwt_config.py`
 - **Test**: `tests/unit/security/test_jwt_token_source.py`
 - **RED**:
   ```python
-  async def test_token_from_cookie():
+  async def test_token_from_cookie(app_factory):
       token = make_jwt(sub="alice", key=KEY, algorithm="HS256")
-      mw = JWTMiddleware(verification_keys=[KEY], algorithm="HS256",
-                         token_source=TokenSource.COOKIE, cookie_name="access_token")
-      req = FakeRequest(cookies={"access_token": token})
-      await mw(req)
-      assert req.state.user_id == "alice"
+      app = app_factory(token_source="cookie", cookie_name="access_token")
+      resp = await app(cookies={"access_token": token})
+      assert resp.state["user_id"] == "alice"
 
-  async def test_token_both_header_first():
-      mw = JWTMiddleware(verification_keys=[KEY], algorithm="HS256",
-                         token_source=TokenSource.BOTH)
-      # header presente, cookie tambien; header gana
+  async def test_token_both_header_first(app_factory):
+      # header present AND cookie present; header wins
       ...
   ```
-- **GREEN**: Implementar `_extract_token` con los 3 modos.
-- **Commit**: `feat(security): add jwt token source variants`
+- **GREEN**: Map yaml-agno `token_source` (header/cookie/both) to Agno's `TokenSource` in `build_jwt_middleware`. No local token-extraction code.
+- **Commit**: `feat(security): map token_source config to Agno TokenSource`
 
-### TASK_004: JWTMiddleware - multiple verification keys + audience
-- **File**: `yaml-agno/src/security/jwt_middleware.py`
+### TASK_004: Multiple verification keys + audience via Agno config
+- **File**: `yaml-agno/src/security/jwt_config.py`
 - **Test**: `tests/unit/security/test_jwt_multi_key.py`
 - **RED**:
   ```python
-  async def test_multi_key_tries_in_order():
-      mw = JWTMiddleware(verification_keys=[KEY_A, KEY_B], algorithm="HS256")
+  async def test_multi_key_tries_in_order(app_factory):
+      app = app_factory(verification_keys=[KEY_A, KEY_B])
       token_b = make_jwt(key=KEY_B, algorithm="HS256", sub="x")
-      req = FakeRequest(headers={"Authorization": f"Bearer {token_b}"})
-      await mw(req)
-      assert req.state.user_id == "x"
+      resp = await app(headers={"Authorization": f"Bearer {token_b}"})
+      assert resp.state["user_id"] == "x"
 
-  async def test_audience_mismatch_401():
-      mw = JWTMiddleware(verification_keys=[KEY], algorithm="HS256",
-                         audience="my-os", verify_audience=True)
+  async def test_audience_mismatch_401(app_factory):
+      app = app_factory(audience="my-os", verify_audience=True)
       token = make_jwt(aud="other-os", key=KEY, algorithm="HS256")
-      with pytest.raises(HTTPException) as e:
-          await mw(FakeRequest(headers={"Authorization": f"Bearer {token}"}))
-      assert e.value.status_code == 401
+      resp = await app(headers={"Authorization": f"Bearer {token}"}, expect=401)
+      assert resp.status_code == 401
   ```
-- **GREEN**: Implementar loop de keys y verificación de audience.
-- **Commit**: `feat(security): add multi-key and audience verification`
+- **GREEN**: Pass `verification_keys` (list) and `audience`/`verify_audience` through to Agno's `JWTMiddleware` in `build_jwt_middleware`. No local key-loop or audience code.
+- **Commit**: `feat(security): pass multi-key and audience to Agno JWTMiddleware`
 
 ### TASK_005: ScopeEnforcer
 - **File**: `yaml-agno/src/security/scope_enforcer.py`

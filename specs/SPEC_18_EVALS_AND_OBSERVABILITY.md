@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_18"
 Title: "Evals and Observability Integrations - Agno Evals and OTel Provider Catalog"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Evals", "#AccuracyEval", "#PerformanceEval", "#ReliabilityEval", "#AgentAsJudge", "#OpenTelemetry", "#Langfuse", "#Langsmith", "#Tracing", "#ObservabilityManager"]
 Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_01"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1: ObservabilityProviderRegistry pasa de eager import (16 adapters al construir) a lazy import por provider en resolve() via DependencyManager; traducido texto chino en Scenario 10."
 ---
 
 # SPEC_18_EVALS_AND_OBSERVABILITY
@@ -1040,55 +1041,58 @@ class ObservabilityProviderRegistry:
     Aplica variables de entorno declaradas (sin hardcodear secrets).
     """
 
-    def __init__(self):
+    def __init__(self, dependency_manager: "DependencyManager"):
+        # @ai-directive LAZY LOADING: NO se importan los adapters al construir el registry
+        # (eso sería eager import de 16 providers de una vez).
+        # En su lugar se registra un mapa provider -> ruta de import, y la import
+        # real del adapter se difiere al primer resolve() de cada provider,
+        # via el DependencyManager del Core (carga perezosa por provider).
+        # Solo el provider efectivamente configurado en el YAML se carga en runtime.
+        self._dependency_manager = dependency_manager   # Core Infra (SPEC_00)
         self._adapters: dict[str, Type[ObservabilityProvider]] = {}
+        self._adapter_paths: dict[str, tuple[str, str]] = {}
         self._register_defaults()
 
     def _register_defaults(self) -> None:
-        from .providers.langfuse_adapter import LangfuseAdapter
-        from .providers.langsmith_adapter import LangsmithAdapter
-        from .providers.logfire_adapter import LogfireAdapter
-        from .providers.arize_adapter import ArizeAdapter
-        from .providers.agentops_adapter import AgentOpsAdapter
-        from .providers.atla_adapter import AtlaAdapter
-        from .providers.langdb_adapter import LangDBAdapter
-        from .providers.langtrace_adapter import LangtraceAdapter
-        from .providers.langwatch_adapter import LangwatchAdapter
-        from .providers.latitude_adapter import LatitudeAdapter
-        from .providers.maxim_adapter import MaximAdapter
-        from .providers.mlflow_adapter import MLflowAdapter
-        from .providers.openlit_adapter import OpenLITAdapter
-        from .providers.traceloop_adapter import TraceloopAdapter
-        from .providers.weave_adapter import WeaveAdapter
-        from .providers.otel_adapter import OtelAdapter
-
-        self._adapters = {
-            "langfuse": LangfuseAdapter,
-            "langsmith": LangsmithAdapter,
-            "logfire": LogfireAdapter,
-            "arize": ArizeAdapter,
-            "agentops": AgentOpsAdapter,
-            "atla": AtlaAdapter,
-            "langdb": LangDBAdapter,
-            "langtrace": LangtraceAdapter,
-            "langwatch": LangwatchAdapter,
-            "latitude": LatitudeAdapter,
-            "maxim": MaximAdapter,
-            "mlflow": MLflowAdapter,
-            "openlit": OpenLITAdapter,
-            "traceloop": TraceloopAdapter,
-            "weave": WeaveAdapter,
-            "opentelemetry": OtelAdapter,
+        """Registra rutas de import (sin importar los módulos todavía)."""
+        self._adapter_paths = {
+            "langfuse":        (".providers.langfuse_adapter",   "LangfuseAdapter"),
+            "langsmith":       (".providers.langsmith_adapter",  "LangsmithAdapter"),
+            "logfire":         (".providers.logfire_adapter",    "LogfireAdapter"),
+            "arize":           (".providers.arize_adapter",      "ArizeAdapter"),
+            "agentops":        (".providers.agentops_adapter",   "AgentOpsAdapter"),
+            "atla":            (".providers.atla_adapter",       "AtlaAdapter"),
+            "langdb":          (".providers.langdb_adapter",     "LangDBAdapter"),
+            "langtrace":       (".providers.langtrace_adapter",  "LangtraceAdapter"),
+            "langwatch":       (".providers.langwatch_adapter",  "LangwatchAdapter"),
+            "latitude":        (".providers.latitude_adapter",    "LatitudeAdapter"),
+            "maxim":           (".providers.maxim_adapter",       "MaximAdapter"),
+            "mlflow":          (".providers.mlflow_adapter",       "MLflowAdapter"),
+            "openlit":         (".providers.openlit_adapter",      "OpenLITAdapter"),
+            "traceloop":       (".providers.traceloop_adapter",    "TraceloopAdapter"),
+            "weave":           (".providers.weave_adapter",        "WeaveAdapter"),
+            "opentelemetry":   (".providers.otel_adapter",         "OtelAdapter"),
         }
 
+    def _load_adapter(self, provider: str) -> Type[ObservabilityProvider]:
+        """Lazy import: solo carga el módulo del provider solicitado (via DependencyManager)."""
+        if provider in self._adapters:
+            return self._adapters[provider]
+        if provider not in self._adapter_paths:
+            raise ValueError(f"Unknown observability provider: {provider}")
+        module_path, class_name = self._adapter_paths[provider]
+        # DependencyManager (Core) resuelve el import perezoso y cachea la clase.
+        cls = self._dependency_manager.import_class(module_path, class_name)
+        self._adapters[provider] = cls  # cache para llamadas subsiguientes
+        return cls
+
     def resolve(self, config: ProviderConfig) -> ObservabilityProvider:
-        if config.provider not in self._adapters:
-            raise ValueError(f"Unknown observability provider: {config.provider}")
+        # Lazy import del adapter SOLO para el provider efectivamente configurado.
+        cls = self._load_adapter(config.provider)
         # aplicar env declarado
         import os
         for k, v in config.env.items():
             os.environ.setdefault(k, str(v))
-        cls = self._adapters[config.provider]
         return self._instantiate(cls, config)
 
     def _instantiate(self, cls, config: ProviderConfig) -> ObservabilityProvider:
@@ -1102,7 +1106,8 @@ class ObservabilityProviderRegistry:
         return cls(**kwargs)
 
     def list_providers(self) -> list[str]:
-        return sorted(self._adapters.keys())
+        # Lista todos los providers registrados sin importarlos (lazy-safe).
+        return sorted(self._adapter_paths.keys())
 ```
 
 ### 4.2 Integración con ObservabilityManager (Core Infra)
@@ -1586,7 +1591,7 @@ Scenario 10: tracing sin db dedicado (warning)
   WHEN bootstrap ejecuta
   THEN se emite un warning "trace_db no configurado"
   Y los traces se intentan persistir en la primera DB encontrada
-  Y这种行为 queda marcado como no recomendado para producción
+  Y este comportamiento queda marcado como no recomendado para producción
 ```
 
 ---

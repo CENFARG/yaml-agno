@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_17"
 Title: "Multimodal I/O - Images, Audio, Video and Files Processing and Generation"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Multimodal", "#Media", "#Images", "#Audio", "#Video", "#Files", "#ToolResult", "#FileStorage"]
 Dependency_Hashes: ["SPEC_02", "SPEC_11"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "iter1: AgentRunRequest/Response ya no se redefinen (SSOT=SPEC_06, solo se documenta la extensión multimodal); TTL/retention marcado como feature futura (no nativo Agno); datetime.utcnow() -> datetime.now(timezone.utc)."
 ---
 
 # SPEC_17_MULTIMODAL_IO
@@ -93,23 +94,28 @@ from agno.media import Image, Audio, Video, File
 
 yaml-agno acepta media de entrada en el endpoint de run (`/api/v1/agents/{name}/run`):
 
+<!-- @ai-directive SSOT: AgentRunRequest/AgentRunResponse son DTOs de API cuyo OWNER es SPEC_06.
+     Esta SPEC NO los redefinen. yaml-agno los IMPORTA de SPEC_06.
+     Los campos multimodales (images/audio/videos/files + send_media_to_model + store_media)
+     se AÑADEN al DTO definido en SPEC_06; esta sección solo documenta esa extensión. -->
+
 ```python
 # yaml-agno/src/api/endpoints/agents.py (extensión multimodal)
+#
+# NOTA: AgentRunRequest/AgentRunResponse son propiedad de SPEC_06 (SSOT).
+# yaml-agno los importa; aquí solo se documentan los campos multimodales
+# que se añaden al DTO base de SPEC_06.
+#
+# from src.api.models import AgentRunRequest  # owner: SPEC_06
 
-class AgentRunRequest(BaseModel):
-    input: str | dict
-    session_id: str | None = None
-    user_id: str
-    tenant_id: str
-    stream: bool = False
-    # ---- Multimodal ----
-    images: list[MediaInput] = Field(default_factory=list)
-    audio: list[MediaInput] = Field(default_factory=list)
-    videos: list[MediaInput] = Field(default_factory=list)
-    files: list[MediaInput] = Field(default_factory=list)
-    # ---- Modos ----
-    send_media_to_model: bool = True
-    store_media: bool = False
+# Campos multimodales añadidos al AgentRunRequest de SPEC_06:
+#   images:  list[MediaInput] = Field(default_factory=list)
+#   audio:   list[MediaInput] = Field(default_factory=list)
+#   videos:  list[MediaInput] = Field(default_factory=list)
+#   files:   list[MediaInput] = Field(default_factory=list)
+#   # ---- Modos ----
+#   send_media_to_model: bool = True
+#   store_media: bool = False
 ```
 
 ### 2.2 MediaInput Model (Pydantic V2)
@@ -437,7 +443,9 @@ class GCSAdapter(FileStorageAdapter):
 media:
   storage:
     backend: s3              # s3 | local | gcs
-    default_ttl_seconds: 604800   # 7 días
+    # NOTE: retention/TTL no es nativo de Agno; es una feature futura de yaml-agno.
+    # Se documenta como configuración deseada; el enforcement queda pendiente (ver §13.2).
+    default_ttl_seconds: 604800   # 7 días (feature futura - no nativo Agno)
     signed_url_expiry: 3600
     s3:
       bucket: "yaml-agno-media"
@@ -461,7 +469,7 @@ media:
 
 from pydantic import BaseModel, Field
 from typing import Literal
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 MediaType = Literal["image", "audio", "video", "file"]
@@ -481,7 +489,7 @@ class MediaArtifact(BaseModel):
     storage_key: str                   # key interna en el backend
     original_prompt: str | None = None # si fue generada
     source: Literal["user_upload", "tool_generated", "agent_generated"] = "user_upload"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tenant_id: str
     session_id: str | None = None
 
@@ -854,7 +862,7 @@ agent:
     # Storage
     storage:
       backend: s3
-      default_ttl_seconds: 604800
+      default_ttl_seconds: 604800   # feature futura (TTL no nativo de Agno)
       signed_url_expiry: 3600
       s3:
         bucket: "yaml-agno-media"
@@ -923,6 +931,9 @@ class GCSStorageConfig(BaseModel):
 
 class MediaStorageConfig(BaseModel):
     backend: Literal["s3", "local", "gcs"] = "s3"
+    # @ai-directive FEATURE FUTURA: retention/TTL no es nativo de Agno.
+    # default_ttl_seconds se define como configuración deseada, pero el enforcement
+    # automático (cleanup job en SPEC_13 scheduler) es una feature futura de yaml-agno.
     default_ttl_seconds: int = 604800
     signed_url_expiry: int = 3600
     s3: S3StorageConfig | None = None
@@ -1039,7 +1050,7 @@ def bootstrap_media(config: MediaStorageConfig) -> tuple[FileStorageManager, Fil
 
 ### 13.2 Lifecycle y Cleanup
 
-- **TTL cleanup**: job periódico (SPEC_13 scheduler) elimina artifacts expirados según `default_ttl_seconds`.
+- **TTL cleanup** *(feature futura)*: job periódico (SPEC_13 scheduler) elimina artifacts expirados según `default_ttl_seconds`. **NOTA**: la retention/TTL no es nativa de Agno; su enforcement automático es una feature futura de yaml-agno. Mientras tanto, `default_ttl_seconds` se acepta como configuración pero no se aplica automáticamente.
 - **Session-scoped deletion**: al eliminar una sesión (SPEC_06 DELETE), se eliminan sus media artifacts.
 - **Signed URLs**: las URLs retornadas al cliente son firmadas con expiración `signed_url_expiry`.
 
