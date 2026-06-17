@@ -139,10 +139,18 @@ CREATE TABLE yamlagno.yamlagno_tenants (
     updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
     CONSTRAINT slug_format      CHECK (slug ~ '^[a-z0-9-]+$'),
-    CONSTRAINT valid_tenant_kind CHECK (tenant_kind IN ('org','org_user_roles','user'))
+    CONSTRAINT valid_tenant_kind CHECK (tenant_kind IN ('org','org_user_roles','user')),
+    -- An 'org' has no parent; 'org_user_roles'/'user' point to their parent org.
+    -- @ai-directive: cycle prevention (A->B->A) cannot be expressed in a CHECK
+    -- constraint; it MUST be validated at the application layer (TenantResolver /
+    -- TenantService) before insert/update. The CHECK only enforces kind<->parent
+    -- consistency, not acyclicity.
+    CONSTRAINT org_has_no_parent CHECK (
+        tenant_kind <> 'org' OR parent_org_id IS NULL
+    )
 );
 CREATE INDEX idx_yamlagno_tenants_slug ON yamlagno.yamlagno_tenants(slug);
-```
+CREATE INDEX idx_yamlagno_tenants_parent ON yamlagno.yamlagno_tenants(parent_org_id);
 
 **ORM model**:
 
@@ -306,6 +314,10 @@ class AgentConfigRecord(Base):
     config_jsonb: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     description: Mapped[str | None] = mapped_column(default=None)
     tags: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    # @ai-directive: the Python attribute is `metadata_` (trailing underscore) because
+    # `metadata` collides with DeclarativeBase.metadata (the SQLAlchemy MetaData). The
+    # underlying column is named `metadata`. Access config metadata via record.metadata_,
+    # NEVER via record.metadata (that returns the ORM MetaData, not the JSONB payload).
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(server_default=text("NOW()"), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -730,6 +742,11 @@ class ConfigStoreProvisioner:
             await self._mark_version(conn)
 
     async def _mark_version(self, conn) -> None:
+        # @ai-directive: this runs during SCHEMA BOOTSTRAP, before the core
+        # DatabaseManager/GenericRepository is ready. It uses the raw connection
+        # directly (Core-style insert), not db.get_repository() — that is intentional
+        # and NOT a violation of the "consume core" rule (the core does not exist yet
+        # at provisioning time).
         exists = await conn.execute(
             select(SchemaVersionRecord).where(
                 SchemaVersionRecord.component == "config_store",
@@ -874,12 +891,14 @@ class AgentConfigRepository:
 
 ## 9. REPLICATION
 
-> **@ai-directive**: For the **config store**, **synchronous** replication is the default (`configstore.replication_mode = sync`). Config rows are low-volume, high-consistency artifacts: a stale replica would serve the wrong agent definition. The trade-off (higher write latency) is acceptable because config writes are infrequent compared to runtime reads.
+> **@ai-directive**: `configstore.replication_mode` is an **infrastructure/operations** knob, NOT something the yaml-agno process reads or enforces in code. It is documented here so operators know the **recommended** deployment topology. Replication is configured at the Postgres/infra layer (e.g. Cloud SQL read replicas), never inside the application.
 
-| Mode | Setting | Trade-off | When to use |
-|------|---------|-----------|-------------|
-| Synchronous (default) | `configstore.replication_mode = sync` | Strong consistency, higher write latency | Production config store (recommended) |
-| Asynchronous | `configstore.replication_mode = async` | Eventual consistency, lower latency | Read-heavy multi-region where brief staleness is tolerable |
+| Mode | Postgres/infra setting | Trade-off | When to use |
+|------|------------------------|-----------|-------------|
+| **Synchronous (recommended)** | Single primary, sync replicas | Strong consistency, higher write latency | Production config store (default) |
+| Asynchronous | Async replicas | Eventual consistency, lower latency | Read-heavy multi-region tolerating brief staleness |
+
+**Recommendation**: config rows are low-volume, high-consistency artifacts. A stale replica serving the wrong agent definition is a correctness bug, so **synchronous** replication is the default posture for the config store. yaml-agno treats the primary as the source of truth and does not read from replicas.
 
 > Runtime replication (Agno `agno_*` sessions/memory) is governed by Agno's own `db=` settings and is out of scope here.
 
