@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_31"
 Title: "Culture Manager - Experimental Cross-Session Cultural Knowledge (LLM-Extractive)"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Culture", "#CultureManager", "#CulturalKnowledge", "#Experimental", "#CrossSession", "#LLMExtraction", "#Delegation"]
 Dependency_Hashes: ["SPEC_04", "SPEC_14"]
 Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 - new SPEC (Culture). EXPERIMENTAL flag."
 ---
 
 # SPEC_31_CULTURE_MANAGER

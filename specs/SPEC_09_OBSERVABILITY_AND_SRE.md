@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_09"
 Title: "Observability and SRE - Metrics, Tracing and Resilience"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#OpenTelemetry", "#SRE", "#CircuitBreaker", "#Resilience"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
-Last_Updated: "2026-06-13"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 metadata bump. Owns CircuitState/CircuitBreaker (resilience/SRE)."
 ---
 
 # SPEC_09_OBSERVABILITY_AND_SRE
@@ -493,12 +494,12 @@ class ResilientExecutor:
     
     async def execute(self, func: Callable[..., Any], *args, **kwargs) -> Any:
         """
-        Ejecuta con circuit breaker + retry.
-        
-        Proceso:
-        1. Verifica circuit breaker state
-        2. Ejecuta con retries (cada intento afecta circuit breaker)
-        3. Retorna resultado o raise excepción final
+        Execute with circuit breaker + retry.
+
+        Steps:
+        1. Check circuit breaker state
+        2. Execute with retries (each attempt affects the circuit breaker)
+        3. Return the result or raise the final error
         """
         # Circuit breaker check
         if not self.circuit_breaker.allow_request():

@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_12"
 Title: "AgentOS Control Plane"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#AgentOS", "#FastAPI", "#ControlPlane", "#MCP", "#Interfaces", "#AGUI", "#Slack", "#A2A", "#Resync", "#RBAC"]
 Dependency_Hashes: ["SPEC_06", "SPEC_13"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 metadata bump (was outside prior correction round scope)."
 ---
 
 # SPEC_12_AGENTOS_CONTROL_PLANE

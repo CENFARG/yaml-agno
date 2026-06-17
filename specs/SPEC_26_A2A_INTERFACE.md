@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_26"
 Title: "A2A (Agent-to-Agent) Interface"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#A2A", "#AgentOS", "#Interfaces", "#Interoperability", "#AgentCard", "#A2ASDK", "#ControlPlane"]
 Dependency_Hashes: ["SPEC_12"]
 Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 - new SPEC (A2A interface). API verified vs agno/os/interfaces/a2a."
 ---
 
 # SPEC_26_A2A_INTERFACE

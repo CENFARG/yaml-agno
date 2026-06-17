@@ -197,7 +197,7 @@ La tabla lista los parámetros de sesión que efectivamente existen en la API de
 | `add_session_state_to_context` | `run(add_session_state_to_context=...)` | `bool` | Inyecta session_state en contexto |
 | `max_iterations` | `run(max_iterations=...)` (límite de loop) | `int` | Integer >= 1 |
 
-> **@ai-directive (punto 7 + P2 del usuario - retención, FEATURE FUTURA)**: Agno **NO** tiene `retention_days` nativo ni un job de limpieza periódico listo. Hallazgos verificados en Agno v2.6.14:
+> **@ai-directive (retention — FEATURE FUTURA)**: Agno **NO** tiene `retention_days` nativo ni un job de limpieza periódico listo. Hallazgos verificados en Agno v2.6.14:
 > - **`Curator.prune(max_age_days=)`** (parte de `LearningMachine`, `agno/learn/curate.py:36`) solo limpia el store `user_profile`, **no** las memorias generales. Es síncrono y standalone (no requiere agente corriendo).
 > - **`RedisDb(expire=N)`**: TTL de backend Redis, borra claves solas al expirar (solo si el backend es Redis).
 > - **Scheduler de Agno** (`ScheduleManager`/`SchedulePoller`/`ScheduleExecutor`) **NO sirve directo** para purge: está acoplado a ejecutar runs HTTP de agents/teams/workflows (no funciones Python arbitrarias ni SQL de mantenimiento) y requiere AgentOS corriendo.
@@ -741,7 +741,7 @@ workflow:
 
 ### 4.2 Workflow Factory
 
-> **@ai-directive (punto 11 del usuario - imports perezosos)**: el factory **NO importa todas las primitivas de Agno al tope del módulo**. `DependencyManager` resuelve perezosamente solo la primitiva referenciada en cada step del YAML. Esto evita cargar el árbol completo de imports cuando no se usan.
+> **@ai-directive (lazy imports)**: el factory **NO importa todas las primitivas de Agno al tope del módulo**. `DependencyManager` resuelve perezosamente solo la primitiva referenciada en cada step del YAML. Esto evita cargar el árbol completo de imports cuando no se usan.
 
 ```python
 # yaml-agno/src/factories/workflow_factory.py

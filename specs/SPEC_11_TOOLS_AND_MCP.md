@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_11"
 Title: "Tools & MCP Architecture - Toolkits, Custom Tools and Model Context Protocol"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Tools", "#MCP", "#MCPTools", "#MultiMCPTools", "#Toolkits", "#ToolDecorator", "#ToolRegistry", "#Hooks", "#Caching", "#PydanticV2"]
 Dependency_Hashes: ["SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 metadata bump (was outside prior correction round scope)."
 ---
 
 # SPEC_11_TOOLS_AND_MCP

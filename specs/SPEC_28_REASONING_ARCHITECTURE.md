@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_28"
 Title: "Reasoning Architecture - Declarative Step-based and Native Model Reasoning"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"

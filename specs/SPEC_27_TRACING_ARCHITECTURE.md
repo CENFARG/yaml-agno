@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_27"
 Title: "Tracing Architecture"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Tracing", "#OpenTelemetry", "#Trace", "#Span", "#DatabaseSpanExporter", "#OpenInference", "#Observability", "#DB"]
 Dependency_Hashes: ["SPEC_09", "SPEC_03"]
 Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 - new SPEC (Tracing). API verified vs agno/tracing/setup."
 ---
 
 # SPEC_27_TRACING_ARCHITECTURE

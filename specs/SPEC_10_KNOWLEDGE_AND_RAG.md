@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_10"
 Title: "Knowledge & RAG Architecture - Vector DBs, Embedders, Chunkers and Retrieval"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Knowledge", "#RAG", "#VectorDb", "#Embedder", "#Chunker", "#AgenticRAG", "#HybridSearch", "#Reranking", "#Filters", "#PydanticV2"]
 Dependency_Hashes: ["SPEC_02", "SPEC_03"]
-Last_Updated: "2026-06-14"
+Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 metadata bump (was outside prior correction round scope)."
 ---
 
 # SPEC_10_KNOWLEDGE_AND_RAG

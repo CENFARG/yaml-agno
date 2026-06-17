@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_29"
 Title: "Workflow-level HITL - HumanReview, Step Pauses and Executor Bubbling"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"

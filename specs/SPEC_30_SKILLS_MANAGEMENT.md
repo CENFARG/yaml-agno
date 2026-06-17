@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_30"
 Title: "Skills Management - Downloadable Domain Expertise and Progressive Discovery"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Skills", "#LocalSkills", "#SkillLoader", "#SKILL_md", "#ProgressiveDiscovery", "#Delegation", "#FilesystemSkills"]
 Dependency_Hashes: ["SPEC_11", "SPEC_01"]
 Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 - new SPEC (Skills). LocalSkills/SKILL.md filesystem."
 ---
 
 # SPEC_30_SKILLS_MANAGEMENT

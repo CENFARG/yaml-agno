@@ -1,13 +1,14 @@
 ---
 Spec_ID: "SPEC_32"
 Title: "Registry & Components - Code-Defined Runtime Catalog vs Versioned Persistent Catalog"
-Version: "0.1.0-MVP"
+Version: "0.2.0-iter1"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Registry", "#Components", "#RehydrateFunction", "#Workflows", "#VersionedConfig", "#Rollback", "#ControlPlane", "#Delegation"]
 Dependency_Hashes: ["SPEC_12", "SPEC_02"]
 Last_Updated: "2026-06-17"
+Revision_Note: "Iteration 1 - new SPEC (Registry & Components). code-defined vs persisted."
 ---
 
 # SPEC_32_REGISTRY_AND_COMPONENTS
