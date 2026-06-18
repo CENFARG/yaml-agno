@@ -8,7 +8,7 @@ Target_Agent: "sdd-apply"
 Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
 Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - rewritten as a master catalog that aggregates the microtasks already defined by their owning SPECs (00-07, plus 09/15 referenced for delegation). Removed all tasks that created classes eliminated in this iteration (SessionContext, SessionState, AgentInstance, ModelId, SessionKey, WorkflowExecution, domain events, native EngramMemoryManager). The only own model = *Config schemas (SPEC_02) + DIReference. Factories live in SPEC_01 with DependencyManager. Long-term memory via LongTermMemoryPort (Engram = optional adapter). Code/descriptions in English."
+Revision_Note: "Iteration 1 - rewritten as a master catalog that aggregates the microtasks already defined by their owning SPECs (00-07, plus 09/15 referenced for delegation). Removed all tasks that created classes eliminated in this iteration (SessionContext, SessionState, AgentInstance, ModelId, SessionKey, WorkflowExecution, domain events, native EngramMemoryManager). The only own model = *Config schemas (SPEC_02) + DIReference. Factories live in SPEC_01 with DependencyManager. Long-term memory via LongTermMemoryPort (Engram = optional adapter). Code/descriptions in English. Realigned persistence catalog to SPEC_03 iter2 core-cenf consumption: dropped the local TransactionManager and Alembic migration tasks; the S03-T* entries now point to the real SPEC_03 TASK_001..TASK_007 (DeclarativeBase ORM records with yamlagno_* prefix in schema yamlagno, ConfigStoreProvisioner via create_all(checkfirst=True), AgentConfigRepository wrapper over core GenericRepository, TenantResolver, bootstrap on core-cenf DatabaseManager)."
 ---
 
 # SPEC_08_TDD_MICROTASKS
@@ -89,20 +89,19 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 
 > @ai-directive (cross-cutting): `WorkflowFactory` lives in SPEC_01 section 4 but its microtasks are catalogued under SPEC_05 below because they are co-located with the workflow execution tasks. The factory + step builder build native `agno.Workflow` via lazy primitive resolution in `DependencyManager` - there is NO proprietary workflow runtime.
 
-### 2.3 Owner SPEC_03 - Persistence (Config Store)
+### 2.3 Owner SPEC_03 - Persistence (Config Store on core-cenf)
 
-> @ai-directive: persistence stores CONFIG rows, NOT runtime models. `AgentConfigRow` is the SQLAlchemy row whose `config_jsonb` is validated against the Pydantic `AgentConfig` (imported from SPEC_02, not redefined). `TransactionManager` wraps the config-store, not a session history.
+> @ai-directive (consume core, do not reimplement): persistence stores CONFIG rows, NOT runtime models. yaml-agno CONSUMES the core-cenf `DatabaseManager` / `TransactionScope` / `GenericRepository[T]` (core_infrastructure) and only declares `DeclarativeBase` ORM entities plus an auto-provisioner. There is NO local `TransactionManager` (the `TransactionScope` comes from core-cenf) and NO Alembic migration runner (the schema is provisioned idempotently via `Base.metadata.create_all(checkfirst=True)` + `yamlagno_schema_versions`). The persistence record is `AgentConfigRecord` (NOT `AgentConfigRow`); its `config_jsonb` validates against the Pydantic `AgentConfig` imported from SPEC_02. Every config-store table uses the prefix `yamlagno_*` in the dedicated SQL schema `yamlagno` to avoid collision with Agno's `agno_*` tables. Usage pattern: `async with db.transaction() as tx:` + `db.get_repository(AgentConfigRecord)` (on `DatabaseManager`, inside the scope) + `tx.commit()`; multi-tenant isolation is explicit via `tenant_id` filters (no native RLS).
 
 | Catalog ID | Owner SPEC task | Component | File | Test |
 |------------|-----------------|-----------|------|------|
-| S03-T01 | SPEC_03 TASK_001 | `Tenant` model (SQLAlchemy) | `src/db/models/tenant.py` | `tests/unit/db/test_tenant_model.py` |
-| S03-T02 | SPEC_03 TASK_002 | `AgentConfigRow` model (persistence row; validates JSONB against Pydantic `AgentConfig`) | `src/db/models/agent_config.py` | `tests/unit/db/test_agent_config_model.py` |
-| S03-T03 | SPEC_03 TASK_003 | Migration - `tenants` table | `migrations/versions/001_create_tenants.py` | `tests/integration/test_migrations.py` |
-| S03-T04 | SPEC_03 TASK_004 | Migration - `agent_configs` table | `migrations/versions/002_create_agent_configs.py` | `tests/integration/test_migrations.py` |
-| S03-T05 | SPEC_03 TASK_005 | `TransactionManager.transaction()` (config-store ACID) | `src/db/transaction.py` | `tests/unit/db/test_transaction_manager.py` |
-| S03-T06 | SPEC_03 TASK_006 | `TransactionManager` rollback on error | `src/db/transaction.py` | `tests/unit/db/test_transaction_manager.py` |
-| S03-T07 | SPEC_03 TASK_007 | `AgentConfigRepository.create()` | `src/repositories/agent_config_repository.py` | `tests/integration/repositories/test_agent_config_repository.py` |
-| S03-T08 | SPEC_03 TASK_008 | `AgentConfigRepository.get_by_name()` | `src/repositories/agent_config_repository.py` | `tests/integration/repositories/test_agent_config_repository.py` |
+| S03-T01 | SPEC_03 TASK_001 | `Base(DeclarativeBase)` + `TenantRecord` model (`yamlagno_tenants`, schema `yamlagno`) | `src/db/models/tenant.py` | `tests/unit/db/test_tenant_model.py` |
+| S03-T02 | SPEC_03 TASK_002 | `AgentConfigRecord` model (`yamlagno_agent_configs`, schema `yamlagno`; `config_jsonb` validates against Pydantic `AgentConfig`) | `src/db/models/agent_config.py` | `tests/unit/db/test_agent_config_model.py` |
+| S03-T03 | SPEC_03 TASK_003 | Remaining ORM records: `TeamConfigRecord` / `WorkflowConfigRecord` / `DiVariableCacheRecord` / `ConfigChangeLogRecord` / `SchemaVersionRecord` (`yamlagno_*`, schema `yamlagno`) | `src/db/models/*.py` | `tests/unit/db/test_models.py` |
+| S03-T04 | SPEC_03 TASK_004 | `ConfigStoreProvisioner` (`Base.metadata.create_all(checkfirst=True)` + `yamlagno_schema_versions` + `configstore.auto_provision` flag off = no-op) | `src/db/provisioner.py` | `tests/integration/test_provisioner.py` |
+| S03-T05 | SPEC_03 TASK_005 | `AgentConfigRepository` wrapper over core-cenf `GenericRepository` (`async with db.transaction()` + `db.get_repository(AgentConfigRecord)` + `tx.commit()`) | `src/repositories/agent_config_repository.py` | `tests/integration/repositories/test_agent_config_repository.py` |
+| S03-T06 | SPEC_03 TASK_006 | `TenantResolver` interface (maps Agno `(user_id, session_id)` to yaml-agno tenant; sets Core Infra contextvar; app-layer WHERE isolation) | `src/tenant/resolver.py` | `tests/unit/tenant/test_resolver.py` |
+| S03-T07 | SPEC_03 TASK_007 | `build_database_manager()` bootstrap on core-cenf `DatabaseManager` (`BootstrapOrchestrator`, `asyncio.TaskGroup`, DSN via `config.get_string`) | `src/db/bootstrap.py` | `tests/integration/test_bootstrap.py` |
 
 ### 2.4 Owner SPEC_04 - Long-term Memory (Port + Adapters)
 

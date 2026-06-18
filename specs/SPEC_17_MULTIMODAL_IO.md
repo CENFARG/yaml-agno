@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_17"
 Title: "Multimodal I/O - Images, Audio, Video and Files Processing and Generation"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Multimodal", "#Media", "#Images", "#Audio", "#Video", "#Files", "#ToolResult", "#FileStorage"]
 Dependency_Hashes: ["SPEC_02", "SPEC_11"]
 Last_Updated: "2026-06-17"
-Revision_Note: "iter1: AgentRunRequest/Response ya no se redefinen (SSOT=SPEC_06, solo se documenta la extensión multimodal); TTL/retention marcado como feature futura (no nativo Agno); datetime.utcnow() -> datetime.now(timezone.utc)."
+Revision_Note: "iter1: AgentRunRequest/Response ya no se redefinen (SSOT=SPEC_06, solo se documenta la extensión multimodal); TTL/retention marcado como feature futura (no nativo Agno); datetime.utcnow() -> datetime.now(timezone.utc). iter2: media_artifacts moved to yamlagno.* config store via core GenericRepository, no raw SQL — MediaRegistry reescrito como wrapper de db.get_repository(MediaArtifactRecord) dentro de async with db.transaction() as tx + tx.commit(); MediaArtifactRecord(DeclarativeBase, schema='yamlagno') replaces migrations/media_artifacts.sql (provisioned by ConfigStoreProvisioner SPEC_03 §6, create_all checkfirst); MediaArtifact VO remapeado (media_type/storage_uri/bytes_size/duration_ms/run_id/expires_at); multi-tenant explicit en todos los filtros."
 ---
 
 # SPEC_17_MULTIMODAL_IO
@@ -464,6 +464,9 @@ media:
 
 ### 6.1 MediaArtifact (Pydantic V2)
 
+> **Value object del dominio**. Mapea 1:1 al registro persistente
+> `MediaArtifactRecord` (schema `yamlagno`). Ver §6.3.
+
 ```python
 # yaml-agno/src/media/models.py
 
@@ -475,23 +478,28 @@ import uuid
 MediaType = Literal["image", "audio", "video", "file"]
 
 class MediaArtifact(BaseModel):
-    """Registro persistible de una media. Es el value object del dominio."""
+    """Persistent record of a media artifact. Domain value object.
+
+    Maps 1:1 to MediaArtifactRecord (yamlagno schema). See registry.py.
+    """
     media_id: str = Field(default_factory=lambda: f"med_{uuid.uuid4().hex[:12]}")
-    type: MediaType
-    mime: str                          # image/jpeg, audio/wav, video/mp4, application/pdf
-    url: str                           # URL pública/firmada de acceso
-    size_bytes: int = Field(ge=0)
-    width: int | None = None           # solo image/video
-    height: int | None = None          # solo image/video
-    duration_seconds: float | None = None   # solo audio/video
-    format: str | None = None          # wav, mp4, jpg...
-    storage_backend: str               # s3 | local | gcs
-    storage_key: str                   # key interna en el backend
-    original_prompt: str | None = None # si fue generada
-    source: Literal["user_upload", "tool_generated", "agent_generated"] = "user_upload"
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    tenant_id: str
+    tenant_id: str                      # multi-tenant explicit (NOT NULL)
+    run_id: str | None = None           # Agno run that produced/consumed it
     session_id: str | None = None
+    media_type: MediaType
+    mime: str                           # image/jpeg, audio/wav, video/mp4, application/pdf
+    storage_uri: str                    # public/signed access URL
+    sha256: str | None = None           # content digest (optional)
+    bytes_size: int = Field(ge=0)
+    width: int | None = None            # image/video only
+    height: int | None = None           # image/video only
+    duration_ms: int | None = None      # audio/video only (milliseconds)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime | None = None  # feature futura (TTL no nativo de Agno)
+    source: Literal["user_upload", "tool_generated", "agent_generated"] = "user_upload"
+    storage_backend: str                # s3 | local | gcs
+    storage_key: str                    # internal key in the backend
+    original_prompt: str | None = None  # if generated
 
     def to_agno_image(self): ...
     def to_agno_audio(self): ...
@@ -499,58 +507,167 @@ class MediaArtifact(BaseModel):
     def to_agno_file(self): ...
 ```
 
-### 6.2 MediaRegistry (Persistencia)
+### 6.2 MediaRegistry (Persistencia via Core GenericRepository)
+
+<!-- @ai-directive BUILD ON TOP: MediaRegistry consumes core-cenf (DatabaseManager).
+     NO raw SQL, NO db.execute bypass. The media_artifacts table lives in the
+     yamlagno.* CONFIG STORE (schema="yamlagno"), provisioned by ConfigStoreProvisioner
+     (SPEC_03 §6, create_all checkfirst), NOT by a local migration. Runtime tables
+     belong to Agno (agno_*). This wrapper uses db.get_repository(MediaArtifactRecord)
+     inside `async with db.transaction() as tx:` + tx.commit(). -->
 
 ```python
 # yaml-agno/src/media/registry.py
 
-class MediaRegistry:
-    """Persiste MediaArtifact en PostgreSQL (tabla media_artifacts)."""
+from core.db.manager import DatabaseManager
+from core.db.repository import GenericRepository
+from .records import MediaArtifactRecord
+from .models import MediaArtifact
 
-    def __init__(self, db):
+
+class MediaRegistry:
+    """Persists MediaArtifact records in the yamlagno.* config store.
+
+    Thin wrapper over the core GenericRepository (core-cenf). The caller NEVER
+    touches raw SQL. All operations run inside a core transaction:
+    `async with db.transaction() as tx: ... tx.commit()`. Multi-tenant is
+    explicit: every query filter includes tenant_id.
+    """
+
+    def __init__(self, db: DatabaseManager):
         self.db = db
 
-    async def register(self, artifact: MediaArtifact) -> str:
-        await self.db.execute(
-            "INSERT INTO media_artifacts "
-            "(media_id, type, mime, url, size_bytes, storage_backend, "
-            " storage_key, source, tenant_id, session_id, created_at) "
-            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-            artifact.media_id, artifact.type, artifact.mime, artifact.url,
-            artifact.size_bytes, artifact.storage_backend, artifact.storage_key,
-            artifact.source, artifact.tenant_id, artifact.session_id,
-            artifact.created_at,
-        )
+    async def register_media(
+        self, artifact: MediaArtifact, *, tenant_id: str
+    ) -> str:
+        """Insert a new media artifact record. Returns the media_id."""
+        async with self.db.transaction() as tx:
+            repo: GenericRepository[MediaArtifactRecord] = (
+                self.db.get_repository(MediaArtifactRecord)
+            )
+            record = MediaArtifactRecord.from_vo(artifact, tenant_id=tenant_id)
+            await repo.insert(record, session=tx)
+            await tx.commit()
         return artifact.media_id
 
-    async def get(self, media_id: str) -> MediaArtifact | None: ...
-    async def list_by_session(self, session_id: str) -> list[MediaArtifact]: ...
-    async def delete(self, media_id: str) -> None: ...
+    async def get_media(
+        self, media_id: str, *, tenant_id: str
+    ) -> MediaArtifact | None:
+        """Fetch a single artifact, scoped to the tenant."""
+        async with self.db.transaction() as tx:
+            repo = self.db.get_repository(MediaArtifactRecord)
+            record = await repo.find_one(
+                filters={"id": media_id, "tenant_id": tenant_id}, session=tx
+            )
+            await tx.commit()
+        return record.to_vo() if record is not None else None
+
+    async def list_by_run(
+        self, run_id: str, *, tenant_id: str
+    ) -> list[MediaArtifact]:
+        """List all artifacts belonging to a run, scoped to the tenant."""
+        async with self.db.transaction() as tx:
+            repo = self.db.get_repository(MediaArtifactRecord)
+            records = await repo.find_all(
+                filters={"run_id": run_id, "tenant_id": tenant_id}, session=tx
+            )
+            await tx.commit()
+        return [r.to_vo() for r in records]
+
+    async def prune_expired(
+        self, *, tenant_id: str | None = None, now: datetime | None = None
+    ) -> int:
+        """Delete artifacts whose expires_at has passed (feature futura).
+
+        Returns the number of deleted rows. Tenant-scoped when tenant_id is given.
+        """
+        from datetime import datetime, timezone
+        now = now or datetime.now(timezone.utc)
+        async with self.db.transaction() as tx:
+            repo = self.db.get_repository(MediaArtifactRecord)
+            filters: dict = {"expires_at__lte": now}
+            if tenant_id is not None:
+                filters["tenant_id"] = tenant_id
+            deleted = await repo.delete(filters=filters, session=tx)
+            await tx.commit()
+        return deleted
 ```
 
-```sql
--- migrations/media_artifacts.sql
-CREATE TABLE media_artifacts (
-    media_id        TEXT PRIMARY KEY,
-    type            TEXT NOT NULL,
-    mime            TEXT NOT NULL,
-    url             TEXT NOT NULL,
-    size_bytes      BIGINT NOT NULL,
-    width           INTEGER,
-    height          INTEGER,
-    duration_seconds DOUBLE PRECISION,
-    format          TEXT,
-    storage_backend TEXT NOT NULL,
-    storage_key     TEXT NOT NULL,
-    original_prompt TEXT,
-    source          TEXT NOT NULL,
-    tenant_id       TEXT NOT NULL,
-    session_id      TEXT,
-    created_at      TIMESTAMP NOT NULL DEFAULT NOW()
-);
-CREATE INDEX idx_media_session ON media_artifacts(session_id);
-CREATE INDEX idx_media_tenant_created ON media_artifacts(tenant_id, created_at);
+### 6.3 MediaArtifactRecord (DeclarativeBase, schema yamlagno)
+
+> **Config store record**. Lives in schema `yamlagno` (prefijo lógico `yamlagno.*`),
+> NOT in runtime (Agno owns `agno_*`). Provisioned by `ConfigStoreProvisioner`
+> (SPEC_03 §6) via `create_all(checkfirst=True)` — there is NO local migration.
+
+```python
+# yaml-agno/src/media/records.py
+
+from datetime import datetime, timezone
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import String, BigInteger, Integer, DateTime, Text
+from .models import MediaArtifact
+
+
+class _YamlagnoBase(DeclarativeBase):
+    """Shared DeclarativeBase for yaml-agno config-store tables (schema yamlagno)."""
+    metadata_schema = "yamlagno"
+
+
+class MediaArtifactRecord(_YamlagnoBase):
+    """Persistent media artifact row in the yamlagno config store.
+
+    Google-style: maps 1:1 to the MediaArtifact value object. Provisioned by
+    ConfigStoreProvisioner (SPEC_03 §6), never by a per-spec migration.
+    """
+
+    __tablename__ = "media_artifacts"
+    __table_args__ = {"schema": "yamlagno"}
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)          # media_id
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    run_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    session_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    media_type: Mapped[str] = mapped_column(Text, nullable=False)
+    mime: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bytes_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    @classmethod
+    def from_vo(cls, vo: MediaArtifact, *, tenant_id: str) -> "MediaArtifactRecord":
+        return cls(
+            id=vo.media_id, tenant_id=tenant_id, run_id=vo.run_id,
+            session_id=vo.session_id, media_type=vo.media_type, mime=vo.mime,
+            storage_uri=vo.storage_uri, sha256=vo.sha256,
+            bytes_size=vo.bytes_size, width=vo.width, height=vo.height,
+            duration_ms=vo.duration_ms, created_at=vo.created_at,
+            expires_at=vo.expires_at,
+        )
+
+    def to_vo(self) -> MediaArtifact:
+        return MediaArtifact(
+            media_id=self.id, tenant_id=self.tenant_id, run_id=self.run_id,
+            session_id=self.session_id, media_type=self.media_type,  # type: ignore[arg-type]
+            mime=self.mime, storage_uri=self.storage_uri, sha256=self.sha256,
+            bytes_size=self.bytes_size, width=self.width, height=self.height,
+            duration_ms=self.duration_ms, created_at=self.created_at,
+            expires_at=self.expires_at,
+        )
 ```
+
+> **Indexes** (`run_id`, `session_id`, `tenant_id`, composite `(tenant_id, created_at)`)
+> are declared on the mapped columns above; `create_all(checkfirst=True)` provisions
+> them together with the table. No `migrations/media_artifacts.sql` exists.
 
 ---
 
@@ -578,7 +695,7 @@ sequenceDiagram
         end
         MP->>FS: put(key, content, mime)
         FS-->>MP: url
-        MP->>MR: register(artifact)
+        MP->>MR: register_media(artifact, tenant_id)
         MR-->>MP: media_id
     end
     MP-->>API: [MediaArtifact]
@@ -617,6 +734,7 @@ class MediaProcessor:
         media_type: str,
         inputs: list[MediaInput],
         tenant_id: str,
+        run_id: str,
         session_id: str | None,
         storage_backend: str = "s3",
     ) -> list[MediaArtifact]:
@@ -625,7 +743,9 @@ class MediaProcessor:
         async with asyncio.TaskGroup() as tg:
             tasks = [
                 tg.create_task(
-                    self._process_one(m, media_type, tenant_id, session_id, storage_backend)
+                    self._process_one(
+                        m, media_type, tenant_id, run_id, session_id, storage_backend
+                    )
                 )
                 for m in inputs
             ]
@@ -633,18 +753,18 @@ class MediaProcessor:
             artifacts.append(t.result())
         return artifacts
 
-    async def _process_one(self, mi, media_type, tenant_id, session_id, backend):
+    async def _process_one(self, mi, media_type, tenant_id, run_id, session_id, backend):
         content, mime = self._resolve_content(mi, media_type)
         self.validator.validate(media_type, mime, len(content))
         key = self._gen_key(media_type, mime)
         adapter = self.storage.get(backend)
         url = await adapter.put(key, content, mime)
         artifact = MediaArtifact(
-            type=media_type, mime=mime, url=url, size_bytes=len(content),
-            storage_backend=backend, storage_key=key,
-            tenant_id=tenant_id, session_id=session_id,
+            media_type=media_type, mime=mime, storage_uri=url,
+            bytes_size=len(content), storage_backend=backend, storage_key=key,
+            tenant_id=tenant_id, run_id=run_id, session_id=session_id,
         )
-        await self.registry.register(artifact)
+        await self.registry.register_media(artifact, tenant_id=tenant_id)
         return artifact
 
     def _resolve_content(self, mi: MediaInput, media_type: str) -> tuple[bytes, str]:
@@ -1051,8 +1171,13 @@ def bootstrap_media(config: MediaStorageConfig) -> tuple[FileStorageManager, Fil
 ### 13.2 Lifecycle y Cleanup
 
 - **TTL cleanup** *(feature futura)*: job periódico (SPEC_13 scheduler) elimina artifacts expirados según `default_ttl_seconds`. **NOTA**: la retention/TTL no es nativa de Agno; su enforcement automático es una feature futura de yaml-agno. Mientras tanto, `default_ttl_seconds` se acepta como configuración pero no se aplica automáticamente.
-- **Session-scoped deletion**: al eliminar una sesión (SPEC_06 DELETE), se eliminan sus media artifacts.
+- **Session-scoped deletion**: al eliminar una sesión (SPEC_06 DELETE), se eliminan sus media artifacts via `MediaRegistry` (wrapper de `db.get_repository(MediaArtifactRecord)` dentro de transaction).
 - **Signed URLs**: las URLs retornadas al cliente son firmadas con expiración `signed_url_expiry`.
+
+<!-- @ai-directive SCHEMA PROVISIONING: the yamlagno.media_artifacts table is
+     provisioned by ConfigStoreProvisioner (SPEC_03 §6) via create_all(checkfirst=True).
+     There is NO migrations/media_artifacts.sql. yaml-agno config-store tables are
+     declarative (DeclarativeBase, schema="yamlagno"); runtime tables belong to Agno. -->
 
 ### 13.3 SecretManager Integration
 
@@ -1325,12 +1450,14 @@ AND a new signed URL can be generated from storage_key
 - **RED**:
   ```python
   def test_media_artifact_defaults():
-      a = MediaArtifact(type="image", mime="image/jpeg", url="u",
-                        size_bytes=10, storage_backend="local",
+      a = MediaArtifact(media_type="image", mime="image/jpeg", storage_uri="u",
+                        bytes_size=10, storage_backend="local",
                         storage_key="k", tenant_id="t1")
       assert a.media_id.startswith("med_")
       assert a.source == "user_upload"
       assert a.created_at is not None
+      assert a.run_id is None
+      assert a.expires_at is None
   ```
 - **GREEN**: Implementar `MediaArtifact` con defaults.
 - **Commit**: `feat: add MediaArtifact value object`
@@ -1429,43 +1556,57 @@ AND a new signed URL can be generated from storage_key
 - **GREEN**: Implementar models `MediaConfig`, `MediaStorageConfig`.
 - **Commit**: `feat: add MediaConfig Pydantic models`
 
-#### TASK_012: MediaRegistry register and get
+#### TASK_012: MediaRegistry register_media and get_media via core repo
 
 - **File**: `yaml-agno/src/media/registry.py`
 - **Test**: `tests/integration/media/test_registry.py`
 - **RED**:
   ```python
-  async def test_register_and_get(pg_conn):
-      reg = MediaRegistry(pg_conn)
-      a = MediaArtifact(type="image", mime="image/jpeg", url="u",
-                        size_bytes=1, storage_backend="local",
-                        storage_key="k", tenant_id="t1")
-      mid = await reg.register(a)
-      got = await reg.get(mid)
+  async def test_register_and_get(db_manager):  # core DatabaseManager
+      reg = MediaRegistry(db_manager)
+      a = MediaArtifact(media_type="image", mime="image/jpeg", storage_uri="u",
+                        bytes_size=1, storage_backend="local",
+                        storage_key="k", tenant_id="t1", run_id="r1")
+      mid = await reg.register_media(a, tenant_id="t1")
+      got = await reg.get_media(mid, tenant_id="t1")
       assert got is not None
-      assert got.type == "image"
+      assert got.media_type == "image"
+      # tenant isolation
+      assert await reg.get_media(mid, tenant_id="other") is None
   ```
-- **GREEN**: Implementar `register`, `get` con SQL.
-- **Commit**: `feat: add MediaRegistry persistence`
+- **GREEN**: Implementar `register_media`/`get_media` como wrappers de
+  `db.get_repository(MediaArtifactRecord)` dentro de `async with db.transaction() as tx:`
+  + `tx.commit()`. Sin SQL crudo.
+- **Commit**: `feat: add MediaRegistry persistence via core GenericRepository`
 
-#### TASK_013: Media table migration
+#### TASK_013: media_artifacts table provisioned via ConfigStoreProvisioner
 
-- **File**: `migrations/media_artifacts.sql`
+- **File**: `yaml-agno/src/media/records.py` (MediaArtifactRecord DeclarativeBase, schema="yamlagno")
 - **Test**: `tests/integration/media/test_schema.py`
 - **RED**:
   ```python
-  async def test_media_table_columns(pg_conn):
-      cur = await pg_conn.execute(
-          "SELECT column_name FROM information_schema.columns "
-          "WHERE table_name='media_artifacts'"
+  async def test_media_table_in_yamlagno_schema(db_manager):
+      # Table is provisioned by ConfigStoreProvisioner (SPEC_03 §6) via create_all(checkfirst=True).
+      # Assert it lands in schema 'yamlagno', NOT runtime/agno_*.
+      async with db_manager.transaction() as tx:
+          repo = db_manager.get_repository(MediaArtifactRecord)
+          rec = MediaArtifactRecord.from_vo(
+              MediaArtifact(media_type="image", mime="image/jpeg", storage_uri="u",
+                            bytes_size=1, storage_backend="local", storage_key="k",
+                            tenant_id="t1"),
+              tenant_id="t1",
+          )
+          await repo.insert(rec, session=tx)
+          await tx.commit()
+      got = await db_manager.get_repository(MediaArtifactRecord).find_one(
+          filters={"id": rec.id, "tenant_id": "t1"}
       )
-      cols = {r[0] for r in await cur.fetchall()}
-      assert {"media_id", "type", "mime", "url", "storage_backend"} <= cols
+      assert got is not None
+      assert got.tenant_id == "t1"
   ```
-- **GREEN**: Escribir migration SQL.
-- **Commit**: `feat: add media_artifacts table migration`
-
-#### TASK_014: MultimodalAgentBuilder apply config
+- **GREEN**: Declarar `MediaArtifactRecord(DeclarativeBase)` con `__table_args__ = {"schema": "yamlagno"}`.
+  El schema se provisiona via `ConfigStoreProvisioner` (`create_all(checkfirst=True)`); NO existe `migrations/media_artifacts.sql`.
+- **Commit**: `feat: add MediaArtifactRecord DeclarativeBase in yamlagno config store`
 
 - **File**: `yaml-agno/src/media/builder.py`
 - **Test**: `tests/unit/media/test_builder.py`
@@ -1569,7 +1710,7 @@ Antes de ejecutar un run con video input en un modelo que no lo soporta, el Capa
 
 ### [Decisión 7] MediaArtifact persistido en tabla dedicada
 
-La tabla `media_artifacts` es dedicada (no se mezcla con sessions). Permite TTL cleanup, listado por sesión, y signed URLs regenerables desde `storage_key`.
+La tabla `yamlagno.media_artifacts` es dedicada (no se mezcla con sessions ni con runtime Agno `agno_*`). Vive en el config store de yaml-agno y se persiste via `MediaRegistry` (wrapper de `db.get_repository(MediaArtifactRecord)` dentro de transaction). Permite TTL cleanup, listado por run/sesión, y signed URLs regenerables desde `storage_key`.
 
 ---
 

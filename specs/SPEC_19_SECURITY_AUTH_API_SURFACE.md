@@ -73,8 +73,12 @@ class BasicAuthMiddleware:
 
     HEADER_KEY = "Authorization"
 
-    def __init__(self, security_key: str | None = None):
-        self.security_key = security_key or os.environ.get("OS_SECURITY_KEY")
+    def __init__(self, security_key: str | None = None, secret_manager: "SecretManager | None" = None):
+        # @ai-directive: OS_SECURITY_KEY is a SECRET — resolve it via the core-cenf
+        # SecretManager (await secrets.get_secret("os_security_key")), NEVER via
+        # os.environ directly. The constructor accepts a pre-resolved key for DI.
+        self.security_key = security_key
+        self._secrets = secret_manager
 
     async def __call__(self, request: Request) -> None:
         if not self.security_key:

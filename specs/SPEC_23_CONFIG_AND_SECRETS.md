@@ -1,44 +1,48 @@
 ---
 Spec_ID: "SPEC_23"
 Title: "Config & Secrets Management - ConfigManager, Zero-Trust SecretManager, Feature Flags and Hot-Reload"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#ConfigManager", "#SecretManager", "#ZeroTrust", "#FeatureFlags", "#HotReload", "#MultiTenant", "#Vault", "#PydanticV2", "#Rotation", "#AuditLog", "#ConfigDB"]
-Dependency_Hashes: ["SPEC_03", "SPEC_00"]
+Context_Tags: ["#ConfigManager", "#SecretManager", "#ZeroTrust", "#FeatureFlags", "#HotReload", "#MultiTenant", "#Vault", "#PydanticV2", "#Rotation", "#AuditLog", "#ConfigDB", "#CoreConsumer"]
+Dependency_Hashes: ["SPEC_03", "SPEC_00", "SPEC_02"]
 Last_Updated: "2026-06-17"
-Revision_Note: "iter1 — marked secret rotation/retention as a yaml-agno Core capability (not native to Agno) via @ai-directive."
+Revision_Note: "iter2 — yaml-agno is now a CONSUMER of core-cenf: ConfigManager, SecretManager and FeatureFlagManager are imported from core_infrastructure (not reimplemented). Removed local EnvLayer/RemoteLayer/FileLayer/DefaultsLayer, ConfigPort/SecretPort/FlagPort redefinitions and the yaml-agno-managed pool. yaml-agno owns only the yamlagno.feature_flags / yamlagno.secret_audit ORM tables (DeclarativeBase, via GenericRepository) and the DSN/env wiring. DDL moved to schema 'yamlagno' with 'yamlagno_*' prefix; pool/engine belongs to the core SQLAlchemyAdapter."
 ---
 
 # SPEC_23_CONFIG_AND_SECRETS
 
-> **Propósito**: Especificar la capa de Configuración y Secretos de yaml-agno como Infra Core: `ConfigManager` (Port), `SecretManager` (Port Zero-Trust con adapters Vault/AWS/GCP/Azure/SOPS/dotenv), `FlagManager` (feature flags), hot-reload (watchdog/polling/pubsub), multi-tenant config con ConfigDB, rotación con TTL y auditoría de accesos. Todo validado con Pydantic V2.
+> **Purpose**: Specify how yaml-agno **consumes** the core-cenf Config/Secret/FeatureFlag managers rather than reimplementing them. yaml-agno imports `from core_infrastructure import ConfigManager, SecretManager, FeatureFlagManager` (Clean Architecture ports, already implemented in core-cenf). yaml-agno owns only: (a) the DSN / env-name / secret-key wiring that feeds those managers, and (b) two yaml-agno-specific ORM tables (`yamlagno.feature_flags`, `yamlagno.secret_audit`) accessed via the core `GenericRepository`. Hot-reload uses the core's async `reload()`/`refresh()` mechanism. Secret rotation/retention remain a yaml-agno Core capability layered on top of the core `SecretManager`. All schemas validated with Pydantic V2.
 
 ---
 
-## 0. FRONTERA CON SPEC_03 Y SPEC_00
+## 0. FRONTERA CON CORE-CENF, SPEC_03 Y SPEC_00
 
-| Dimensión | SPEC_00 | SPEC_03 | SPEC_23 (este doc) |
-|-----------|---------|---------|--------------------|
-| **Alcance** | Estrategia, capas, convenciones | Persistencia (Postgres, sesiones, memoria, knowledge) | Config + Secrets + Flags como **Infra Core Ports** |
-| **PostgreSQL** | No | Sí (DDL completo) | Sí, pero **solo** tablas `config_items`, `feature_flags`, `secret_audit` |
-| **Multi-tenant** | Menciona | `tenant_id` en tablas de dominio | Override jerárquico: default ← tenant |
-| **Secretos** | No | No | Definición completa (Zero-Trust) |
-| **Pydantic V2** | Menciona | DTOs de dominio | Schemas estrictos de Settings/Config |
+| Dimensión | core-cenf | SPEC_00 | SPEC_03 | SPEC_23 (este doc) |
+|-----------|-----------|---------|---------|--------------------|
+| **Managers** | `ConfigManager`, `SecretManager`, `FeatureFlagManager` (Ports + adapters) | — | — | **Consumes** them via `from core_infrastructure import ...` |
+| **Alcance** | Horizontal reusable infra | Estrategia, capas, convenciones | Persistencia (Postgres, sesiones, memoria, knowledge) | Wiring + 2 yaml-agno ORM tables |
+| **PostgreSQL** | — | No | Sí (DDL completo) | Sí, pero **solo** tablas `yamlagno.feature_flags`, `yamlagno.secret_audit` |
+| **Pool / engine** | `SQLAlchemyAdapter` (owns it) | — | Consume adapter | Consume adapter — **does NOT manage its own pool** |
+| **Multi-tenant** | — | Menciona | `tenant_id` en tablas de dominio | Override jerárquico: default ← tenant |
+| **Secretos** | `SecretManager` Port (Zero-Trust) | No | No | Wiring + rotation/retention + `yamlagno.secret_audit` |
+| **Pydantic V2** | — | Menciona | DTOs de dominio | Schemas estrictos de Settings |
 
-**Regla de oro**:
-- "¿Cómo modelé sessions/memory/knowledge en Postgres?" → SPEC_03.
-- "¿Cuál es la arquitectura por capas?" → SPEC_00.
-- "¿Cómo leo una config, un secreto, o un flag, con qué precedencia y rotación?" → **SPEC_23**.
+**Golden rules**:
+- "How do I model sessions/memory/knowledge in Postgres?" → SPEC_03.
+- "What is the layered architecture?" → SPEC_00.
+- "Where is `ConfigManager` / `SecretManager` / `FeatureFlagManager` implemented?" → **core-cenf (`core_infrastructure`)**. yaml-agno consumes them.
+- "How does yaml-agno read a config, a secret, or a flag — DSN, env name, secret keys, rotation, audit?" → **SPEC_23**.
 
-SPEC_23 **usa** el pool de Postgres de SPEC_03 para `ConfigDB` (3 tablas dedicadas), pero no duplica el modelo de dominio.
+@ai-directive (no reimplementation): SPEC_23 does **not** define `ConfigPort`, `SecretPort`, `FlagPort`, `EnvLayer`/`RemoteLayer`/`FileLayer`/`DefaultsLayer`, or any manager/pool of its own. Those Ports and adapters live in core-cenf. yaml-agno only (a) wires DSN/env/secret keys into the core managers and (b) owns two ORM tables consumed via the core `GenericRepository`.
 
-**Referencia cruzada explícita**:
-- Pool async / `DATABASE_URL`: SPEC_03 §1.
+**Cross-references**:
+- Config/Secret/Flag managers and the async SQLAlchemy engine/pool: **core-cenf `core_infrastructure`** (`ConfigManager`, `SecretManager`, `FeatureFlagManager`, `SQLAlchemyAdapter`).
+- yaml-agno config-store schema, `GenericRepository`, `DeclarativeBase`, `database.dsn` wiring: SPEC_03.
 - `tenant_id` en DTOs: SPEC_03 §2.
 - Inyección de Config/Secret en runtime images: desplegado por SPEC_22, consumido por SPEC_23.
-- Telemetría de accesos a secretos: exportada a SPEC_21 (audit events como traces).
+- Telemetría de accesos a secretos: exportada a SPEC_21 / SPEC_27 (audit events como traces).
 
 ---
 
@@ -48,31 +52,27 @@ SPEC_23 **usa** el pool de Postgres de SPEC_03 para `ConfigDB` (3 tablas dedicad
 
 ```mermaid
 flowchart LR
-  ENV[Env vars] -->|mayor| CM[ConfigManager.get_*]
-  REMOTE[Remote ConfigDB] --> CM
-  FILES[Files: env/*.yaml] --> CM
+  ENV[Env vars] -->|mayor| CM[core ConfigManager.get_*]
+  FILES[Files: config/*.yaml] --> CM
   DEFAULTS[Defaults en Pydantic model] -->|menor| CM
 
-  CM -->|valida| PYD[Pydantic V2 BaseSettings]
+  CM -->|valida| PYD[Pydantic V2 YamlAgnoSettings]
   PYD -->|ok| APP[yaml_agno runtime]
   PYD -->|error| RAISE[ValidationError → fail-fast]
 
-  SM[SecretManager] -->|Zero-Trust| ADP{Adapter}
-  ADP -->|prod| VAULT[HashiCorp Vault]
-  ADP -->|aws| AWS[AWS Secrets Manager]
-  ADP -->|gcp| GCP[GCP Secret Manager]
-  ADP -->|azure| AZ[Key Vault]
-  ADP -->|git| SOPS[SOPS + age]
-  ADP -->|dev| DOTENV[.env ⚠️ dev only]
+  SM[core SecretManager] -->|Zero-Trust| ADP{core adapter}
+  ADP -->|prod| ENC[EncryptedSecretAdapter]
+  ADP -->|dev/test| MEM[InMemorySecretAdapter]
 
-  SM --> AUD[(secret_audit table)]
+  FF[core FeatureFlagManager] -->|seeded from| FFLAG[(yamlagno.feature_flags)]
+  SM -.access trail.-> AUD[(yamlagno.secret_audit append-only)]
 ```
 
 ### 1.2 Principios
 
 1. **Config vs Secret**: config no es sensible (URLs, timeouts, feature toggles booleans); secret lo es (API keys, passwords, certificados). Nunca se mezclan.
 2. **Zero-Trust Secrets**: nunca en env vars del proceso, nunca logueados, nunca listados en masa; acceso por nombre y registro audit.
-3. **Precedencia explícita y predecible**: Env > Remote(ConfigDB) > Files > Defaults.
+3. **Precedencia explícita y predecible**: Env > Files > Defaults (owned by core-cenf `PydanticConfigAdapter`). No RemoteLayer DB for config.
 4. **Fail-fast**: config inválida = proceso no arranca (`ValidationError`).
 5. **Hot-reload seguro**: cambios en runtime sin reinicio, con validación Pydantic previa a la aplicación.
 6. **Multi-tenant por override**: cada tenant hereda defaults y sobreescribe selectivamente.
@@ -174,179 +174,158 @@ class YamlAgnoSettings(BaseSettings):
         return v
 ```
 
-### 2.3 ConfigManager (Port Protocol)
+### 2.3 ConfigManager — CONSUMED from core-cenf
+
+yaml-agno does NOT define `ConfigPort` or `ConfigManager`. It imports the core Protocol and injects the `YamlAgnoSettings` Pydantic model via the core `PydanticConfigAdapter` (or `InMemoryConfigAdapter` in tests).
 
 ```python
-# yaml_agno/infra/config/manager.py
-from typing import Protocol, Any, runtime_checkable, AsyncIterator
+# yaml_agno/infra/config/bootstrap.py
+from core_infrastructure import (
+    ConfigManager,            # Protocol — consumed, never redefined
+    PydanticConfigAdapter,    # loads YamlAgnoSettings (YAML + env vars)
+    InMemoryConfigAdapter,    # test double
+)
 
-@runtime_checkable
-class ConfigPort(Protocol):
-    async def get_env(self) -> str: ...
-    async def get_string(self, key: str, default: str | None = None) -> str: ...
-    async def get_number(self, key: str, default: float | None = None) -> float: ...
-    async def get_boolean(self, key: str, default: bool | None = None) -> bool: ...
-    async def get_json(self, key: str, default: Any = None) -> Any: ...
-    async def get_section(self, section: str) -> dict[str, Any]: ...
-    async def reload(self) -> None: ...
-    def on_change(self, key: str, callback) -> None: ...
+def build_config_manager(env: str) -> ConfigManager:
+    """Wire yaml-agno settings into the core ConfigManager Protocol.
 
-class ConfigManager(ConfigPort):
+    The core PydanticConfigAdapter materializes YamlAgnoSettings (YAML files
+    under config/ + YA_ env vars), so precedence (Env > Files > Defaults) and
+    Pydantic V2 validation live entirely in core-cenf. yaml-agno only supplies
+    the settings model and the environment name.
     """
-    Precedence: Env vars > Remote(ConfigDB) > Files > Defaults.
-    Valida con YamlAgnoSettings (Pydantic V2). Hot-reload vía watchers.
-    """
-    def __init__(self, env: str, tenant_id: str | None, *,
-                 files: list[Path], configdb: "ConfigDB | None",
-                 hot: "HotReloader | None"):
-        self._layers = [
-            EnvLayer(),                   # mayor precedencia
-            RemoteLayer(configdb, tenant_id) if configdb else None,
-            FileLayer(files),
-            DefaultsLayer(),              # menor
-        ]
-        self._hot = hot
-        self._cache: dict[str, Any] = {}
-        self._listeners: dict[str, list] = {}
-        ...
-
-    async def reload(self) -> None:
-        new = await self._materialize()
-        validated = YamlAgnoSettings.model_validate(new)   # Pydantic V2
-        diff = self._diff(self._cache, validated.model_dump())
-        self._cache = validated.model_dump()
-        for key, cb in self._listeners.items():
-            if key in diff: await cb(diff[key])
-        if self._hot: await self._hot.notify(diff)
+    adapter = PydanticConfigAdapter(settings=YamlAgnoSettings, env=env)
+    return adapter  # type: ConfigManager  (Protocol, runtime-checkable)
 ```
 
-### 2.4 SecretManager (Zero-Trust Port)
+**Core API actually consumed** (`core_infrastructure.config.ports.ConfigManager`):
+
+| Method | Signature | yaml-agno usage |
+|--------|-----------|-----------------|
+| `get_env()` | `-> Env` (`"local"\|"dev"\|"staging"\|"prod"`) | branch on environment |
+| `get_string(key, default=None)` | dot-notation, e.g. `"database.dsn"` | read DSN, endpoints |
+| `get_number(key, default=None)` | `-> float` | timeouts, pool sizes |
+| `get_boolean(key, default=None)` | `-> bool` | toggles |
+| `get_json(key, default=None)` | deserialized object | nested blobs |
+| `get_section(namespace)` | `-> dict[str, Any]` | whole section |
+| `reload()` | `async` (guarded by `asyncio.Lock`) | hot-reload without restart |
+| `get_json_schema()` | `-> dict` | AX / agent discovery |
+
+@ai-directive: all `get_*` are **synchronous** in the core Protocol (only `reload()` is async). yaml-agno code MUST call them synchronously; do not `await config.get_string(...)`. Validation against `YamlAgnoSettings` happens inside the core adapter, so yaml-agno never re-implements precedence or Pydantic validation.
+
+### 2.4 SecretManager — CONSUMED from core-cenf
+
+yaml-agno does NOT define `SecretPort` or `SecretManager`. It imports the core Protocol and uses the core encrypted/in-memory adapters.
 
 ```python
-# yaml_agno/infra/secrets/manager.py
-from typing import Protocol, runtime_checkable
-from datetime import datetime
+# yaml_agno/infra/secrets/bootstrap.py
+from core_infrastructure import (
+    SecretManager,              # Protocol — consumed, never redefined
+    EncryptedSecretAdapter,    # prod: encrypted file/Vault-backed store
+    InMemorySecretAdapter,     # test double
+)
 
-@runtime_checkable
-class SecretPort(Protocol):
-    async def get_secret(self, name: str) -> str: ...
-    async def get_secret_json(self, name: str) -> dict: ...
-    async def list_names(self) -> list[str]: ...   # solo nombres, NUNCA valores
-
-class SecretManager(SecretPort):
-    """
-    Zero-Trust: NUNCA persiste secrets en env vars del proceso.
-    NUNCA expone listado con valores. Cachea en memoria solo por TTL corto.
-    Cada acceso se audita.
-    """
-    def __init__(self, adapter: "SecretAdapter", *,
-                 audit: "SecretAudit", ttl_s: int = 30):
-        self._adapter = adapter
-        self._audit = audit
-        self._ttl_s = ttl_s
-        self._cache: dict[str, tuple[str, float]] = {}
-
-    async def get_secret(self, name: str) -> str:
-        cached, exp = self._cache.get(name, (None, 0.0))
-        if cached is not None and time.time() < exp:
-            await self._audit.record(name, hit="cache")
-            return cached
-        value = await self._adapter.fetch(name)
-        if value is None:
-            await self._audit.record(name, hit="miss", ok=False)
-            raise SecretNotFoundError(name)
-        self._cache[name] = (value, time.time() + self._ttl_s)
-        await self._audit.record(name, hit="remote", ok=True)
-        return value
-
-    async def get_secret_json(self, name: str) -> dict:
-        raw = await self.get_secret(name)
-        return json.loads(raw)   # ej: {"username":..,"password":..}
+def build_secret_manager(env: str) -> SecretManager:
+    """Wire the core SecretManager. yaml-agno never touches secret values."""
+    adapter = EncryptedSecretAdapter() if env == "prod" else InMemorySecretAdapter()
+    return adapter  # type: SecretManager  (Protocol, runtime-checkable)
 ```
+
+**Core API actually consumed** (`core_infrastructure.secrets.ports.SecretManager`):
+
+| Method | Signature | yaml-agno usage |
+|--------|-----------|-----------------|
+| `get_secret(key)` | `async -> str` (masked in `SecretValue.__repr__`) | resolve DSN password, model API keys |
+| `invalidate_cache(key=None)` | sync | after rotation |
+| `rotate_secret(key, new_value)` | `async` | rotation (§2.9) |
+| `get_json_schema()` | `-> dict` | AX |
+
+@ai-directive: `get_secret()` is the ONLY async accessor. Cache TTL, masking, and fail-safe behavior are owned by core-cenf — yaml-agno does not re-implement the cache tuple or the miss/not-found logic. The core raises `ValidationError` (missing key) / `PermanentError` (backend unreachable); yaml-agno lets these propagate or wraps them via the core `ErrorHandlingManager`.
 
 **Anti-patrones prohibidos** (checked por SAST Bandit/Semgrep, SPEC_22 §2.2):
 ```python
 # ❌ PROHIBIDO
-os.environ["DB_PASSWORD"] = secret.get_secret("db/password")   # persistir en env
-logging.info("using key %s", key)                               # loguear valor
-[name: secret.get_secret(n) for n in secret.list_names()]       # dumpear todos
+os.environ["DB_PASSWORD"] = await secrets.get_secret("db_password")  # persist to env
+logging.info("using key %s", value)                                  # log the raw value
+print(await secrets.get_secret(k))                                   # dump a resolved secret
 ```
 
-### 2.5 Secret Adapters
+### 2.5 Secret Adapters — CONSUMED from core-cenf
+
+yaml-agno does NOT define `SecretAdapter`, `VaultAdapter`, `AWSSecretsAdapter`, etc. The core-cenf `core_infrastructure.secrets.adapters` provides:
+
+| Core adapter | When | Source |
+|--------------|------|--------|
+| `EncryptedSecretAdapter` | prod / staging — encrypted file/Vault-backed | `core_infrastructure.secrets.adapters.encrypted_secret_adapter` |
+| `InMemorySecretAdapter` | dev / tests — dict-backed | `core_infrastructure.secrets.adapters.in_memory_secret_adapter` |
+
+@ai-directive: the dotenv-dev-only guard, AppRole/lease renewal, SOPS+age, and cloud-KV adapters are concerns of core-cenf adapters, NOT yaml-agno. yaml-agno selects the adapter based on `config.get_env()` and otherwise only resolves secret **keys** (e.g. `"db_password"`, `"model/openai_key"`). See §7 calibration questions for any adapter not yet shipped by core-cenf (raise as a core dependency, do not re-implement here).
+
+### 2.6 FeatureFlagManager — CONSUMED from core-cenf
+
+yaml-agno does NOT define `FlagPort` or `FlagManager`. The core provides `FeatureFlagManager` (Protocol) with in-memory and file adapters.
 
 ```python
-# yaml_agno/infra/secrets/adapters.py
-class SecretAdapter(Protocol):
-    async def fetch(self, name: str) -> str | None: ...
+# yaml_agno/infra/flags/bootstrap.py
+from core_infrastructure import (
+    FeatureFlagManager,           # Protocol — consumed, never redefined
+    MemoryFeatureFlagAdapter,     # dev / tests
+    FlagContext,                  # evaluation context (tenant_id, environment, attributes)
+)
 
-class VaultAdapter(SecretAdapter):       # HashiCorp Vault (KV v2)
-    def __init__(self, addr: str, role_id: str, secret_id_ref: str): ...
-    async def fetch(self, name: str) -> str | None:
-        # mount=path/secret, auth AppRole, lease renewal
-        ...
-
-class AWSSecretsAdapter(SecretAdapter):  # AWS Secrets Manager
-    ...
-class GCPSecretAdapter(SecretAdapter):   # GCP Secret Manager
-    ...
-class AzureKVAdapter(SecretAdapter):     # Azure Key Vault
-    ...
-class SOPSAdapter(SecretAdapter):        # SOPS + age (git, cifrado en reposo)
-    ...
-class DotenvAdapter(SecretAdapter):      # ⚠️ DEV ONLY, assert env != prod
-    def __init__(self, path: Path, env: str):
-        assert env != "prod", "dotenv forbidden in prod"
-        ...
+def build_flag_manager(env: str, flags: list) -> FeatureFlagManager:
+    """Wire the core FeatureFlagManager. Flag definitions may be seeded from
+    the yamlagno.feature_flags table (§5) into the memory adapter at boot."""
+    adapter = MemoryFeatureFlagAdapter(flags=flags)
+    return adapter  # type: FeatureFlagManager
 ```
 
-### 2.6 FlagManager (Feature Flags)
+**Core API actually consumed** (`core_infrastructure.feature_flags.ports.FeatureFlagManager`):
 
-```python
-# yaml_agno/infra/flags/manager.py
-@runtime_checkable
-class FlagPort(Protocol):
-    async def is_enabled(self, flag: str, *, tenant_id: str | None = None,
-                         user_id: str | None = None) -> bool: ...
-    async def get_variant(self, flag: str, *, tenant_id: str | None = None,
-                          user_id: str | None = None) -> str: ...
-    async def reload(self) -> None: ...
+| Method | Signature | Notes |
+|--------|-----------|-------|
+| `is_enabled(flag_key, context=None)` | `-> bool` | **fail-safe: returns `False` for unknown flags, never raises** |
+| `get_flag_value(flag_key, context=None, default=None)` | `-> Any` | payload on cache miss → default |
+| `get_all_flags(context=None)` | `-> dict[str, bool]` | evaluate every flag against context |
+| `refresh()` | `async` | hot-reload from provider (no-op for memory adapter) |
 
-class FlagManager(FlagPort):
-    """
-    Adapters: LaunchDarkly | Unleash | Custom(Postgres).
-    Soporta gradual rollout (porcentaje), A/B (variantes), targeting por tenant/user.
-    Hot-reload de flags sin reinicio.
-    """
-    def __init__(self, adapter: "FlagAdapter"): self._a = adapter
-    async def is_enabled(self, flag, *, tenant_id=None, user_id=None) -> bool:
-        return await self._a.evaluate(flag, enabled=True,
-                                      tenant_id=tenant_id, user_id=user_id)
-```
+@ai-directive: `is_enabled()` is **synchronous** and `refresh()` is **async** in the core Protocol. Rule evaluation is owned by core-cenf (`"eq"` operator, all rules must match). yaml-agno does NOT re-implement rollout hashing or tenant override; it builds a `FlagContext(tenant_id=..., environment=...)` and passes it to the core. The `yamlagno.feature_flags` table (§5) is the yaml-agno-owned **source of flag definitions** seeded into the adapter at boot and on `refresh()` — it is not a reimplementation of the manager.
 
-Evaluación determinista de rollout (hash consistente):
-```python
-def _in_rollout(self, flag: str, user_id: str, percent: int) -> bool:
-    h = int(sha256(f"{flag}:{user_id}".encode()).hexdigest()[:8], 16) % 100
-    return h < percent
-```
+### 2.7 Hot-Reload Mechanism — uses core async reload/refresh
 
-### 2.7 Hot-Reload Mechanism
+Hot-reload is driven by the core managers' async methods (`config.reload()`, `flags.refresh()`). yaml-agno only schedules the trigger and, on success, re-seeds the flag adapter from `yamlagno.feature_flags` if needed.
 
 ```python
 # yaml_agno/infra/config/hotreload.py
-class HotReloader:
-    """Estrategias: file watch (watchdog) | polling ConfigDB | pub/sub."""
-    async def start(self): ...
-    async def stop(self): ...
-    async def notify(self, diff: dict): ...
+import asyncio
 
-class FileWatchStrategy(HotReloader):   # watchdog
-    def __init__(self, paths: list[Path], cb): ...
-class PollingStrategy(HotReloader):     # ConfigDB cada N segundos
-    def __init__(self, configdb, interval_s: int): ...
-class PubSubStrategy(HotReloader):      # LISTEN/NOTIFY Postgres / Redis
-    def __init__(self, channel: str): ...
+class HotReloadCoordinator:
+    """Triggers core reload()/refresh() on a schedule or external signal.
+
+    The actual reload logic (Pydantic re-validation, cache swap, asyncio.Lock
+    race protection) lives in core-cenf. yaml-agno only decides WHEN to call it.
+    """
+
+    def __init__(self, config, flags, *, interval_s: int = 30):
+        self._config = config      # core ConfigManager Protocol
+        self._flags = flags        # core FeatureFlagManager Protocol
+        self._interval_s = interval_s
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        async def _loop():
+            while True:
+                await asyncio.sleep(self._interval_s)
+                await self._config.reload()    # core: re-validate + swap
+                await self._flags.refresh()    # core: refresh flag cache
+        self._task = asyncio.create_task(_loop())
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
 ```
+
+@ai-directive: yaml-agno MUST call the core `reload()`/`refresh()` coroutines; it MUST NOT re-implement watchers, polling strategies, or `LISTEN/NOTIFY` consumers as new manager code. If a Postgres `LISTEN/NOTIFY` signal is desired (§5), it simply invokes `await coordinator.reload_now()` which delegates to the core methods. Validation-before-swap and "keep old value on `ValidationError`" are guaranteed by the core adapter.
 
 ### 2.8 Multi-tenant Config (override)
 
@@ -370,9 +349,9 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 > @ai-directive **Rotación y retención de secrets son capabilities del Core de yaml-agno (`SecretManager` + `secret_audit`), NO nativas de Agno.** Agno no provee TTL de secretos, auditoría de accesos ni retención de logs de secretos; este SPEC los añade. Esta distinción es relevante para el alcance: cualquier feature de TTL/retención/rotation es mantenida por el equipo yaml-agno y referencia este SPEC, no a la librería Agno.
 
-Rotación: cada secreto tiene `ttl_days`; `rotation_compliance.py` (SPEC_22 §4 TASK_227) alerta cuando `rotated_at + ttl - alert_days <= now`.
+Rotación: cada secreto tiene `ttl_days`; `rotation_compliance.py` (SPEC_22 §4 TASK_227) alerta cuando `rotated_at + ttl - alert_days <= now`. The actual write-and-invalidate step delegates to the core `await secrets.rotate_secret(key, new_value)` (which stores the new value and evicts the cache). yaml-agno owns the TTL/compliance policy and the `yamlagno.secret_audit` trail, not the rotation primitive.
 
-Auditoría (tabla `secret_audit`): insert inmutable, append-only, retention 365d.
+Auditoría (tabla `yamlagno.secret_audit`): insert inmutable, append-only, retention 365d. Accessed via the core `GenericRepository[SecretAuditRecord]` (DeclarativeBase), schema `yamlagno`.
 
 ---
 
@@ -384,13 +363,12 @@ Feature: Config & Secrets management
   I want deterministic config precedence, zero-trust secrets, hot-reload and flags
   So that runtime behavior is correct, auditable, and rotatable.
 
-  # --- CONFIG PRECEDENCE ---
-  Scenario: env var overrides remote, file and default
+  # --- CONFIG PRECEDENCE (owned by core PydanticConfigAdapter) ---
+  Scenario: env var overrides file and default
     Given default "runtime.request_timeout_s" = 30
     And file prod.yaml sets it to 20
-    And ConfigDB sets it to 15
     And env var YA_RUNTIME__REQUEST_TIMEOUT_S = 5
-    When ConfigManager.get_number("runtime.request_timeout_s") is called
+    When the core ConfigManager.get_number("runtime.request_timeout_s") is called
     Then it returns 5
 
   Scenario: invalid config value fails fast at startup
@@ -404,80 +382,77 @@ Feature: Config & Secrets management
     When YamlAgnoSettings validates
     Then validation raises "auth_mode=basic forbidden in prod"
 
-  # --- HOT-RELOAD ---
-  Scenario: file change triggers reload and notifies listener
-    Given ConfigManager loaded prod.yaml with request_timeout_s=30
-    And a listener registered on "runtime.request_timeout_s"
-    When prod.yaml is edited to request_timeout_s=45 on disk
-    And the FileWatchStrategy detects the change
-    Then reload() validates the new value with Pydantic
-    And the listener callback receives {old:30, new:45}
+  # --- HOT-RELOAD (delegates to core reload()) ---
+  Scenario: trigger invokes core reload and runtime picks up new value
+    Given the core ConfigManager loaded prod.yaml with request_timeout_s=30
+    And prod.yaml is edited to request_timeout_s=45 on disk
+    When the HotReloadCoordinator calls await config.reload()
+    Then the core adapter validates the new value with Pydantic
     And the runtime uses 45 for new requests without restart
 
   Scenario: invalid hot-reload value is rejected, runtime keeps old value
     Given prod.yaml valid with pool_size=20
     When it is edited to pool_size=9999 (above max 100)
-    Then model_validate raises ValidationError
+    Then the core reload() raises ValidationError
     And the reload is aborted
     And the runtime keeps pool_size=20
 
-  # --- ZERO-TRUST SECRETS ---
-  Scenario: secret is fetched and cached within TTL
-    Given SecretManager with ttl_s=30 and a VaultAdapter
-    When get_secret("db/password") is called twice within 30s
-    Then the adapter.fetch is called exactly once
-    And secret_audit records two accesses (one cache, one remote)
+  # --- ZERO-TRUST SECRETS (delegates to core SecretManager) ---
+  Scenario: secret is fetched and cached within TTL by the core
+    Given a core SecretManager backed by EncryptedSecretAdapter
+    When get_secret("db/password") is called twice within the core TTL
+    Then the backend fetch happens at most once
+    And yamlagno.secret_audit records the access
 
-  Scenario: secret not found is audited as failure and never cached
-    Given VaultAdapter.fetch("missing") returns None
+  Scenario: secret not found raises a core error and is audited
+    Given a core SecretManager where key "missing" is absent
     When get_secret("missing") is called
-    Then SecretNotFoundError is raised
-    And secret_audit records ok=False
-    And the cache does NOT contain "missing"
+    Then the core raises ValidationError
+    And yamlagno.secret_audit records ok=False
 
   Scenario: secrets are never persisted to env vars
-    Given a SecretManager instance
+    Given a core SecretManager instance
     When any code path resolves a secret
     Then os.environ MUST NOT contain the secret value
     And no log line contains the secret value (Semgrep verified)
 
-  # --- SECRET ROTATION ---
+  # --- SECRET ROTATION (yaml-agno policy + core rotate) ---
   Scenario: secret near expiry triggers rotation alert
     Given secret "model/openai_key" with ttl_days=90 and rotated_at=88 days ago
     And alert_days=7
     When rotation_compliance runs
     Then it flags "model/openai_key" as expiring in 2 days
-    And an audit event is emitted
+    And on rotate it calls await core secrets.rotate_secret(key, new_value)
+    And yamlagno.secret_audit records an audit event
 
-  # --- FEATURE FLAGS ---
+  # --- FEATURE FLAGS (delegates to core FeatureFlagManager) ---
   Scenario: flag disabled globally returns False
     Given flag "enable_experimental_rag" with enabled=false
-    When FlagManager.is_enabled("enable_experimental_rag", tenant_id="acme")
+    When the core FeatureFlagManager.is_enabled("enable_experimental_rag", FlagContext(tenant_id="acme"))
     Then it returns False
 
-  Scenario: 50% rollout is deterministic per user
-    Given flag "new_rag_engine" with percent=50
-    When is_enabled is called for user "u1" twice
-    Then both calls return the same boolean
-    And approximately 50% of 10000 synthetic users are in rollout
+  Scenario: unknown flag fails safe to False
+    Given the core FeatureFlagManager with no flag "does_not_exist"
+    When is_enabled("does_not_exist") is called
+    Then it returns False without raising
 
   Scenario: tenant override enables a globally disabled flag
     Given flag "new_rag_engine" enabled=false globally
-    And tenant override for "tenant_acme" enables it
-    When is_enabled("new_rag_engine", tenant_id="tenant_acme")
+    And a tenant override for "tenant_acme" enables it (seeded from yamlagno.feature_flags)
+    When is_enabled("new_rag_engine", FlagContext(tenant_id="tenant_acme"))
     Then it returns True
 
   Scenario: hot-reload of flags flips behavior without restart
     Given flag "new_rag_engine" enabled=false
-    When the flag is flipped to true via pubsub
-    Then the next is_enabled call returns True within 1s
+    When the HotReloadCoordinator receives a pg_notify signal and calls await flags.refresh()
+    Then the next is_enabled call returns the new value without restart
 
-  # --- MULTI-TENANT ---
+  # --- MULTI-TENANT (YAML merge is yaml-agno wiring, fed to the core adapter) ---
   Scenario: tenant override merges over default
     Given default persistence.pool_size=20
     And tenant_globex.yaml sets persistence.pool_size=50
-    When ConfigManager(tenant_id="tenant_globex").get_section("persistence")
-    Then it returns {"pool_size": 50, ...other defaults}
+    When yaml-agno deep-merges the tenant YAML and feeds it to the core ConfigManager
+    Then get_section("persistence") returns {"pool_size": 50, ...other defaults}
 ```
 
 ---
@@ -491,170 +466,167 @@ TASK_231 | File: yaml_agno/infra/config/schemas.py
   Green:  add Field(ge=1, le=500) + extra=forbid
   Commit: "RED/GREEN: Pydantic V2 strict config schema (SPEC_23 §2.2)"
 
-TASK_232 | File: yaml_agno/infra/config/manager.py (precedence)
-  Test: .../test_config_manager.py::test_env_overrides_remote_over_files_over_defaults
+TASK_232 | File: yaml_agno/infra/config/bootstrap.py (wire core ConfigManager)
+  Test: .../test_config_bootstrap.py::test_env_overrides_files_over_defaults
   RED:    get_number returns file value (30) instead of env (5)
-  Green:  implement ordered layers + materialize
-  Commit: "RED/GREEN: ConfigManager precedence Env>Remote>Files>Defaults"
+  Green:  inject YamlAgnoSettings into core PydanticConfigAdapter; precedence is owned by core
+  Commit: "RED/GREEN: wire YamlAgnoSettings into core ConfigManager"
 
-TASK_233 | File: yaml_agno/infra/config/manager.py (validation on reload)
-  Test: .../test_config_manager.py::test_invalid_reload_aborts_keeps_old
-  RED:    reload applies invalid value, runtime corrupted
-  Green:  validate before swap, keep old on ValidationError
-  Commit: "RED/GREEN: hot-reload validates before applying"
+TASK_233 | File: yaml_agno/infra/config/bootstrap.py (validation on reload)
+  Test: .../test_config_bootstrap.py::test_invalid_reload_aborts_keeps_old
+  RED:    reload applies invalid value
+  Green:  call core config.reload(); core validates-before-swap keeps old on ValidationError
+  Commit: "RED/GREEN: hot-reload delegates validation to core"
 
-TASK_234 | File: yaml_agno/infra/secrets/manager.py (zero-trust + cache TTL)
-  Test: .../test_secret_manager.py::test_fetch_caches_within_ttl_then_refetches
-  RED:    adapter.fetch called twice within TTL
-  Green:  memory cache with expiry tuple
-  Commit: "RED/GREEN: SecretManager TTL cache"
+TASK_234 | File: yaml_agno/infra/secrets/bootstrap.py (zero-trust via core)
+  Test: .../test_secret_bootstrap.py::test_get_secret_delegates_to_core
+  RED:    yaml-agno re-implements a secret cache
+  Green:  import core SecretManager; call await secrets.get_secret(key); TTL/cache owned by core
+  Commit: "RED/GREEN: SecretManager consumed from core (no local cache)"
 
-TASK_235 | File: yaml_agno/infra/secrets/manager.py (not found audit)
-  Test: .../test_secret_manager.py::test_missing_secret_audited_not_cached
-  RED:    None result cached / not audited
-  Green:  raise SecretNotFoundError, audit ok=False, skip cache
-  Commit: "RED/GREEN: zero-trust miss handling + audit"
+TASK_235 | File: yaml_agno/infra/secrets/bootstrap.py (miss handling + audit)
+  Test: .../test_secret_bootstrap.py::test_missing_secret_raises_and_audits
+  RED:    missing key swallowed / not audited
+  Green:  let core ValidationError propagate; record yamlagno.secret_audit ok=False via GenericRepository
+  Commit: "RED/GREEN: zero-trust miss → core error + yamlagno audit"
 
-TASK_236 | File: yaml_agno/infra/secrets/adapters.py (VaultAdapter)
-  Test: .../test_vault_adapter.py::test_fetch_returns_value_and_renews_lease
-  RED:    fetch returns None / no lease renewal
-  Green:  AppRole login, KV v2 read, lease renew before expiry
-  Commit: "RED/GREEN: VaultAdapter AppRole + lease"
+TASK_236 | File: yaml_agno/infra/secrets/bootstrap.py (adapter selection)
+  Test: .../test_secret_bootstrap.py::test_prod_uses_encrypted_adapter
+  RED:    prod uses InMemorySecretAdapter
+  Green:  select core EncryptedSecretAdapter when env==prod, InMemorySecretAdapter otherwise
+  Commit: "RED/GREEN: select core secret adapter by environment"
 
-TASK_237 | File: yaml_agno/infra/secrets/adapters.py (DotenvAdapter prod guard)
-  Test: .../test_dotenv_adapter.py::test_forbidden_in_prod
-  RED:    DotenvAdapter instantiable with env=prod
-  Green:  assert env != "prod" in __init__
-  Commit: "RED/GREEN: dotenv dev-only guard"
+TASK_237 | REMOVED (dotenv prod guard is a core-cenf adapter concern, not yaml-agno)
 
-TASK_238 | File: yaml_agno/infra/secrets/rotator.py
+TASK_238 | File: yaml_agno/infra/secrets/rotator.py (TTL compliance + core rotate)
   Test: .../test_secret_rotator.py::test_flags_secret_near_expiry
   RED:    secret 88/90 days not flagged
-  Green:  compute rotated_at + ttl - alert_days <= now
-  Commit: "RED/GREEN: SecretRotator TTL compliance (SPEC_23 §2.9)"
+  Green:  compute rotated_at + ttl - alert_days <= now; on rotate call await core secrets.rotate_secret(key, new_value)
+  Commit: "RED/GREEN: SecretRotator TTL compliance delegating rotation to core (SPEC_23 §2.9)"
 
-TASK_239 | File: yaml_agno/infra/flags/manager.py
-  Test: .../test_flag_manager.py::test_rollout_is_deterministic_per_user
-  RED:    same user gets different result across calls
-  Green:  consistent sha256 hash bucket per (flag,user)
-  Commit: "RED/GREEN: deterministic rollout hash"
+TASK_239 | File: yaml_agno/infra/flags/bootstrap.py (consume core FeatureFlagManager)
+  Test: .../test_flag_bootstrap.py::test_is_enabled_delegates_to_core
+  RED:    yaml-agno re-implements rollout hash
+  Green:  import core FeatureFlagManager; build FlagContext; is_enabled() owned by core (fail-safe False)
+  Commit: "RED/GREEN: FeatureFlagManager consumed from core (no local rollout)"
 
-TASK_2310 | File: yaml_agno/infra/flags/manager.py (tenant override)
-  Test: .../test_flag_manager.py::test_tenant_override_enables_globally_disabled
+TASK_2310 | File: yaml_agno/infra/flags/bootstrap.py (tenant via FlagContext)
+  Test: .../test_flag_bootstrap.py::test_tenant_override_via_context
   RED:    tenant override ignored
-  Green:  merge default + tenant flags before evaluate
-  Commit: "RED/GREEN: tenant-specific flag override"
+  Green:  seed tenant flags from yamlagno.feature_flags; pass FlagContext(tenant_id=...) to core
+  Commit: "RED/GREEN: tenant flag override via core FlagContext"
 
-TASK_2311 | File: yaml_agno/infra/config/hotreload.py (file watch)
-  Test: .../test_hotreload.py::test_file_change_notifies_listener
-  RED:    edit file → no callback
-  Green:  watchdog observer + debounce → notify
-  Commit: "RED/GREEN: FileWatchStrategy hot-reload"
+TASK_2311 | File: yaml_agno/infra/config/hotreload.py (trigger core reload)
+  Test: .../test_hotreload.py::test_trigger_invokes_core_reload
+  RED:    coordinator re-implements materialize/swap
+  Green:  HotReloadCoordinator calls await config.reload(); no local watchers/swap
+  Commit: "RED/GREEN: HotReloadCoordinator delegates to core reload()"
 
-TASK_2312 | File: yaml_agno/infra/config/hotreload.py (pubsub)
-  Test: .../test_hotreload.py::test_pubsub_flips_flag_under_1s
+TASK_2312 | File: yaml_agno/infra/config/hotreload.py (LISTEN/NOTIFY → core refresh)
+  Test: .../test_hotreload.py::test_notify_invokes_core_refresh
   RED:    flag change not reflected
-  Green:  LISTEN/NOTIFY Postgres channel → reload
-  Commit: "RED/GREEN: PubSubStrategy hot-reload"
+  Green:  on pg_notify signal call await flags.refresh() (core) + reseed from yamlagno.feature_flags
+  Commit: "RED/GREEN: NOTIFY signal → core flags.refresh()"
 
-TASK_2313 | File: yaml_agno/infra/config/merge.py (tenant deep merge)
+TASK_2313 | File: yaml_agno/infra/config/merge.py (tenant deep merge for YAML wiring)
   Test: .../test_merge.py::test_tenant_override_deep_merges
   RED:    tenant value replaces whole section instead of merging
-  Green:  recursive deep merge
-  Commit: "RED/GREEN: multi-tenant deep merge"
+  Green:  recursive deep merge of tenant YAML before feeding core adapter
+  Commit: "RED/GREEN: multi-tenant YAML deep merge (wiring)"
 
-TASK_2314 | File: yaml_agno/infra/config/validator.py (ConfigValidator)
-  Test: .../test_config_validator.py::test_extra_forbidden_key_rejected
+TASK_2314 | File: yaml_agno/infra/config/schemas.py (extra=forbid in YamlAgnoSettings)
+  Test: .../test_schemas.py::test_extra_forbidden_key_rejected
   RED:    unknown top-level key accepted
-  Green:  validate with extra=forbid → raise
-  Commit: "RED/GREEN: ConfigValidator fail-fast on unknown keys"
+  Green:  YamlAgnoSettings model_config extra=forbid (validated by core PydanticConfigAdapter)
+  Commit: "RED/GREEN: YamlAgnoSettings fail-fast on unknown keys"
 
-TASK_2315 | File: yaml_agno/infra/config/configdb.py (DDL + access)
-  Test: .../test_configdb.py::test_get_tenant_override_over_default (testcontainer)
+TASK_2315 | File: yaml_agno/infra/flags/repository.py (yamlagno.feature_flags via GenericRepository)
+  Test: .../test_flag_repository.py::test_get_tenant_override_over_default (testcontainer)
   RED:    tenant row ignored
-  Green:  query config_items WHERE tenant_id = ? OR tenant_id IS NULL ORDER BY tenant NULLS LAST
-  Commit: "RED/GREEN: ConfigDB multi-tenant query"
+  Green:  GenericRepository[FeatureFlagRecord] query WHERE name=? AND (tenant_id=? OR tenant_id IS NULL) ORDER BY tenant_id NULLS LAST
+  Commit: "RED/GREEN: yamlagno.feature_flags multi-tenant query via core GenericRepository"
 ```
 
 ---
 
-## 5. DDL ConfigDB (PostgreSQL 16+)
+## 5. DDL — yaml-agno config store tables (schema `yamlagno`)
+
+These are the ONLY yaml-agno-owned tables for this SPEC. They live in schema `yamlagno`, are defined as `DeclarativeBase` ORM entities, and are accessed via the core `GenericRepository[T]` (concrete DDL is auto-provisioned by the core `SQLAlchemyAdapter` from the ORM models — the SQL below documents the resulting shape). The engine/pool is owned by the core `SQLAlchemyAdapter` (`config.get_string("database.dsn")`); yaml-agno does NOT create its own engine or pool.
+
+> @ai-directive (no `config_items`): the previous `config_items` RemoteLayer table is REMOVED. yaml-agno consumes the core `ConfigManager` via `PydanticConfigAdapter`, so runtime config is resolved from YAML files + env vars (precedence owned by core-cenf). There is no RemoteLayer DB for config. Only feature-flag **definitions** and the secret **audit trail** are persisted by yaml-agno.
 
 ```sql
--- migrations/V023__configdb.sql
+-- migrations/V023__yamlagno_flags_and_audit.sql
+-- Resulting DDL auto-provisioned from DeclarativeBase ORM models.
 
-CREATE TABLE config_items (
+CREATE SCHEMA IF NOT EXISTS yamlagno;
+
+-- Feature flag DEFINITIONS (seeded into the core MemoryFeatureFlagAdapter at
+-- boot and on refresh()). This is yaml-agno's source of flag truth, NOT a
+-- reimplementation of FeatureFlagManager.
+CREATE TABLE yamlagno.feature_flags (
     id            BIGSERIAL PRIMARY KEY,
+    name          TEXT NOT NULL,
     tenant_id     UUID,                       -- NULL = default global
-    section       TEXT NOT NULL,              -- 'runtime', 'persistence', ...
-    key           TEXT NOT NULL,
-    value         JSONB NOT NULL,
-    schema_version SMALLINT NOT NULL DEFAULT 1,
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_by    TEXT NOT NULL,
-    CHECK (tenant_id IS NULL OR tenant_id <> '00000000-0000-0000-0000-000000000000')
-);
-
-CREATE UNIQUE INDEX uq_config_tenant_section_key
-    ON config_items (COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'), section, key);
-
-CREATE TABLE feature_flags (
-    id            BIGSERIAL PRIMARY KEY,
-    name          TEXT NOT NULL UNIQUE,
-    tenant_id     UUID,                       -- NULL = default
     enabled       BOOLEAN NOT NULL DEFAULT FALSE,
     percent       SMALLINT NOT NULL DEFAULT 0 CHECK (percent BETWEEN 0 AND 100),
-    variant_rules JSONB,                      -- A/B targeting
+    variant_rules JSONB,                      -- A/B targeting payload
     description   TEXT,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_by    TEXT NOT NULL
+    updated_by    TEXT NOT NULL,
+    UNIQUE (name, tenant_id)
 );
 
-CREATE INDEX ix_flags_tenant ON feature_flags (name, COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'));
+CREATE INDEX ix_yamlagno_flags_tenant
+    ON yamlagno.feature_flags (name, COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'));
 
-CREATE TABLE secret_audit (
-    id            BIGSERIAL PRIMARY KEY,
+-- Immutable append-only secret access trail. Accessed via
+-- GenericRepository[SecretAuditRecord]. Retention 365d; partitioned by year.
+CREATE TABLE yamlagno.secret_audit (
+    id            BIGSERIAL,
     secret_name   TEXT NOT NULL,
     actor         TEXT NOT NULL,              -- service/tenant/user
     tenant_id     UUID,
     hit           TEXT NOT NULL CHECK (hit IN ('cache','remote','miss')),
     ok            BOOLEAN NOT NULL,
     accessed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    trace_id      TEXT                        -- cruza con SPEC_21
+    trace_id      TEXT,                       -- crosses with SPEC_21 / SPEC_27
+    PRIMARY KEY (id, accessed_at)
 ) PARTITION BY RANGE (accessed_at);
 
-CREATE TABLE secret_audit_2026 PARTITION OF secret_audit
+CREATE TABLE yamlagno.secret_audit_2026 PARTITION OF yamlagno.secret_audit
     FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
 
-CREATE INDEX ix_audit_name_time ON secret_audit (secret_name, accessed_at DESC);
-CREATE INDEX ix_audit_trace ON secret_audit (trace_id);
+CREATE INDEX ix_yamlagno_audit_name_time
+    ON yamlagno.secret_audit (secret_name, accessed_at DESC);
+CREATE INDEX ix_yamlagno_audit_trace ON yamlagno.secret_audit (trace_id);
 
--- Append-only: revoke UPDATE/DELETE from app role
-REVOKE UPDATE, DELETE ON secret_audit FROM yaml_agno_app;
-GRANT INSERT, SELECT ON secret_audit TO yaml_agno_app;
+-- Append-only: revoke UPDATE/DELETE from the app role.
+REVOKE UPDATE, DELETE ON yamlagno.secret_audit FROM yaml_agno_app;
+GRANT INSERT, SELECT ON yamlagno.secret_audit TO yaml_agno_app;
 
--- Hot-reload notification channel
--- app runs: LISTEN config_changed;
--- admin after update: SELECT pg_notify('config_changed', json_build_object('section',section,'key',key)::text);
+-- Hot-reload signal channel (optional): when an admin flips a flag row, a
+-- trigger may pg_notify('yamlagno_flags_changed', ...). yaml-agno's
+-- HotReloadCoordinator (§2.7) receives it and calls the core refresh(); it
+-- does NOT own a LISTEN/NOTIFY manager implementation.
 ```
 
 ---
 
 ## 6. SUPUESTOS TÉCNICOS
 
-1. **Vault como default prod adapter**; AWS/GCP/Azure según cloud. SOPS para secretos en repo (cifrado con `age`), dotenv **solo dev**.
-2. **Cache de secrets en memoria, TTL 30s** — balance entre latencia y frescura tras rotación. Configurable via `secrets.cache_ttl_s`.
-3. **ConfigDB comparte el pool de SPEC_03** pero con rol `yaml_agno_app` restringido; `secret_audit` es append-only.
-4. **Pub/sub hot-reload** vía Postgres `LISTEN/NOTIFY` (mismo RDBMS, sin infra extra). Para sistemas distribuidos con varios pods, NOTIFY alcanza a todos los LISTEN conectados.
-5. **Watchdog** para files en dev/staging; polling como fallback si watchdog no está disponible (containers read-only).
-6. **Feature flags custom (Postgres)** es el adapter MVP; LaunchDarkly/Unleash como adapters futuros (mismo Port).
-7. **Rollout determinista** con `sha256(flag:user) % 100 < percent` — estable entre reinicios y réplicas.
-8. **Validación Pydantic V2** aplica tanto al boot como al hot-reload; error en hot-reload aborta y conserva el estado previo.
-9. **`extra=forbid`** en settings: una key typo → fail-fast. Reduce config drift silencioso.
-10. **Secrets no viajan como arg/CLI** (visible en `ps`); siempre via `SecretManager`.
-11. **Audit retention 365d**; partición anual en `secret_audit`. Export a SIEM vía SPEC_21.
-12. **Multi-tenant**: `tenant_id` opcional en todo lookup; `None` = default global. Override deep-merge nunca reemplaza secciones enteras salvo que el tenant defina la sección completa.
-13. **Zero environment persistence**: SAST (SPEC_22) bloquea cualquier `os.environ[k] = secret...`.
+1. **Secret adapters are owned by core-cenf** (`EncryptedSecretAdapter` for prod, `InMemorySecretAdapter` for dev/test). Any Vault/AWS/GCP/Azure/SOPS/dotenv backend not yet shipped by core-cenf is raised as a core dependency — yaml-agno does NOT re-implement adapters here.
+2. **Secret cache TTL is owned by core-cenf** (short in-memory TTL, balance between latency and freshness after rotation).
+3. **Pool/engine belongs to the core `SQLAlchemyAdapter`** (`config.get_string("database.dsn")`), consumed via the core `GenericRepository`. yaml-agno does NOT manage its own pool; the `yamlagno_*` tables live in the same Postgres as SPEC_03 under a restricted `yaml_agno_app` role, and `yamlagno.secret_audit` is append-only.
+4. **Hot-reload** is driven by the core async `reload()` / `refresh()` methods; yaml-agno only schedules the trigger (and optionally listens for a Postgres `LISTEN/NOTIFY` signal that invokes those coroutines).
+5. **Feature flags** are evaluated by the core `FeatureFlagManager` (`MemoryFeatureFlagAdapter` seeded from `yamlagno.feature_flags`); Unleash/LaunchDarkly are core adapters, not yaml-agno code.
+6. **Rollout / rule evaluation is owned by core-cenf** (fail-safe `False` for unknown flags, `"eq"` rule operator). yaml-agno passes a `FlagContext`.
+7. **Pydantic V2 validation** (boot and hot-reload, keep-old-on-error) is owned by the core `PydanticConfigAdapter`; yaml-agno supplies the `YamlAgnoSettings` model.
+8. **`extra=forbid`** in `YamlAgnoSettings`: a typo'd key → fail-fast. Reduces silent config drift.
+9. **Secrets never travel as CLI args** (visible in `ps`); always via the core `SecretManager`.
+10. **Audit retention 365d**; yearly partition on `yamlagno.secret_audit`. Export to SIEM via SPEC_21 / SPEC_27.
+11. **Multi-tenant**: `tenant_id` optional on every lookup; `None` = global default. Override deep-merge never replaces whole sections unless the tenant defines the full section.
+12. **Zero environment persistence**: SAST (SPEC_22) blocks any `os.environ[k] = secret...`.
 
 ---
 
@@ -667,10 +639,10 @@ GRANT INSERT, SELECT ON secret_audit TO yaml_agno_app;
 5. ¿Hot-reload via `LISTEN/NOTIFY` suficiente para N pods, o se requiere Redis Pub/Sub?
 6. ¿`extra=forbid` desde el día 1 puede romper migraciones; se permite `extra=allow` en dev y `forbid` en prod?
 7. ¿Rotación: automática (script rota y actualiza) o solo alerta para rotación manual? (Propuesta MVP: alerta.)
-8. ¿ConfigDB es una DB lógica separada del dominio, o esquema `infra_config` en la misma DB de SPEC_03?
-9. ¿Flags por usuario (targeting fino) se incluye en MVP o solo global + tenant + porcentaje?
-10. ¿SOPS para qué secretos? ¿Solo los de bootstrap (Vault credentials), o también configs sensibles por ambiente?
+8. ¿Las tablas `yamlagno.feature_flags` / `yamlagno.secret_audit` conviven en el schema `yamlagno` de la misma DB de SPEC_03, o se aislan en una DB lógica separada?
+9. ¿Flags por usuario (targeting fino) se incluye en MVP o solo global + tenant + porcentaje? (La evaluación la hace el core; esto define qué `attributes` se pasan en `FlagContext`.)
+10. ¿SOPS para qué secretos? ¿Solo los de bootstrap, o también configs sensibles por ambiente? (Si se necesita adapter SOPS en core-cenf, se levanta como dependencia del core.)
 
 ---
 
-> **Cierre**: SPEC_23 entrega una capa de Infra Core confiable: `ConfigManager` con precedencia predecible y validación Pydantic V2, `SecretManager` Zero-Trust con auditoría inmutable, `FlagManager` con rollout determinista y hot-reload seguro, todo multi-tenant. Ningún secreto en env vars, ninguna config inválida arranca, ningún flag cambia sin notificar.
+> **Cierre**: SPEC_23 define cómo yaml-agno **consume** los managers horizontales de core-cenf (`ConfigManager`, `SecretManager`, `FeatureFlagManager`) en vez de reimplementarlos. yaml-agno aporta el wiring (DSN, env name, secret keys), la política de rotación/TTL, el modelo `YamlAgnoSettings` (Pydantic V2) y dos tablas propias (`yamlagno.feature_flags`, `yamlagno.secret_audit`) vía el `GenericRepository` del core. El pool/engine pertenece al `SQLAlchemyAdapter` del core. Ningún secreto en env vars, ninguna config inválida arranca, ningún flag cambia sin notificar.

@@ -1,19 +1,19 @@
 ---
 Spec_ID: "SPEC_18"
 Title: "Evals and Observability Integrations - Agno Evals and OTel Provider Catalog"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Evals", "#AccuracyEval", "#PerformanceEval", "#ReliabilityEval", "#AgentAsJudge", "#OpenTelemetry", "#Langfuse", "#Langsmith", "#Tracing", "#ObservabilityManager"]
-Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_01"]
+Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_01", "SPEC_27"]
 Last_Updated: "2026-06-17"
-Revision_Note: "iter1: ObservabilityProviderRegistry pasa de eager import (16 adapters al construir) a lazy import por provider en resolve() via DependencyManager; traducido texto chino en Scenario 10."
+Revision_Note: "iter2: alignment to SPEC_03 iter2 persistence frontier. Removed own tracing-to-DB (trace_db / DbSpanExporter / TraceExporter / TraceDbConfig / TraceExportConfig / TRACE_DB_URL) - tracing-to-DB is now owned by SPEC_27 (Agno setup_tracing + DatabaseSpanExporter); SPEC_18 keeps ONLY evals + the 16 observability provider EXPORT adapters. Rewrote all provider adapters to resolve credentials via core ConfigManager (config.get_string) / SecretManager (await secrets.get_secret) with dot-notation keys and inject them into the provider SDK - no raw os.environ reads; os.environ writes are a documented, controlled injection exception only. Removed env block passthrough via os.environ.setdefault in the registry."
 ---
 
 # SPEC_18_EVALS_AND_OBSERVABILITY
 
-> **Propósito**: Especificar el sistema de evaluaciones Agno (accuracy, agent-as-judge, performance, reliability), el catálogo de 16 providers de observabilidad OTel, y la persistencia de traces en DB, todo mapeado desde YAML y orquestado por el `ObservabilityManager` de Core Infra.
+> **Propósito**: Especificar el sistema de evaluaciones Agno (accuracy, agent-as-judge, performance, reliability) y el catálogo de 16 providers de observabilidad OTel (export de traces hacia backends externos), todo mapeado desde YAML y orquestado por el `ObservabilityManager` de Core Infra. **SPEC_18 NO persiste traces en DB**; el tracing-to-DB es propiedad de SPEC_27.
 
 ---
 
@@ -29,19 +29,24 @@ Existe una frontera deliberada entre SPEC_09 y SPEC_18. Ambos tocan observabilid
 | **Qué captura** | RED metrics, spans SRE propios de yaml-agno | Traces de LLM/tool/agent que Agno exporta via OpenInference/OpenLIT |
 | **Circuit Breaker / Retry** | Sí (definido aquí referencia) | Hereda de SPEC_09 (no redefine) |
 | **Datasets / Scoring** | No | Sí (AccuracyEval, AgentAsJudge, PerformanceEval, ReliabilityEval) |
-| **Tracing to DB** | No | Sí (`trace_db` dedicado) |
+| **Tracing to DB** | No | No (delegado a SPEC_27) |
 
 **Regla de oro**:
 - Si la pregunta es "¿qué span/métrica SRE emito cuando un agente falla?" → SPEC_09.
+- Si la pregunta es "¿cómo persisto traces en una DB dedicada / query `GET /traces`?" → SPEC_27 (tracing-to-DB).
 - Si la pregunta es "¿cómo activo Langfuse o corro un AccuracyEval?" → SPEC_18.
 
 SPEC_18 **consume** el `ObservabilityManager` de SPEC_09 (Port) y le inyecta adapters concretos de cada provider. No redefine el Port. No redefine Circuit Breaker ni Retry (ver SPEC_09 secciones 3.1 y 3.2).
+
+**Frontera de persistencia (SPEC_03 iter2)**: yaml-agno NO persiste runtime (eso es Agno = tablas `agno_*`). El tracing-to-DB es propiedad exclusiva de SPEC_27, que delega a `agno.tracing.setup_tracing` + `agno.tracing.DatabaseSpanExporter`. SPEC_18 cubre **únicamente** evals + la configuración de EXPORT de los 16 providers de observabilidad (Langfuse, Langsmith, Logfire, ...); nunca construye `trace_db`, `DbSpanExporter` ni `TraceExporter` propios, y no define `TRACE_DB_URL`.
 
 **Referencia cruzada explícita**:
 - Port `ObservabilityManager`: SPEC_09 §1.2.
 - Métricas base (`agent_execution_*`): SPEC_09 §2.1.
 - Circuit Breaker y `ResilientExecutor`: SPEC_09 §3.1, §3.3.
 - Retención / sampling de spans: SPEC_09 §5 (preguntas de calibración).
+- Tracing-to-DB (setup_tracing, DatabaseSpanExporter, `GET /traces`): SPEC_27.
+- Frontera de persistencia y resolución de variables (ConfigManager / SecretManager, sin `os.environ` crudo): SPEC_03 §2 y SPEC_00.
 
 ---
 
@@ -378,9 +383,10 @@ class EvalRunResult:
 
 class EvalRunner:
     """
-    Orquesta un eval sobre uno o varios casos.
-    Usa asyncio.TaskGroup para paralelizar casos (NO asyncio.gather).
-    Persiste resultados en db (trace_db o db principal).
+    Runs an eval over one or several cases.
+    Uses asyncio.TaskGroup to parallelize cases (NOT asyncio.gather).
+    Persists eval-run results to the operational db (Agno `agno_*` tables).
+    Trace persistence is NOT this component's concern (SPEC_27 owns tracing-to-DB).
     """
 
     def __init__(self, db, observability_manager):
@@ -486,7 +492,7 @@ class EvalRunner:
 
 ### 2.3 Persistencia de Eval Runs
 
-Los eval runs se persisten en `trace_db` (ver §6) o en el `db` principal de Agno, siguiendo el patrón de los docs (`db=db` en `AccuracyEval`). yaml-agno expone endpoints REST `GET/POST/PATCH/DELETE /eval-runs` (definido en SPEC_19).
+Los eval runs se persisten en el `db` operativo de Agno (tablas `agno_*`), siguiendo el patrón de los docs (`db=db` en `AccuracyEval`). La persistencia de traces (spans) NO es responsabilidad de SPEC_18: es propiedad de SPEC_27 (tracing-to-DB). yaml-agno expone endpoints REST `GET/POST/PATCH/DELETE /eval-runs` (definido en SPEC_19).
 
 ```python
 # Tabla conceptual (mapeo Agno schema)
@@ -502,6 +508,11 @@ Los eval runs se persisten en `trace_db` (ver §6) o en el `db` principal de Agn
 Todos los providers se integran vía OpenTelemetry (mayoría vía OpenInference `openinference-instrumentation-agno`) o via SDK propio. yaml-agno los abstrae detrás de un adapter uniforme.
 
 ### 3.1 Tabla Maestra de Providers
+
+> La columna "Env Vars Clave" lista las variables que el **provider SDK** consume internamente.
+> yaml-agno NO las lee de `os.environ` crudo: las resuelve vía `config.get_string` /
+> `await secrets.get_secret` (core) y las inyecta al SDK (ver §3.2.0). Son referencia del
+> catálogo, no un contrato de acceso directo al entorno.
 
 | # | Provider | Captura | Env Vars Clave | Instalación | Estrategia |
 |---|----------|---------|----------------|-------------|------------|
@@ -526,28 +537,51 @@ Todos los providers se integran vía OpenTelemetry (mayoría vía OpenInference 
 
 yaml-agno declara providers en `observability.providers`. Cada provider tiene una clave unificada que el `ObservabilityProviderRegistry` resuelve a un adapter.
 
+#### 3.2.0 Contrato de resolución de credenciales (SPEC_03 iter2 / SPEC_00)
+
+<!-- @ai-directive
+Contract: provider adapters NEVER read `os.environ` directly for credentials/endpoints.
+yaml-agno resolves them through the core ports and then injects them into the provider SDK:
+  - non-secret config (region, endpoint, project, tracking uri) -> `config.get_string("observability.<provider>.<key>")` (ConfigManager, core, dot-notation).
+  - secrets (api keys, tokens, secret keys) -> `await secrets.get_secret("<provider>_<key>")` (SecretManager, core).
+The provider SDKs read their own env vars internally; the only `os.environ[...] = value`
+writes that remain are a CONTROLLED injection so the SDK can pick the resolved value up.
+That injection is documented per-adapter and must be the last step before SDK init.
+No `os.environ.setdefault` bulk passthrough exists anywhere (removed from the registry).
+-->
+
+Every adapter's `configure()` is `async` and receives the core ports it needs:
+
+```python
+# Canonical signature (all adapters follow this).
+async def configure(
+    self,
+    tracer_provider: TracerProvider,
+    config: ConfigManager,      # core, SPEC_23
+    secrets: SecretManager,     # core, SPEC_23
+) -> None: ...
+```
+
+`ConfigManager.get_string` and `SecretManager.get_secret` are the ONLY sanctioned accessors
+for Environment-class variables (SPEC_03 §2). Dot-notation keys are namespaced under
+`observability.<provider>.*`.
+
 #### 3.2.1 Langfuse
 
 ```yaml
 observability:
   tracing: true
-  trace_db:
-    type: postgres
-    db_url: ${TRACE_DB_URL}
   providers:
     - provider: langfuse
       enabled: true
       region: us                  # us | eu | self_hosted
-      self_hosted_endpoint: null  # si region=self_hosted
-      env:
-        LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-        LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      self_hosted_endpoint: null  # if region=self_hosted
 ```
 
 ```python
 # yaml-agno/src/observability/providers/langfuse_adapter.py
 
-import base64, os
+import base64
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -559,23 +593,30 @@ LANGFUSE_ENDPOINTS = {
 }
 
 class LangfuseAdapter:
-    """Configura OTLP export hacia Langfuse con auth Basic (public:secret en base64)."""
+    """Configures OTLP export to Langfuse with Basic auth (public:secret base64)."""
 
     def __init__(self, region: str = "us", self_hosted_endpoint: str | None = None):
         self.region = region
         self.self_hosted_endpoint = self_hosted_endpoint
 
-    def configure(self, tracer_provider: TracerProvider) -> None:
+    async def configure(
+        self,
+        tracer_provider: TracerProvider,
+        config: "ConfigManager",
+        secrets: "SecretManager",
+    ) -> None:
         endpoint = (self.self_hosted_endpoint if self.region == "self_hosted"
                     else LANGFUSE_ENDPOINTS[self.region])
-        auth = base64.b64encode(
-            f"{os.environ['LANGFUSE_PUBLIC_KEY']}:{os.environ['LANGFUSE_SECRET_KEY']}".encode()
-        ).decode()
+        # Resolve credentials through core ports (SPEC_03 §2). No raw os.environ reads.
+        public_key = config.get_string("observability.langfuse.public_key")
+        secret_key = await secrets.get_secret("langfuse_secret_key")
+        auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
+        # Controlled injection: the SDK reads these env vars, so yaml-agno seeds them
+        # with the already-resolved values. This is the ONLY os.environ write here.
+        import os
         os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
         os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {auth}"
-        tracer_provider.add_span_processor(
-            SimpleSpanProcessor(OTLPSpanExporter())
-        )
+        tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
 
     @property
     def requires_openinference(self) -> bool:
@@ -590,15 +631,11 @@ observability:
     - provider: langsmith
       enabled: true
       region: us                  # us | eu
-      env:
-        LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
-        LANGSMITH_PROJECT: ${LANGSMITH_PROJECT}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/langsmith_adapter.py
 
-import os
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -609,16 +646,25 @@ LANGSMITH_ENDPOINTS = {
 }
 
 class LangsmithAdapter:
-    """Export OTLP con headers x-api-key y Langsmith-Project."""
+    """OTLP export with x-api-key and Langsmith-Project headers."""
 
     def __init__(self, region: str = "us"):
         self.region = region
 
-    def configure(self, tracer_provider: TracerProvider) -> None:
+    async def configure(
+        self,
+        tracer_provider: TracerProvider,
+        config: "ConfigManager",
+        secrets: "SecretManager",
+    ) -> None:
         endpoint = LANGSMITH_ENDPOINTS[self.region]
+        # Credentials resolved via core ports (SPEC_03 §2). Project is non-secret config;
+        # the api key is a secret.
+        project = config.get_string("observability.langsmith.project")
+        api_key = await secrets.get_secret("langsmith_api_key")
         headers = {
-            "x-api-key": os.environ["LANGSMITH_API_KEY"],
-            "Langsmith-Project": os.environ["LANGSMITH_PROJECT"],
+            "x-api-key": api_key,
+            "Langsmith-Project": project,
         }
         tracer_provider.add_span_processor(
             SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint, headers=headers))
@@ -637,8 +683,6 @@ observability:
     - provider: logfire
       enabled: true
       region: eu                  # us | eu
-      env:
-        LOGFIRE_WRITE_TOKEN: ${LOGFIRE_WRITE_TOKEN}
 ```
 
 ```python
@@ -653,14 +697,16 @@ class LogfireAdapter:
     def __init__(self, region: str = "eu"):
         self.region = region
 
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        token = await secrets.get_secret("logfire_write_token")
+        # Controlled injection for the OTLP SDK (last step before exporter init).
+        import os
         os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = LOGFIRE_ENDPOINTS[self.region]
-        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = (
-            f"Authorization={os.environ['LOGFIRE_WRITE_TOKEN']}"
-        )
-        tracer_provider.add_span_processor(
-            SimpleSpanProcessor(OTLPSpanExporter())
-        )
+        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization={token}"
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
 ```
 
 #### 3.2.4 Arize Phoenix
@@ -672,14 +718,10 @@ observability:
       enabled: true
       mode: cloud                  # cloud | local
       project_name: agno-stock-agent
-      env:
-        ARIZE_PHOENIX_API_KEY: ${ARIZE_PHOENIX_API_KEY}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/arize_adapter.py
-
-import os
 
 class ArizeAdapter:
     """Cloud: app.phoenix.arize.com. Local: phoenix serve -> localhost:6006."""
@@ -688,14 +730,17 @@ class ArizeAdapter:
         self.mode = mode
         self.project_name = project_name
 
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
         from phoenix.otel import register
         if self.mode == "cloud":
-            os.environ["PHOENIX_CLIENT_HEADERS"] = (
-                f"api_key={os.environ['ARIZE_PHOENIX_API_KEY']}"
-            )
+            api_key = await secrets.get_secret("arize_phoenix_api_key")
+            # Controlled injection for the Phoenix SDK.
+            import os
+            os.environ["PHOENIX_CLIENT_HEADERS"] = f"api_key={api_key}"
             os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = "https://app.phoenix.arize.com"
         else:
+            import os
             os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = "http://localhost:6006"
         register(project_name=self.project_name, auto_instrument=True)
 
@@ -711,19 +756,19 @@ observability:
   providers:
     - provider: agentops
       enabled: true
-      env:
-        AGENTOPS_API_KEY: ${AGENTOPS_API_KEY}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/agentops_adapter.py
 
 class AgentOpsAdapter:
-    """SDK propio. agentops.init() instrumenta todo automaticamente."""
+    """Own SDK. agentops.init() instruments everything automatically."""
 
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        api_key = await secrets.get_secret("agentops_api_key")
         import agentops
-        agentops.init()
+        agentops.init(api_key=api_key)
 
     @property
     def requires_openinference(self) -> bool:
@@ -737,24 +782,22 @@ observability:
   providers:
     - provider: atla
       enabled: true
-      instrument_target: openai   # modelo a instrumentar
-      env:
-        ATLA_API_KEY: ${ATLA_API_KEY}
+      instrument_target: openai   # model to instrument
 ```
 
 ```python
 # yaml-agno/src/observability/providers/atla_adapter.py
 
-import os
-
 class AtlaAdapter:
     def __init__(self, instrument_target: str = "openai"):
         self.instrument_target = instrument_target
 
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
         from atla_insights import configure, instrument_agno
-        configure(token=os.environ["ATLA_API_KEY"])
-        # instrument_agno se invoca como context manager en runtime
+        token = await secrets.get_secret("atla_api_key")
+        configure(token=token)
+        # instrument_agno is invoked as a context manager at runtime.
         self._instrument = instrument_agno
 ```
 
@@ -765,18 +808,18 @@ observability:
   providers:
     - provider: langdb
       enabled: true
-      env:
-        LANGDB_API_KEY: ${LANGDB_API_KEY}
-        LANGDB_PROJECT_ID: ${LANGDB_PROJECT_ID}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/langdb_adapter.py
 
 class LangDBAdapter:
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        api_key = await secrets.get_secret("langdb_api_key")
+        project_id = config.get_string("observability.langdb.project_id")
         from pylangdb.agno import init
-        init()   # debe llamarse antes de crear agentes
+        init(api_key=api_key, project_id=project_id)   # before agent creation
 ```
 
 #### 3.2.8 Langtrace
@@ -786,17 +829,17 @@ observability:
   providers:
     - provider: langtrace
       enabled: true
-      env:
-        LANGTRACE_API_KEY: ${LANGTRACE_API_KEY}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/langtrace_adapter.py
 
 class LangtraceAdapter:
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        api_key = await secrets.get_secret("langtrace_api_key")
         from langtrace_python_sdk import langtrace
-        langtrace.init()
+        langtrace.init(api_key=api_key)
 ```
 
 #### 3.2.9 Langwatch
@@ -806,18 +849,18 @@ observability:
   providers:
     - provider: langwatch
       enabled: true
-      env:
-        LANGWATCH_API_KEY: ${LANGWATCH_API_KEY}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/langwatch_adapter.py
 
 class LangwatchAdapter:
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        api_key = await secrets.get_secret("langwatch_api_key")
         import langwatch
         from openinference.instrumentation.agno import AgnoInstrumentor
-        langwatch.setup(instrumentors=[AgnoInstrumentor()])
+        langwatch.setup(api_key=api_key, instrumentors=[AgnoInstrumentor()])
 ```
 
 #### 3.2.10 Latitude
@@ -827,28 +870,24 @@ observability:
   providers:
     - provider: latitude
       enabled: true
-      env:
-        LATITUDE_API_KEY: ${LATITUDE_API_KEY}
-        LATITUDE_PROJECT: ${LATITUDE_PROJECT}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/latitude_adapter.py
 
-import os
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
 class LatitudeAdapter:
-    def configure(self, tracer_provider: TracerProvider):
-        # endpoint OTLP de ingestion de Latitude
-        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = (
-            f"Authorization=Bearer {os.environ['LATITUDE_API_KEY']}"
-        )
-        tracer_provider.add_span_processor(
-            SimpleSpanProcessor(OTLPSpanExporter())
-        )
+    async def configure(self, tracer_provider: TracerProvider,
+                        config: "ConfigManager", secrets: "SecretManager") -> None:
+        # OTLP ingestion endpoint for Latitude.
+        api_key = await secrets.get_secret("latitude_api_key")
+        # Controlled injection for the OTLP SDK.
+        import os
+        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Bearer {api_key}"
+        tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
 
     @property
     def requires_openinference(self) -> bool:
@@ -862,19 +901,19 @@ observability:
   providers:
     - provider: maxim
       enabled: true
-      env:
-        MAXIM_API_KEY: ${MAXIM_API_KEY}
-        MAXIM_LOG_REPO_ID: ${MAXIM_LOG_REPO_ID}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/maxim_adapter.py
 
 class MaximAdapter:
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        api_key = await secrets.get_secret("maxim_api_key")
+        log_repo_id = config.get_string("observability.maxim.log_repo_id")
         from maxim import Maxim
         from maxim.logger.agno import instrument_agno
-        maxim = Maxim().init()
+        maxim = Maxim(api_key=api_key, log_repo_id=log_repo_id).init()
         instrument_agno(maxim)
 ```
 
@@ -885,20 +924,20 @@ observability:
   providers:
     - provider: mlflow
       enabled: true
-      env:
-        MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI}
-        MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME}
 ```
 
 ```python
 # yaml-agno/src/observability/providers/mlflow_adapter.py
 
-import os, mlflow
+import mlflow
 
 class MLflowAdapter:
-    def configure(self, tracer_provider):
-        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-        mlflow.set_experiment(os.environ["MLFLOW_EXPERIMENT_NAME"])
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        tracking_uri = config.get_string("observability.mlflow.tracking_uri")
+        experiment = config.get_string("observability.mlflow.experiment_name")
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(experiment)
         mlflow.agno.autolog()
 ```
 
@@ -919,9 +958,11 @@ class OpenLITAdapter:
     def __init__(self, otlp_endpoint: str = "http://127.0.0.1:4318"):
         self.otlp_endpoint = otlp_endpoint
 
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
         import openlit
-        openlit.init(tracer=tracer_provider.get_tracer(__name__), disable_batch=True)
+        openlit.init(otlp_endpoint=self.otlp_endpoint,
+                     tracer=tracer_provider.get_tracer(__name__), disable_batch=True)
 ```
 
 #### 3.2.14 Traceloop
@@ -932,8 +973,6 @@ observability:
     - provider: traceloop
       enabled: true
       app_name: agno_agent
-      env:
-        TRACELOOP_API_KEY: ${TRACELOOP_API_KEY}
 ```
 
 ```python
@@ -943,9 +982,11 @@ class TraceloopAdapter:
     def __init__(self, app_name: str = "agno_agent"):
         self.app_name = app_name
 
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        api_key = await secrets.get_secret("traceloop_api_key")
         from traceloop.sdk import Traceloop
-        Traceloop.init(app_name=self.app_name)
+        Traceloop.init(app_name=self.app_name, api_key=api_key)
 ```
 
 #### 3.2.15 Weave (WandB)
@@ -956,8 +997,6 @@ observability:
     - provider: weave
       enabled: true
       project: agno
-      env:
-        WANDB_API_KEY: ${WANDB_API_KEY}
 ```
 
 ```python
@@ -967,10 +1006,12 @@ class WeaveAdapter:
     def __init__(self, project: str = "agno"):
         self.project = project
 
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        api_key = await secrets.get_secret("wandb_api_key")
         import weave
-        weave.init(self.project)
-        # Las funciones target se decoran con @weave.op() en runtime.
+        weave.init(project_name=self.project, api_key=api_key)
+        # Target functions are decorated with @weave.op() at runtime.
 ```
 
 #### 3.2.16 OpenTelemetry puro (fallback genérico)
@@ -980,22 +1021,19 @@ observability:
   providers:
     - provider: opentelemetry
       enabled: true
-      otlp_endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}   # Jaeger, Tempo, etc.
-      headers: {}
+      # Jaeger, Tempo, etc. Endpoint is non-secret config (ConfigManager).
 ```
 
 ```python
 # yaml-agno/src/observability/providers/otel_adapter.py
 
 class OtelAdapter:
-    def __init__(self, otlp_endpoint: str, headers: dict | None = None):
-        self.otlp_endpoint = otlp_endpoint
-        self.headers = headers or {}
-
-    def configure(self, tracer_provider):
+    async def configure(self, tracer_provider, config: "ConfigManager",
+                        secrets: "SecretManager") -> None:
+        otlp_endpoint = config.get_string("observability.opentelemetry.otlp_endpoint")
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
-        exporter = OTLPSpanExporter(endpoint=self.otlp_endpoint, headers=self.headers)
+        exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
         tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
 ```
 
@@ -1015,8 +1053,19 @@ from pydantic import BaseModel, Field
 from opentelemetry.sdk.trace import TracerProvider
 
 class ObservabilityProvider(Protocol):
-    """Contrato uniforme de todo adapter de provider."""
-    def configure(self, tracer_provider: TracerProvider) -> None: ...
+    """Contrato uniforme de todo adapter de provider.
+
+    @ai-directive configure() is async and resolves every credential/endpoint via the
+    core ports (ConfigManager.get_string / SecretManager.get_secret), NOT via os.environ.
+    The only os.environ writes allowed are a controlled final injection into the provider
+    SDK (see 3.2.0). No bulk env passthrough is performed by the registry.
+    """
+    async def configure(
+        self,
+        tracer_provider: TracerProvider,
+        config: "ConfigManager",
+        secrets: "SecretManager",
+    ) -> None: ...
     @property
     def requires_openinference(self) -> bool: ...
 
@@ -1032,13 +1081,13 @@ class ProviderConfig(BaseModel):
     app_name: str | None = None
     instrument_target: str | None = None
     headers: dict = Field(default_factory=dict)
-    env: dict = Field(default_factory=dict)
 
 class ObservabilityProviderRegistry:
     """
     Registro declarativo de providers.
     Resuelve el string del YAML a un adapter concreto.
-    Aplica variables de entorno declaradas (sin hardcodear secrets).
+    Credentials/endpoints are resolved inside each adapter via the core ports
+    (ConfigManager / SecretManager), never through os.environ bulk passthrough.
     """
 
     def __init__(self, dependency_manager: "DependencyManager"):
@@ -1087,12 +1136,10 @@ class ObservabilityProviderRegistry:
         return cls
 
     def resolve(self, config: ProviderConfig) -> ObservabilityProvider:
-        # Lazy import del adapter SOLO para el provider efectivamente configurado.
+        # Lazy import of the adapter ONLY for the actually-configured provider.
+        # @ai-directive: NO os.environ bulk passthrough here. Credentials and endpoints
+        # are resolved inside adapter.configure() via the core ports (SPEC_03 §2).
         cls = self._load_adapter(config.provider)
-        # aplicar env declarado
-        import os
-        for k, v in config.env.items():
-            os.environ.setdefault(k, str(v))
         return self._instantiate(cls, config)
 
     def _instantiate(self, cls, config: ProviderConfig) -> ObservabilityProvider:
@@ -1122,15 +1169,20 @@ from opentelemetry import trace as trace_api
 
 class ObservabilityBootstrap:
     """
-    Construye el TracerProvider, registra todos los providers activos,
-    activa OpenInference si algun provider lo requiere, y lo enlaza
-    con el ObservabilityManager (Port de SPEC_09).
+    Builds the TracerProvider, registers every active provider, activates
+    OpenInference if any provider requires it, and wires it into the
+    ObservabilityManager (Port of SPEC_09).
     """
 
     def __init__(self, registry: ObservabilityProviderRegistry):
         self.registry = registry
 
-    def bootstrap(self, provider_configs: list[ProviderConfig]):
+    async def bootstrap(
+        self,
+        provider_configs: list[ProviderConfig],
+        config: "ConfigManager",     # core, SPEC_23
+        secrets: "SecretManager",    # core, SPEC_23
+    ):
         provider = TracerProvider()
         needs_openinference = False
 
@@ -1138,7 +1190,8 @@ class ObservabilityBootstrap:
             if not cfg.enabled:
                 continue
             adapter = self.registry.resolve(cfg)
-            adapter.configure(provider)
+            # Adapters resolve credentials via the core ports; configure() is async.
+            await adapter.configure(provider, config, secrets)
             if getattr(adapter, "requires_openinference", False):
                 needs_openinference = True
 
@@ -1147,7 +1200,7 @@ class ObservabilityBootstrap:
                 from openinference.instrumentation.agno import AgnoInstrumentor
                 AgnoInstrumentor().instrument(tracer_provider=provider)
             except ImportError:
-                # warn: OpenInference no instalado pero un provider lo requiere
+                # warn: OpenInference not installed but a provider requires it.
                 pass
 
         trace_api.set_tracer_provider(provider)
@@ -1156,115 +1209,49 @@ class ObservabilityBootstrap:
 
 ---
 
-## 5. TRACE EXPORT Y TRACING TO DB
+## 5. TRACING-TO-DB - DELEGACIÓN A SPEC_27
 
-### 5.1 TraceExporter - Persistencia Interna
+<!-- @ai-directive
+Boundary (SPEC_03 iter2): yaml-agno does NOT persist runtime, and does NOT own
+tracing-to-DB. SPEC_18 previously defined trace_db / DbSpanExporter / TraceExporter /
+TraceDbConfig / TraceExportConfig / TRACE_DB_URL; ALL removed in iter2.
+Tracing-to-DB is owned by SPEC_27, which delegates to:
+  - agno.tracing.setup_tracing
+  - agno.tracing.DatabaseSpanExporter
+SPEC_18 keeps ONLY evals + the 16 observability provider EXPORT adapters (section 3).
+It never constructs a trace database, never defines a traces/spans schema, and never
+exposes GET /traces (that query surface lives in SPEC_27).
+-->
 
-Además de exportar a providers externos, yaml-agno persiste traces en `trace_db` (dedicado) para query vía API (`GET /traces`).
+### 5.1 Qué cubre SPEC_18 y qué NO
 
-```python
-# yaml-agno/src/observability/trace_exporter.py
+| Concern | Owner | Notes |
+|---------|-------|-------|
+| Eval execution (accuracy / agent-as-judge / performance / reliability) | **SPEC_18** | This document, sections 1, 2, 7. |
+| Provider EXPORT configuration (Langfuse, Langsmith, ... 16 providers) | **SPEC_18** | This document, section 3. Adapters resolve credentials via core ConfigManager / SecretManager. |
+| Tracing-to-DB (`setup_tracing`, `DatabaseSpanExporter`, dedicated trace DB) | **SPEC_27** | yaml-agno delegates; never redefines. |
+| Trace query API (`GET /traces`, `GET /traces/search`) | **SPEC_27** | Not exposed by SPEC_18. |
+| Traces/spans relational schema | **SPEC_27** / Agno | yaml-agno does not model it. |
 
-from typing import Optional
-from agno.db.base import BaseDb, AsyncBaseDb
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-from opentelemetry.sdk.trace import ReadableSpan
+### 5.2 Activación de tracing-to-DB (referencia, NO implementación aquí)
 
-class DbSpanExporter(SpanExporter):
-    """
-    SpanExporter que escribe spans en la trace_db dedicada.
-    Permite query via AgentOS API (GET /traces, /traces/search).
-    """
-
-    def __init__(self, db: BaseDb | AsyncBaseDb):
-        self.db = db
-
-    def export(self, spans: list[ReadableSpan]) -> SpanExportResult:
-        # serializar spans a filas en tabla traces/spans
-        for span in spans:
-            self._persist_span(span)
-        return SpanExportResult.SUCCESS
-
-    def _persist_span(self, span: ReadableSpan) -> None:
-        # INSERT en tabla traces:
-        # trace_id, span_id, parent_span_id, name, start_time, end_time,
-        # attributes_json, status, user_id, session_id, agent_id
-        ...
-
-    def shutdown(self) -> None: ...
-    def force_flush(self, timeout_millis: int = 30000) -> bool: ...
-
-class TraceExporter:
-    """Configura DbSpanExporter y BatchSpanProcessor sobre el TracerProvider."""
-
-    def __init__(self, trace_db: Optional[BaseDb] = None,
-                 batch_processing: bool = True,
-                 max_queue_size: int = 2048,
-                 schedule_delay_millis: int = 3000):
-        self.trace_db = trace_db
-        self.batch_processing = batch_processing
-        self.max_queue_size = max_queue_size
-        self.schedule_delay_millis = schedule_delay_millis
-
-    def attach(self, tracer_provider) -> None:
-        if self.trace_db is None:
-            return
-        from opentelemetry.sdk.trace.export import (
-            BatchSpanProcessor, SimpleSpanProcessor
-        )
-        exporter = DbSpanExporter(self.trace_db)
-        processor = (BatchSpanProcessor(exporter,
-                                        max_queue_size=self.max_queue_size,
-                                        schedule_delay_millis=self.schedule_delay_millis)
-                     if self.batch_processing else SimpleSpanProcessor(exporter))
-        tracer_provider.add_span_processor(processor)
-```
-
-### 5.2 Schema Conceptual de Traces
-
-```
-traces:
-  trace_id        TEXT PK
-  root_span_id    TEXT
-  start_time      TIMESTAMPTZ
-  end_time        TIMESTAMPTZ
-  user_id         TEXT
-  session_id      TEXT
-  agent_id        TEXT
-  status          TEXT          -- ok | error
-  span_count      INT
-
-spans:
-  span_id         TEXT PK
-  trace_id        TEXT FK -> traces.trace_id
-  parent_span_id  TEXT NULL
-  name            TEXT
-  kind            TEXT          -- LLM | TOOL | AGENT | TEAM | WORKFLOW
-  start_time      TIMESTAMPTZ
-  end_time        TIMESTAMPTZ
-  attributes      JSONB
-  status_code     TEXT
-  status_message  TEXT
-```
-
-### 5.3 Configuración `tracing=True` + `db`
-
-Sigue el patrón de docs Agno: `tracing=True` + `db=trace_db` dedica la DB. Si se omite `db`, Agno usa la primera DB encontrada (no recomendado en producción).
+When `observability.tracing: true` is set in YAML, the bootstrap hands the configured
+`TracerProvider` (with the active provider EXPORT processors from section 3) to SPEC_27,
+which wires `agno.tracing.setup_tracing` and, if a dedicated trace database is configured
+in SPEC_27, attaches `agno.tracing.DatabaseSpanExporter`. SPEC_18 does not hold a
+reference to any trace database and does not define `TRACE_DB_URL`.
 
 ```python
-# Equivalente YAML -> Python
-agent_os = AgentOS(
-    agents=[...],
-    db=trace_db,
-    tracing=True,
-)
+# Conceptual hand-off (implemented in SPEC_27, referenced here for boundary clarity).
+# SPEC_18 builds the provider TracerProvider; SPEC_27 owns trace persistence.
+# from agno.tracing import setup_tracing, DatabaseSpanExporter   # SPEC_27
 ```
 
 ---
 
 ## 6. YAML SCHEMAS COMPLETOS
 
-### 6.1 Schema Observability (providers + tracing + trace_db)
+### 6.1 Schema Observability (providers + tracing)
 
 ```yaml
 # yaml-agno/config/observability.yaml
@@ -1272,40 +1259,24 @@ observability:
   # Activar tracing OTel global (mapea a AgentOS(tracing=True))
   tracing: true
 
-  # DB dedicada para traces (recomendado en prod)
-  trace_db:
-    type: postgres
-    db_url: ${TRACE_DB_URL}
-    id: traces_db
+  # NOTE: trace_db / trace_export were removed in iter2. Tracing-to-DB is owned by
+  # SPEC_27 (agno.tracing.setup_tracing + DatabaseSpanExporter). SPEC_18 only configures
+  # provider EXPORT here. Credentials are resolved via core ConfigManager/SecretManager
+  # (no `env:` passthrough block, no os.environ reads - see 3.2.0).
 
-  # Persistencia interna de spans (DbSpanExporter)
-  trace_export:
-    enabled: true
-    batch_processing: true
-    max_queue_size: 2048
-    schedule_delay_millis: 3000
-
-  # Multiples providers activos simultaneamente
+  # Multiple providers active simultaneously.
   providers:
     - provider: langfuse
       enabled: true
       region: us
-      env:
-        LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-        LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
 
     - provider: langsmith
       enabled: false
       region: us
-      env:
-        LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
-        LANGSMITH_PROJECT: ${LANGSMITH_PROJECT}
 
     - provider: logfire
       enabled: false
       region: eu
-      env:
-        LOGFIRE_WRITE_TOKEN: ${LOGFIRE_WRITE_TOKEN}
 ```
 
 ### 6.2 Schema Evals
@@ -1365,24 +1336,13 @@ evals:
 # yaml-agno/src/config/observability_config.py
 
 from pydantic import BaseModel, Field
-from typing import Optional
 
-class TraceDbConfig(BaseModel):
-    type: str                     # postgres | sqlite
-    db_url: Optional[str] = None
-    db_file: Optional[str] = None
-    id: Optional[str] = "traces_db"
-
-class TraceExportConfig(BaseModel):
-    enabled: bool = True
-    batch_processing: bool = True
-    max_queue_size: int = 2048
-    schedule_delay_millis: int = 3000
+# NOTE (iter2): TraceDbConfig and TraceExportConfig were removed. Tracing-to-DB is
+# owned by SPEC_27 (agno.tracing.setup_tracing + DatabaseSpanExporter); yaml-agno does
+# not model a trace database here. TRACE_DB_URL is not defined by SPEC_18.
 
 class ObservabilityConfig(BaseModel):
     tracing: bool = False
-    trace_db: Optional[TraceDbConfig] = None
-    trace_export: TraceExportConfig = Field(default_factory=TraceExportConfig)
     providers: list[ProviderConfig] = Field(default_factory=list)
 ```
 
@@ -1465,13 +1425,13 @@ flowchart TD
     I --> J{mean >= threshold?}
     J -- yes --> K[status=passed]
     J -- no --> L[status=failed\nthreshold_breached=true]
-    K --> M[Persist to trace_db/db]
+    K --> M[Persist to operational db\nagno_* tables]
     L --> M
     M --> N["obs.increment_counter\neval_run_total{status}"]
     N --> O[Return EvalRunResult\n+ eval_run_id]
 ```
 
-### 7.2 Flujo de Tracing (provider export + DB)
+### 7.2 Flujo de Tracing (provider export; DB owned by SPEC_27)
 
 ```mermaid
 flowchart LR
@@ -1479,10 +1439,12 @@ flowchart LR
     B --> C[TracerProvider]
     C --> D1[Langfuse OTLP]
     C --> D2[Langsmith OTLP]
-    C --> D3[DbSpanExporter\ntrace_db]
-    D3 --> E[(traces table)]
-    E --> F["GET /traces\nGET /traces/search\n(trace query API)"]
+    D1 --> E1[(provider backend)]
+    D2 --> E2[(provider backend)]
 ```
+
+> Trace persistence to a dedicated DB (`DatabaseSpanExporter`, `GET /traces`) is owned by
+> SPEC_27 and is intentionally NOT shown here. SPEC_18 only configures provider EXPORT.
 
 ---
 
@@ -1501,7 +1463,7 @@ Scenario 1: Golden Path - AccuracyEval pasa sobre dataset
   AND el evaluator model puntúa cada respuesta contra expected_output
   AND el aggregate.mean_score >= 8.0
   AND el eval_run.status pasa a "passed"
-  AND el resultado se persiste en trace_db
+  AND el resultado se persiste en el db operativo (tablas agno_*)
   AND la métrica eval_run_total{status=passed} se incrementa
 ```
 
@@ -1574,24 +1536,25 @@ Scenario 8: Provider desconocido
   Y el bootstrap aborta antes de iniciar el TracerProvider
 ```
 
-### 8.3 Tracing Export
+### 8.3 Tracing Export (provider export only; tracing-to-DB delegated to SPEC_27)
 
 ```gherkin
-Scenario 9: Tracing persistido en trace_db dedicada
-  GIVEN tracing=true y trace_db apuntando a postgres dedicado
+Scenario 9: SPEC_18 no persiste traces (delegación a SPEC_27)
+  GIVEN tracing=true y un provider activo (langfuse)
   WHEN un agente ejecuta Agent.run
-  THEN DbSpanExporter escribe spans en tabla traces/spans
-  Y la DB principal de sesiones NO recibe traces
-  Y GET /traces retorna los traces de trace_db
+  THEN SPEC_18 configura el TracerProvider con los processors de EXPORT del provider
+  Y los spans se exportan al backend del provider
+  PERO SPEC_18 no construye trace_db ni DbSpanExporter
+  Y la persistencia de traces en DB dedicada es responsabilidad de SPEC_27 (setup_tracing + DatabaseSpanExporter)
+  Y GET /traces es expuesto por SPEC_27, no por SPEC_18
 ```
 
 ```gherkin
-Scenario 10: tracing sin db dedicado (warning)
-  GIVEN tracing=true y trace_db NO configurado
-  WHEN bootstrap ejecuta
-  THEN se emite un warning "trace_db no configurado"
-  Y los traces se intentan persistir en la primera DB encontrada
-  Y este comportamiento queda marcado como no recomendado para producción
+Scenario 10: Sin tracing-to-DB propio en SPEC_18
+  GIVEN el bootstrap de SPEC_18 ejecuta sin configuración de trace DB
+  THEN no se emite ningún warning sobre "trace_db" (no existe esa noción aquí)
+  Y SPEC_18 nunca toca una base de datos de traces
+  Y la pregunta de DB de traces se resuelve enteramente en SPEC_27
 ```
 
 ---
@@ -1717,12 +1680,14 @@ Strict TDD RED/GREEN/REFACTOR. Cada tarea: test primero, falla, implementación 
 - **Test**: `tests/unit/observability/test_langfuse_langsmith.py`
 - **RED**:
   ```python
-  def test_langfuse_sets_endpoint_and_auth(monkeypatch):
-      monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
-      monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+  async def test_langfuse_resolves_credentials_via_core_ports():
+      # Credentials come from core ConfigManager/SecretManager, NOT os.environ reads.
+      fake_config = FakeConfigManager({"observability.langfuse.public_key": "pk"})
+      fake_secrets = FakeSecretManager({"langfuse_secret_key": "sk"})
       a = LangfuseAdapter(region="us")
-      a.configure(FakeTracerProvider())
+      await a.configure(FakeTracerProvider(), fake_config, fake_secrets)
       import os
+      # Controlled injection into the OTLP SDK (documented exception).
       assert "us.cloud.langfuse.com" in os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
       assert "Basic" in os.environ["OTEL_EXPORTER_OTLP_HEADERS"]
 
@@ -1770,26 +1735,27 @@ Strict TDD RED/GREEN/REFACTOR. Cada tarea: test primero, falla, implementación 
 - **GREEN**: Implementar bootstrap con detección de `requires_openinference`.
 - **Commit**: `feat(observability): add bootstrap with openinference detection`
 
-### TASK_010: TraceExporter con DbSpanExporter
-- **File**: `yaml-agno/src/observability/trace_exporter.py`
-- **Test**: `tests/unit/observability/test_trace_exporter.py`
+### TASK_010: Boundary - SPEC_18 does NOT own tracing-to-DB
+- **File**: `yaml-agno/src/observability/` (no new file)
+- **Test**: `tests/unit/observability/test_no_trace_db.py`
 - **RED**:
   ```python
-  def test_trace_exporter_attaches_processor():
-      fake_db = FakeDb()
-      ex = TraceExporter(trace_db=fake_db, batch_processing=False)
-      tp = FakeTracerProvider()
-      ex.attach(tp)
-      assert len(tp.processors) == 1
+  def test_spec18_has_no_trace_db_models():
+      # SPEC_18 must NOT define TraceDbConfig, TraceExportConfig, DbSpanExporter,
+      # TraceExporter, nor TRACE_DB_URL. Tracing-to-DB is owned by SPEC_27.
+      import yaml_agno.src.config.observability_config as mod
+      assert not hasattr(mod, "TraceDbConfig")
+      assert not hasattr(mod, "TraceExportConfig")
 
-  def test_trace_exporter_no_db_noop():
-      ex = TraceExporter(trace_db=None)
-      tp = FakeTracerProvider()
-      ex.attach(tp)
-      assert len(tp.processors) == 0
+  def test_spec18_has_no_trace_exporter_module():
+      import importlib
+      import pytest
+      with pytest.raises(ModuleNotFoundError):
+          importlib.import_module("yaml_agno.src.observability.trace_exporter")
   ```
-- **GREEN**: Implementar `DbSpanExporter` y `TraceExporter`.
-- **Commit**: `feat(observability): add db trace exporter`
+- **GREEN**: Confirm the boundary holds - tracing-to-DB (`setup_tracing`,
+  `DatabaseSpanExporter`, `GET /traces`) is implemented in SPEC_27, not here.
+- **Commit**: `test(observability): assert SPEC_18 does not own tracing-to-DB`
 
 ### TASK_011: ObservabilityConfig y EvalsConfig Pydantic
 - **File**: `yaml-agno/src/config/observability_config.py`, `evals_config.py`
@@ -1799,17 +1765,17 @@ Strict TDD RED/GREEN/REFACTOR. Cada tarea: test primero, falla, implementación 
   def test_observability_config_parse():
       cfg = ObservabilityConfig.model_validate({
           "tracing": True,
-          "trace_db": {"type": "postgres", "db_url": "x"},
           "providers": [{"provider": "langfuse", "enabled": True, "region": "us"}],
       })
       assert cfg.tracing is True
       assert cfg.providers[0].provider == "langfuse"
+      # trace_db / trace_export are NOT fields of ObservabilityConfig (SPEC_27 owns them).
 
   def test_evals_config_defaults():
       cfg = EvalsConfig.model_validate({"accuracy": [{"name":"x","evaluator_model":"m","agent_ref":"a","input":"q","expected_output":"a"}]})
       assert cfg.defaults.accuracy_threshold == 8.0
   ```
-- **GREEN**: Implementar modelos de config.
+- **GREEN**: Implementar modelos de config (sin TraceDbConfig/TraceExportConfig).
 - **Commit**: `feat(config): add observability and evals config models`
 
 ### TASK_012: Integración ObservabilityManager (Port SPEC_09)
@@ -1838,8 +1804,8 @@ Todos los providers OTel-compatibles comparten el mismo `TracerProvider`. Los pr
 ### [Decisión 2] asyncio.TaskGroup para eval batch (NO gather)
 Los casos de un dataset se paralelizan con `asyncio.TaskGroup`. Cancelación estructurada. Si un caso falla catastróficamente, el TaskGroup propaga la excepción sin dejar tareas huérfanas.
 
-### [Decisión 3] trace_db dedicado en producción
-`trace_db` separa traces de datos operacionales (sesiones, memoria). Esto sigue la recomendación explícita de los docs Agno y permite escalar observabilidad independientemente.
+### [Decisión 3] Tracing-to-DB delegado a SPEC_27 (no es propio de SPEC_18)
+SPEC_18 NO define ni construye una DB dedicada de traces. La separación de traces de datos operacionales (sesiones, memoria) y la persistencia dedicada de spans (`DatabaseSpanExporter`, `setup_tracing`, `GET /traces`) es responsabilidad de SPEC_27. SPEC_18 se limita a evals + la configuración de EXPORT de los 16 providers (frontera SPEC_03 iter2).
 
 ### [Decisión 4] OpenInference como instrumentación base
 `openinference-instrumentation-agno` es la instrumentación canónica. Se activa una sola vez en el bootstrap si algún provider lo requiere (no múltiples veces).
@@ -1847,8 +1813,8 @@ Los casos de un dataset se paralelizan con `asyncio.TaskGroup`. Cancelación est
 ### [Decisión 5] Threshold breach no es error de sistema
 Un eval que no supera el threshold retorna `status=failed` (no lanza excepción). Solo errores técnicos (modelo caído, dataset corrupto) resultan en `status=error`.
 
-### [Decisión 6] Secrets via env, no en YAML
-Las claves (`LANGFUSE_SECRET_KEY`, etc.) se declaran como `${VAR}` en YAML y se resuelven desde entorno. Nunca se hardcodean en config versionado.
+### [Decisión 6] Secrets via SecretManager del core, no en YAML ni os.environ crudo
+Las claves (`LANGFUSE_SECRET_KEY`, etc.) NO se declaran como `${VAR}` en YAML ni se leen de `os.environ` crudo. yaml-agno las resuelve vía `await secrets.get_secret("<provider>_<key>")` (SecretManager del core, SPEC_23) y las inyecta al provider SDK. La config no-secreta (region, endpoint, project) se resuelve vía `config.get_string("observability.<provider>.<key>")` (ConfigManager del core). Nunca se hardcodean en config versionado. (SPEC_03 §2 / SPEC_00.)
 
 ---
 

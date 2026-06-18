@@ -710,10 +710,14 @@ class AuthorizationAdapter:
         return True, AuthorizationConfig(**cfg)
 
     def _resolve_config(self, settings):
+        # @ai-directive: ConfigManager/SecretManager are core-cenf instances
+        # (injected via DI), NOT static classes. Resolve secrets via the injected
+        # SecretManager instance: `await self._secrets.get_secret(key)`.
         cfg = dict(settings.config or {})
         for k, v in list(cfg.items()):
             if isinstance(v, str) and v.startswith("${SECRET:"):
-                cfg[k] = SecretManager.resolve(v)
+                key = v[len("${SECRET:"):-1]
+                cfg[k] = await self._secrets.get_secret(key)   # core-cenf instance
         return cfg
 ```
 
@@ -759,10 +763,11 @@ class ResyncManager:
 
     async def resync_now(self):
         async with self._sem:
-            if not self._breaker.allow():
+            if not self._breaker.allow_request():   # SPEC_09 CircuitBreaker API
                 raise ResyncBlockedError("circuit open")
             try:
-                cfg = ConfigManager.load(self._cfg)
+                # ConfigManager is a core-cenf instance (injected); reload is async.
+                await self._config.reload()
                 self._os.resync()  # agno re-loads agents/teams/workflows
                 self._breaker.record_success()
             except Exception as e:

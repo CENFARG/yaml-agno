@@ -276,10 +276,13 @@ db = SqliteDb(id="scheduler-demo", db_file="tmp/scheduler.db")
 mgr = ScheduleManager(db)
 ```
 
-### 3.2 DDL (representativo)
+### 3.2 Schedule tables (owned by Agno, illustrative schema)
+
+> @ai-directive: the `schedules` and `schedule_runs` tables are **owned and auto-provisioned by Agno** (`agno.scheduler` + `agno_scheduler` schema via `auto_provision_dbs`), exactly like `agno_sessions`. yaml-agno does NOT create them, does NOT manage their DDL, and does NOT prefix them `yamlagno_*` (they are runtime tables of Agno). The DDL below is shown only to illustrate the real shape that `ScheduleManager` operates on; it is NOT a yaml-agno provisioning task. yaml-agno only instantiates `ScheduleManager(db)` over a `BaseDb` obtained from the core `DatabaseManager` and configures schedules from YAML.
 
 ```sql
--- schedules table (managed by agno.scheduler; documented here for clarity)
+-- Illustrative schema (provisioned by Agno; do NOT create from yaml-agno).
+-- Agno manages these tables; yaml-agno only reads/writes via ScheduleManager.
 CREATE TABLE IF NOT EXISTS schedules (
     id            TEXT PRIMARY KEY,
     name          TEXT UNIQUE NOT NULL,
@@ -893,18 +896,20 @@ def test_invalid_field_count():
 - **GREEN**: Parser delegado a croniter + validación de 5 campos.
 - **Commit**: `feat(scheduler): CronValidator 5-field cron syntax`
 
-#### TASK_009: DDL provisioning via DatabaseManager
-- **File**: `yaml-agno/src/adapters/scheduler/schedule_ddl.py`
-- **Test**: `tests/unit/adapters/test_schedule_ddl.py`
+#### TASK_009: Schedule tables are Agno-owned (no yaml-agno DDL)
+- **File**: (none — removed `schedule_ddl.py`)
+- **Test**: `tests/unit/adapters/test_no_schedule_ddl.py`
 - **RED**:
 ```python
-def test_auto_provision_creates_tables(sqlite_db):
-    ScheduleDDL(sqlite_db).provision()
-    assert "schedules" in sqlite_db.table_names()
-    assert "schedule_runs" in sqlite_db.table_names()
+def test_yaml_agno_does_not_create_schedule_tables():
+    # @ai-directive: schedules/schedule_runs are Agno runtime tables, auto-
+    # provisioned by agno.scheduler + auto_provision_dbs. yaml-agno must NOT
+    # ship a ScheduleDDL provisioner (that would duplicate Agno's responsibility).
+    import yaml_agno.adapters.scheduler as mod
+    assert not hasattr(mod, "ScheduleDDL")
 ```
-- **GREEN**: `CREATE TABLE IF NOT EXISTS` schedules / schedule_runs (sólo si `auto_provision_dbs`).
-- **Commit**: `feat(scheduler): DDL provisioning for schedules and schedule_runs`
+- **GREEN**: Ensure no `schedule_ddl.py` / `ScheduleDDL` exists in yaml-agno; schedules are created by Agno when `ScheduleManager(db)` is used. yaml-agno only configures schedules from YAML.
+- **Commit**: `refactor(scheduler): drop schedule DDL provisioning (Agno owns it)`
 
 ---
 

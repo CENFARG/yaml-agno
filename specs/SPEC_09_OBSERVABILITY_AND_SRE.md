@@ -65,24 +65,28 @@ class AgentExecutor:
             raise
 ```
 
-**Propagación de Contexto Implícito**:
+**Implicit Context Propagation**:
 ```python
-import contextvars
-
-# Context variables para propagación
-tenant_id_var = contextvars.ContextVar("tenant_id")
-correlation_id_var = contextvars.ContextVar("correlation_id")
+# @ai-directive: tenant_id / correlation_id contextvars are OWNED by core-cenf
+# (core_infrastructure.common.context: set_tenant_id / get_tenant_id /
+# set_correlation_id / get_correlation_id). yaml-agno CONSUMES them; it does NOT
+# define parallel contextvars. These contextvars drive LOGGING/TRACING correlation
+# only — they do NOT scope DB queries (DB isolation is an explicit WHERE filter,
+# see SPEC_03 §5.3).
+from core_infrastructure.common.context import get_tenant_id, get_correlation_id
 
 class ContextAwareLogger:
+    """Enriches log lines with the core-cenf tenant/correlation contextvars."""
+
     def __init__(self, logger_manager: LoggerManager):
         self.logger = logger_manager
-    
+
     def _inject_context(self, message: str) -> str:
-        """Injeta tenant_id y correlation_id automáticamente"""
-        tenant_id = tenant_id_var.get("unknown")
-        correlation_id = correlation_id_var.get("unknown")
+        """Auto-inject tenant_id and correlation_id from core-cenf contextvars."""
+        tenant_id = get_tenant_id()           # core-cenf contextvar (telemetry only)
+        correlation_id = get_correlation_id()  # core-cenf contextvar
         return f"[{tenant_id}/{correlation_id}] {message}"
-    
+
     def info(self, message: str) -> None:
         enriched = self._inject_context(message)
         self.logger.info(enriched)

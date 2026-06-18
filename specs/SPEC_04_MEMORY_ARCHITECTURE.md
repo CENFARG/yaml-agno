@@ -169,11 +169,11 @@ def build_learning_config(learning_cfg) -> dict:
 
 ### 3.1 Isolation Policies
 
-> @ai-directive: yaml-agno does NOT own a session runtime or a `session_contexts` model. Session, user and message isolation are provided **natively by Agno** via its `user_id` + `session_id` keys, and tenant isolation is provided by **Core Infra** (`TenantResolver` / RLS, see SPEC_00 §7.2). yaml-agno only declares which Agno-native isolation keys are in force; it does not re-implement them.
+> @ai-directive: yaml-agno does NOT own a session runtime or a `session_contexts` model. Session, user and message isolation are provided **natively by Agno** via its `user_id` + `session_id` keys (app-layer WHERE filters, NO Postgres RLS). Tenant isolation is **explicit** (Core Infra `TenantResolver`; `tenant_id` lives on `yamlagno_*` config rows only, NEVER added to `agno_*` tables). See SPEC_03 §5.
 
 | Policy | Mechanism (Agno native / Core) | Enforcement |
 |--------|-------------------------------|-------------|
-| **Tenant Isolation** | Core Infra `TenantResolver` + RLS on the Agno DB (`tenant_id` in all queries) | `assert resolved_tenant_id == current_tenant` |
+| **Tenant Isolation** | Core Infra `TenantResolver` + explicit `tenant_id` WHERE filter on `yamlagno_*` rows (NO RLS, NO tenant_id on `agno_*`) | `assert resolved_tenant_id == current_tenant` |
 | **User Isolation** | Agno `user_id` key (scope of memory/sessions) | Memory queries scoped by `user_id` |
 | **Session Isolation** | Agno `session_id` key (unique per session) | Agno guarantees `session_id` uniqueness |
 
