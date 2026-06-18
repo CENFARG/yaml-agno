@@ -235,7 +235,7 @@ class ScheduleExecutor:
         last_err = None
         while attempt <= schedule.max_retries:
             try:
-                if not self._breaker.allow():
+                if not self._breaker.allow_request():   # SPEC_09 CircuitBreaker API
                     raise CircuitOpenError()
                 resp = await self._http.request(
                     method=schedule.method,

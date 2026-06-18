@@ -620,8 +620,10 @@ class MediaArtifactRecord(_YamlagnoBase):
     ConfigStoreProvisioner (SPEC_03 §6), never by a per-spec migration.
     """
 
-    __tablename__ = "media_artifacts"
+    __tablename__ = "yamlagno_media_artifacts"
     __table_args__ = {"schema": "yamlagno"}
+    # @ai-directive: follows the SPEC_03 convention (schema + prefixed tablename),
+    # so the physical table is yamlagno.yamlagno_media_artifacts.
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)          # media_id
     tenant_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
