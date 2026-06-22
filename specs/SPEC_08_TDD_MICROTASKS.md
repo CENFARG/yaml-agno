@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_08"
 Title: "TDD Microtasks - Master Catalog"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - rewritten as a master catalog that aggregates the microtasks already defined by their owning SPECs (00-07, plus 09/15 referenced for delegation). Removed all tasks that created classes eliminated in this iteration (SessionContext, SessionState, AgentInstance, ModelId, SessionKey, WorkflowExecution, domain events, native EngramMemoryManager). The only own model = *Config schemas (SPEC_02) + DIReference. Factories live in SPEC_01 with DependencyManager. Long-term memory via LongTermMemoryPort (Engram = optional adapter). Code/descriptions in English. Realigned persistence catalog to SPEC_03 iter2 core-cenf consumption: dropped the local TransactionManager and Alembic migration tasks; the S03-T* entries now point to the real SPEC_03 TASK_001..TASK_007 (DeclarativeBase ORM records with yamlagno_* prefix in schema yamlagno, ConfigStoreProvisioner via create_all(checkfirst=True), AgentConfigRepository wrapper over core GenericRepository, TenantResolver, bootstrap on core-cenf DatabaseManager)."
+Last_Updated: "2026-06-22"
+Revision_Note: "Iter 2. Realigned the SPEC_04 catalog (section 2.4) and the negative list to SPEC_04 iter2: there is NO LongTermMemoryPort, NO AgnoLearningMemoryAdapter, and NO Engram adapter. The S04-T* entries now map 1:1 to SPEC_04 TASK_001..TASK_004 (build_memory_config, build_learning_config, recall_on_start routing to LearningMachine.arecall/MemoryManager.aget_user_memories, AutosaveManager routing writes to LearningMachine stores or the SYNCHRONOUS MemoryManager.add_user_memory(UserMemory, user_id)). Prior iter1 catalog entries that referenced LongTermMemoryPort/EngramMemoryManager were removed because SPEC_04 iter2 eliminated them. All other owner sections unchanged from iter1."
 ---
 
 # SPEC_08_TDD_MICROTASKS
@@ -50,7 +50,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 - `ModelId`, `SessionKey` - value objects removed in SPEC_02. `model` is a plain validated `str`; `user_id`+`session_id` are Agno first-class keys.
 - `WorkflowExecution`, `WorkflowState`, `WorkflowStateMachine` - workflow runtime is Agno native; yaml-agno only declares `WorkflowConfig`/`StepConfig` (SPEC_02) and builds via `WorkflowFactory` (SPEC_01).
 - Domain events (e.g. `AgentConfigCreated`, `AgentStateChanged`) - removed; no proprietary domain event surface.
-- `EngramMemoryManager` as a native memory component - Engram is an OPTIONAL adapter implementing `LongTermMemoryPort`; the default backend is the Agno `LearningMachine`.
+- `EngramMemoryManager`, `LongTermMemoryPort`, `AgnoLearningMemoryAdapter` - yaml-agno does NOT define a memory Port or any adapter. Long-term memory is 100% Agno native (`LearningMachine` / `MemoryManager`); yaml-agno only CONFIGURES it from YAML and drives the real Agno APIs (SPEC_04 iter2).
 
 ---
 
@@ -103,18 +103,16 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 | S03-T06 | SPEC_03 TASK_006 | `TenantResolver` interface (maps Agno `(user_id, session_id)` to yaml-agno tenant; sets Core Infra contextvar; app-layer WHERE isolation) | `src/tenant/resolver.py` | `tests/unit/tenant/test_resolver.py` |
 | S03-T07 | SPEC_03 TASK_007 | `build_database_manager()` bootstrap on core-cenf `DatabaseManager` (`BootstrapOrchestrator`, `asyncio.TaskGroup`, DSN via `config.get_string`) | `src/db/bootstrap.py` | `tests/integration/test_bootstrap.py` |
 
-### 2.4 Owner SPEC_04 - Long-term Memory (Port + Adapters)
+### 2.4 Owner SPEC_04 - Agno Native Memory Configuration
 
-> @ai-directive: yaml-agno does NOT own a session runtime or memory FIFO - that is Agno native. SPEC_04 only adds a `LongTermMemoryPort` Protocol and two adapters: the DEFAULT Agno `LearningMachine` adapter and an OPTIONAL Engram adapter. Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
+> @ai-directive: yaml-agno does NOT own a session runtime, a memory FIFO, a `LongTermMemoryPort`, or any adapter. Long-term memory is 100% Agno native; yaml-agno only CONFIGURES it from YAML (Agent constructor flags + `learning:` block) and drives the REAL Agno v2.6.14 APIs. The rich path (`learning.enabled=true`) uses `LearningMachine` (recall via `arecall`, writes via `decision_log_store.asave(DecisionLog)` / `learned_knowledge_store.asave(...)`); the simple path uses `MemoryManager` (`aget_user_memories` for recall, the SYNCHRONOUS `add_user_memory(UserMemory, user_id)` for writes). Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
 
 | Catalog ID | Owner SPEC task | Component | File | Test |
 |------------|-----------------|-----------|------|------|
-| S04-T01 | SPEC_04 TASK_001 | `LongTermMemoryPort` Protocol (save_decision/save_discovery/save_bugfix/search_relevant) | `src/memory/long_term_port.py` | `tests/unit/memory/test_long_term_port.py` |
-| S04-T02 | SPEC_04 TASK_002 | Default Agno memory adapter (`AgnoLearningMemoryAdapter`) | `src/memory/agno_memory_adapter.py` | `tests/unit/memory/test_agno_memory_adapter.py` |
-| S04-T03 | SPEC_04 TASK_003 | `build_memory_config()` - YAML memory block -> Agno constructor flags | `src/memory/agno_memory_config.py` | `tests/unit/memory/test_agno_memory_config.py` |
-| S04-T04 | SPEC_04 TASK_004 | `recall_on_start()` through the `LongTermMemoryPort` | `src/memory/agno_memory_config.py` | `tests/integration/memory/test_recall_on_start.py` |
-| S04-T05 | SPEC_04 TASK_005 | Optional Engram adapter implementing `LongTermMemoryPort` | `src/memory/engram_manager.py` | `tests/integration/memory/test_engram_manager.py` |
-| S04-T06 | SPEC_04 TASK_006 | `AutosaveManager` (depends on `LongTermMemoryPort`) | `src/memory/autosave.py` | `tests/unit/memory/test_autosave.py` |
+| S04-T01 | SPEC_04 TASK_001 | `build_memory_config()` - YAML memory block -> Agno Agent constructor flags | `src/memory/agno_memory_config.py` | `tests/unit/memory/test_agno_memory_config.py` |
+| S04-T02 | SPEC_04 TASK_002 | `build_learning_config()` - YAML `learning:` block -> Agno LearningMachine config (no Port, no adapter) | `src/memory/agno_memory_config.py` | `tests/unit/memory/test_learning_config.py` |
+| S04-T03 | SPEC_04 TASK_003 | `recall_on_start()` routing to `LearningMachine.arecall` (enabled) or `MemoryManager.aget_user_memories` (disabled) | `src/memory/agno_memory_config.py` | `tests/integration/memory/test_recall_on_start.py` |
+| S04-T04 | SPEC_04 TASK_004 | `AutosaveManager` routing writes to LearningMachine stores (enabled) or sync `add_user_memory(UserMemory)` (disabled) | `src/memory/autosave.py` | `tests/unit/memory/test_autosave.py` |
 
 ### 2.5 Owner SPEC_05 - Workflows and Teams
 

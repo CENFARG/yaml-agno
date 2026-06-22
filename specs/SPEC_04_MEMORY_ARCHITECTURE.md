@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_04"
 Title: "Memory Architecture - Session, Working Memory and Long-term Storage"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Memory", "#ContextCompression", "#Session"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iter 2 correction. Engram removed entirely from the memory model; long-term memory is 100% Agno native (LearningMachine/MemoryManager). No LongTermMemoryPort abstraction, no EngramMemoryManager, no engram backend/block. yaml-agno only CONFIGURES Agno native memory from YAML (Agent constructor flags + MemoryManager/LearningMachine config); it adds no memory layer of its own. retention_days is a post-MVP extension (no native Agno retention). Compression migrated to SPEC_15; PII/secret masking migrated to SPEC_16. SPEC_04 is the memory MODEL; compression ops live in SPEC_15 and PII/secret guardrails live in SPEC_16."
+Last_Updated: "2026-06-22"
+Revision_Note: "Iter 2. Removed the invented Agno memory API from iter 1 (agent.memory.add(title=,content=,where=,learned=) and agent.memory.search_relevant() do NOT exist in Agno v2.6.14). Verified every call against the real source. LearningMachine path (learning.enabled=true): recall via LearningMachine.arecall(...) returning a per-store dict; writes via decision_log_store.asave(decision=DecisionLog(id, decision, reasoning, ...)) and learned_knowledge_store.asave(title=, learning=, namespace=, ...). MemoryManager path (learning.enabled=false): recall via aget_user_memories(user_id); writes via the SYNCHRONOUS add_user_memory(memory=UserMemory(...), user_id) called WITHOUT await (no async variant exists in Agno v2.6.14). No Port and no adapter added; long-term memory stays configured, not reimplemented."
 ---
 
 # SPEC_04_MEMORY_ARCHITECTURE
@@ -147,8 +147,12 @@ def build_learning_config(learning_cfg) -> dict:
     """Translate the YAML learning block into Agno LearningMachine configuration.
 
     When learning.enabled is true, the Agno Agent is wired with a LearningMachine
-    (rich, 6 stores). recall_on_start and the save_on_* flags below are yaml-agno
-    knobs that decide when to drive Agno native memory (recall on session start,
+    (rich, 6 stores: user_profile, user_memory, session_context, entity_memory,
+    learned_knowledge, decision_log) exposed as ``agent.learning_machine``.
+    When learning.enabled is false, recall/writes fall back to the simpler
+    ``MemoryManager`` (``agent.memory``) backed by ``UserMemory`` rows.
+    recall_on_start and the save_on_* flags below are yaml-agno knobs that decide
+    when to drive the corresponding Agno component (recall on session start,
     autosave of decisions / discoveries / bug fixes). No abstraction sits between
     yaml-agno and Agno native memory.
     """
@@ -233,18 +237,54 @@ def build_memory_config(memory_cfg) -> dict:
 
 async def recall_on_start(agent,
                           learning_cfg,
-                          user_id: str) -> list[dict]:
+                          user_id: str,
+                          message: str | None = None) -> list[dict]:
     """Optional cross-session recall through Agno native memory.
 
-    Triggered when learning_cfg.recall_on_start is true. Recall is performed by
-    Agno native memory (LearningMachine / MemoryManager) configured on the Agent;
-    yaml-agno only decides WHEN to recall, not HOW.
+    Triggered when learning_cfg.recall_on_start is true. yaml-agno only decides
+    WHEN to recall; the HOW is delegated to the Agno component selected by the
+    ``learning.enabled`` flag:
+
+      * learning.enabled is True  -> ``agent.learning_machine.arecall(...)`` from
+        ``agno.learn.machine``. Returns a dict mapping each of the 6 store names
+        (user_profile, user_memory, session_context, entity_memory,
+        learned_knowledge, decision_log) to its recalled data.
+      * learning.enabled is False -> ``agent.memory.aget_user_memories(user_id)``
+        from ``agno.memory.manager``. Returns a list of ``UserMemory`` objects.
+
+    Args:
+        agent: Agno Agent with native memory configured.
+        learning_cfg: YAML ``learning:`` block (SPEC_02 *Config).
+        user_id: Agno user id used to scope recall.
+        message: Optional query string forwarded to LearningMachine.arecall
+            (ignored on the simple MemoryManager path).
+
+    Returns:
+        A list of dict entries; each entry is normalized for context injection
+        regardless of the underlying Agno component.
     """
-    # Agno native recall (add_memories_to_context / LearningMachine search).
-    return await agent.memory.search_relevant(
-        query=f"user:{user_id} past sessions decisions",
-        limit=10,
-    )
+    if learning_cfg.enabled:
+        # Rich path: LearningMachine.arecall returns a dict per store.
+        # See agno/learn/machine.py (Agno v2.6.14).
+        recalled = await agent.learning_machine.arecall(
+            user_id=user_id,
+            message=message,
+        )
+        # ``recalled`` is Dict[store_name, Any]; flatten the stores yaml-agno
+        # cares about (learned_knowledge, decision_log) into a list of dicts.
+        return [
+            {"store": store_name, "data": payload}
+            for store_name, payload in recalled.items()
+            if payload
+        ]
+
+    # Simple path: MemoryManager.aget_user_memories returns List[UserMemory].
+    # See agno/memory/manager.py (Agno v2.6.14).
+    memories = await agent.memory.aget_user_memories(user_id=user_id)
+    return [
+        {"store": "user_memory", "data": {"memory": m.memory, "input": m.input}}
+        for m in (memories or [])
+    ]
 ```
 
 ### 4.2 Pattern: Save-on-Decision
@@ -253,39 +293,107 @@ async def recall_on_start(agent,
 
 ```python
 # yaml-agno/src/memory/autosave.py
+# @ai-directive: Write routes are selected by the learning.enabled flag and by
+#                artifact type. There is NO Port and NO adapter; yaml-agno calls
+#                the real Agno v2.6.14 APIs directly.
+
+from uuid import uuid4
+
+from agno.db.schemas.memory import UserMemory
+from agno.learn.schemas import DecisionLog
+
 
 class AutosaveManager:
     """Auto-saves decisions, discoveries, and bug fixes through Agno native memory.
 
     The Agent must be configured with Agno native memory (enable_agentic_memory,
     or a LearningMachine). yaml-agno only decides when to persist each artifact
-    based on the learning.* flags.
+    based on the learning.* flags. The write target is selected as follows:
+
+      * learning.enabled is True  -> LearningMachine stores, routed by artifact
+        type: decisions -> ``decision_log_store.asave(decision=DecisionLog(...))``
+        (agno/learn/stores/decision_log.py), discoveries/bug fixes ->
+        ``learned_knowledge_store.asave(title=..., learning=..., ...)``
+        (agno/learn/stores/learned_knowledge.py).
+      * learning.enabled is False -> ``MemoryManager.add_user_memory(memory=UserMemory(...), user_id)``
+        (agno/memory/manager.py). NOTE: this method is SYNCHRONOUS in Agno
+        v2.6.14 (no async variant), so it is called WITHOUT await.
     """
 
-    def __init__(self, agent, learning_cfg):
+    def __init__(self, agent, learning_cfg, user_id: str | None = None):
         self.agent = agent          # Agno Agent with native memory configured
         self.learning_cfg = learning_cfg
+        self.user_id = user_id
 
     async def on_agent_decision(self, agent_name: str, decision: str,
                                 reasoning: str) -> None:
-        """Callback fired when an agent takes a decision."""
+        """Callback fired when an agent takes a decision.
+
+        Args:
+            agent_name: Name of the Agno agent that emitted the decision.
+            decision: The decision text to persist.
+            reasoning: Why the decision was made; stored alongside it.
+        """
         if not self.learning_cfg.save_on_decision:
             return
 
-        await self.agent.memory.add(  # Agno native memory write
-            title=f"Decision by {agent_name}",
-            content=decision,
-            where=agent_name,
-            learned=reasoning,
+        if self.learning_cfg.enabled:
+            # Rich path: DecisionLogStore.asave takes a DecisionLog object
+            # (id and decision are required; reasoning optional). The required
+            # scalar is ``decision`` (NOT ``content``). See agno/learn/stores/
+            # decision_log.py and agno/learn/schemas.py (Agno v2.6.14).
+            await self.agent.learning_machine.decision_log_store.asave(
+                decision=DecisionLog(
+                    id=str(uuid4()),
+                    decision=decision,
+                    reasoning=reasoning,
+                    agent_id=agent_name,
+                    user_id=self.user_id,
+                )
+            )
+            return
+
+        # Simple path: MemoryManager.add_user_memory is SYNCHRONOUS in Agno
+        # v2.6.14 (no async variant). Call it without await.
+        self.agent.memory.add_user_memory(
+            memory=UserMemory(
+                memory=f"Decision by {agent_name}: {decision}",
+                input=reasoning,
+            ),
+            user_id=self.user_id,
         )
 
     async def on_discovery(self, title: str, content: str,
                            where: str | None = None) -> None:
-        """Callback fired when a discovery is made."""
+        """Callback fired when a discovery or bug fix is made.
+
+        Args:
+            title: Short label for the discovery.
+            content: The discovery body to persist (stored as the ``learning``).
+            where: Optional origin (agent name, tool, etc.) used as ``namespace``.
+        """
         if not self.learning_cfg.save_on_discovery:
             return
 
-        await self.agent.memory.add(title=title, content=content, where=where)
+        if self.learning_cfg.enabled:
+            # Rich path: LearnedKnowledgeStore.asave signature is
+            # (title, learning, context=None, tags=None, user_id=None,
+            #  agent_id=None, team_id=None, namespace=None).
+            # See agno/learn/stores/learned_knowledge.py (Agno v2.6.14).
+            await self.agent.learning_machine.learned_knowledge_store.asave(
+                title=title,
+                learning=content,
+                namespace=where,
+                user_id=self.user_id,
+            )
+            return
+
+        # Simple path: MemoryManager.add_user_memory is SYNCHRONOUS in Agno
+        # v2.6.14 (no async variant). Call it without await.
+        self.agent.memory.add_user_memory(
+            memory=UserMemory(memory=f"{title}: {content}"),
+            user_id=self.user_id,
+        )
 ```
 
 ---
@@ -388,12 +496,29 @@ AND no Port or adapter is involved
 - **Test**: `tests/integration/memory/test_recall_on_start.py`
 - **RED**:
   ```python
-  async def test_recall_on_start_uses_agno_native_memory(fake_agent):
-      memories = await recall_on_start(fake_agent, learning_cfg=fake_cfg, user_id="u1")
-      fake_agent.memory.search_relevant.assert_awaited_once()
+  async def test_recall_on_start_uses_learning_machine_arecall(fake_agent_learning):
+      # learning.enabled is True -> LearningMachine.arecall must be used.
+      memories = await recall_on_start(
+          fake_agent_learning,
+          learning_cfg=fake_cfg_enabled,
+          user_id="u1",
+          message="past decisions",
+      )
+      fake_agent_learning.learning_machine.arecall.assert_awaited_once()
+      assert isinstance(memories, list)
+
+  async def test_recall_on_start_uses_memory_manager_aget(fake_agent_simple):
+      # learning.enabled is False -> MemoryManager.aget_user_memories must be used.
+      memories = await recall_on_start(
+          fake_agent_simple,
+          learning_cfg=fake_cfg_disabled,
+          user_id="u1",
+      )
+      fake_agent_simple.memory.aget_user_memories.assert_awaited_once()
       assert isinstance(memories, list)
   ```
-- **GREEN**: Implement `recall_on_start()` driving Agno native memory recall
+- **GREEN**: Implement `recall_on_start()` routing to `LearningMachine.arecall`
+  (learning.enabled=true) or `MemoryManager.aget_user_memories` (learning.enabled=false)
 - **Commit**: `feat: add Agno native long-term recall on start`
 
 #### TASK_004: Implement Save-on-Decision (Agno native)
@@ -402,12 +527,33 @@ AND no Port or adapter is involved
 - **Test**: `tests/unit/memory/test_autosave.py`
 - **RED**:
   ```python
-  async def test_autosave_uses_agno_native_memory(fake_agent, learning_cfg):
-      mgr = AutosaveManager(agent=fake_agent, learning_cfg=learning_cfg)
+  async def test_autosave_decision_routes_to_decision_log(fake_agent_learning):
+      # learning.enabled is True -> decision_log_store.asave(DecisionLog) must be used.
+      mgr = AutosaveManager(
+          agent=fake_agent_learning,
+          learning_cfg=fake_cfg_enabled,
+          user_id="u1",
+      )
       await mgr.on_agent_decision(agent_name="a", decision="d", reasoning="r")
-      fake_agent.memory.add.assert_awaited_once()
+      fake_agent_learning.learning_machine.decision_log_store.asave.assert_awaited_once()
+
+  async def test_autosave_decision_routes_to_user_memory(fake_agent_simple):
+      # learning.enabled is False -> MemoryManager.add_user_memory (SYNC, no await).
+      mgr = AutosaveManager(
+          agent=fake_agent_simple,
+          learning_cfg=fake_cfg_disabled,
+          user_id="u1",
+      )
+      await mgr.on_agent_decision(agent_name="a", decision="d", reasoning="r")
+      fake_agent_simple.memory.add_user_memory.assert_called_once()
+      # NOTE: assert_called_once (NOT assert_awaited_once) because
+      # MemoryManager.add_user_memory is synchronous in Agno v2.6.14.
   ```
-- **GREEN**: Implement `AutosaveManager` driving Agno native memory writes (no Port)
+- **GREEN**: Implement `AutosaveManager` routing writes to LearningMachine stores
+  (`decision_log_store.asave(DecisionLog(...))` / `learned_knowledge_store.asave(...)`)
+  when learning.enabled=true, or to the SYNCHRONOUS
+  `MemoryManager.add_user_memory(UserMemory(...), user_id)` (no await) when
+  learning.enabled=false
 - **Commit**: `feat: add Agno native autosave manager`
 
 > @ai-directive: Compression (`ContextCompressor`), PII sanitization (`PIISanitizer`) and secret masking (`SecretSanitizer`) are NOT tasks in SPEC_04. They are owned by SPEC_15 (compression) and SPEC_16 (PII/secret guardrails). See those specs for their task breakdown.
