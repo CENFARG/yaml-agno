@@ -5,8 +5,8 @@
 > Mantener actualizado mientras se siga corrigiendo/iterando SPECs. Borrar
 > cuando el proyecto avance a implementación.
 
-**Última actualización**: 2026-06-22
-**HEAD git**: `b1ade11` (rama `feature/specs-agno-coverage-10-25`, 64 commits)
+**Última actualización**: 2026-06-26
+**HEAD git**: `8373d64` (rama `feature/specs-agno-coverage-10-25`, 66 commits)
 **Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations.
 
 ---
@@ -73,8 +73,8 @@ Agno enteramente en YAML, con templates heredables y DI System. Se construye
 Todos en `specs/SPEC_*.md`. Versiones:
 - **SPEC_00, 01, 02**: iteración 1 completa (0.2.0-iter1).
 - **SPEC_03**: 0.3.0-iter2 — **reescrita de fondo** integrando core-cenf real (consume DatabaseManager/TransactionScope/GenericRepository; elimina runtime de Agno; prefijo `yamlagno_*`; 3 niveles multi-tenant modelados; sección entorno vs ejecución). 10/10.
-- **SPEC_04**: 0.2.0-iter2 — corregida API de memoria inventada (agent.memory.add/search_relevant NO existen en Agno v2.6.14). APIs reales verificadas: LearningMachine.arecall/decision_log_store.asave(DecisionLog)/learned_knowledge_store.asave(...); MemoryManager.aget_user_memories/add_user_memory(UserMemory) SYNC. Sin Port ni adapter.
-- **SPEC_08**: 0.2.0-iter2 — catálogo TDD realineado a SPEC_04 iter2 (eliminado LongTermMemoryPort/Engram adapter de §2.4 y negative-list).
+- **SPEC_04**: 0.3.0-iter3 — directivas Engram/PII/Secret colapsadas en UN bloque canónico al inicio; agregado `system_user_id` (anti-bucket "default" compartido de Agno); mapeo de scopes org/tenant/agent/user/team → namespace Agno (con gotcha de herencia entity/learned_knowledge); retention configurable (bloque `retention:` con `max_age_days`); compression_threshold marcado como ejemplo configurable owned by SPEC_15; §8 preguntas resueltas. TDD: 6 tasks (TASK_005 resolve_user_id, TASK_006 scope_mapping).
+- **SPEC_08**: 0.2.0-iter3 — catálogo TDD realineado a SPEC_04 iter3 (agregado S04-T05/T06 para system_user_id y scope mapping).
 - **SPEC_17, 18, 23**: 0.2.0-iter2 — corregidas por impacto de SPEC_03.
 - **SPEC_05–16, 19–22, 24–32**: 0.2.0-iter1 — corregidas en ronda masiva.
 - **SPEC_26–32**: nuevos (A2A, Tracing, Reasoning, Workflow-HITL, Skills, Culture, Registry).
@@ -86,7 +86,7 @@ Todos en `specs/SPEC_*.md`. Versiones:
 - **Corregidas con revisión profunda (escritor + revisor adversarial + gate)**: SPEC_00, 01, 02, 03, 04 (+ SPEC_08 realineada por impacto).
 - **Corregidas en ronda masiva** (con re-audit + gate, pero NO con revisión adversarial individual detallada post-core-cenf): SPEC_05–32.
 - **Deuda inter-SPEC conocida** (no bloqueante, se liquida al revisar cada SPEC): SPEC_16 aún define `EngramMemoryManager(LongTermMemoryPort)` (Ports/memory eliminados en SPEC_04 iter2); se limpiará en la iteración de SPEC_16.
-- **Próxima a revisar con el sistema nuevo**: **SPEC_05 (Workflows and Teams)**.
+- **Próxima a revisar con el sistema nuevo**: **SPEC_05 (Workflows and Teams)** — nota: al revisar SPEC_05 aplicar el mismo hallazgo de SPEC_04: workflow.user_id es Optional en Agno (workflow.py:405), cae a "default" si None; requiere system_user_id.
 
 ---
 
