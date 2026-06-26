@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_06"
 Title: "API and AX - REST Endpoints and Function Calling"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#FastAPI", "#REST", "#AX", "#FunctionCalling"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iter 1 cleanup. Engram removed from mandatory readiness/health (optional adapter). SPEC_02 added to Dependency_Hashes (API validates against *Config schemas). Readiness path and postgres key unified across BDD and code. Spanish docstrings/comments translated to English (Google style). Clarified this is an additional management/AX layer over AgentOS, not a duplication of Agno native /run endpoints."
+Last_Updated: "2026-06-26"
+Revision_Note: "Iter 2 (factual). Corrected Agno version references v2.6.14 -> v2.6.18 (verified against agno/libs/agno/pyproject.toml). No design changes; all decisions from iter1 stand."
 ---
 
 # SPEC_06_API_AND_AX
@@ -47,7 +47,7 @@ class MediaInput(BaseModel):
     @ai-directive: maps to Agno's native media classes (agno.media.Image /
     Audio / Video / File), which accept exactly one content source among
     `url` (remote), `filepath` (local) or `content` (raw bytes). Verified
-    in agno/media.py v2.6.14. See SPEC_17 (Multimodal I/O) for full detail.
+    in agno/media.py v2.6.18. See SPEC_17 (Multimodal I/O) for full detail.
     """
     url: str | None = Field(None, description="Remote media location.")
     filepath: str | None = Field(None, description="Local media file path.")
@@ -63,7 +63,7 @@ class AgentRunRequest(BaseModel):
 
     Multimodal fields (images/audio/videos/files, send_media_to_model,
     store_media) are OWNED by this DTO; they map to the Agno Agent.run()
-    kwargs of the same name (verified in agno/agent/agent.py v2.6.14).
+    kwargs of the same name (verified in agno/agent/agent.py v2.6.18).
     See SPEC_17 for the multimodal pipeline (validation, storage, ToolResult).
     """
     input: str | Dict[str, Any] = Field(..., max_length=10000, description="Input for the agent")
@@ -85,7 +85,7 @@ class AgentRunResponse(BaseModel):
 
     @ai-directive: API-level DTO (response body). SPEC_17 imports this DTO.
     Multimodal output (images/videos/audio) maps to Agno's RunOutput media
-    fields (verified in agno/run/agent.py v2.6.14).
+    fields (verified in agno/run/agent.py v2.6.18).
     """
     agent_name: str
     session_id: str

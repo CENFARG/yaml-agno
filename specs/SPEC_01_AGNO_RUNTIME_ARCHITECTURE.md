@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_01"
 Title: "Agno Runtime Architecture"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Agno", "#Runtime", "#SessionManagement", "#WorkflowPrimitives"]
 Dependency_Hashes: ["SPEC_00"]
-Last_Updated: "2026-06-16"
-Revision_Note: "Iteración 1 - factories como esquemas, coroutine eliminado, DependencyManager split Core/yaml-agno, retention/ACID como feature futura, escalabilidad y cache decididos"
+Last_Updated: "2026-06-26"
+Revision_Note: "Iter 2 (factual). Corrected Agno version references v2.6.14 -> v2.6.18 (verified against agno/libs/agno/pyproject.toml). No design changes; all architectural decisions from iter1 stand."
 ---
 
 # SPEC_01_AGNO_RUNTIME_ARCHITECTURE
@@ -185,7 +185,7 @@ agent:
 
 **Parámetros de Session expuestos** (mapeados a Agno `Agent.run()` / `Agent.arun()`):
 
-La tabla lista los parámetros de sesión que efectivamente existen en la API de Agno v2.6.14 (verificados en `agno/agent/agent.py:1336-1361`). **No se inventan parámetros.**
+La tabla lista los parámetros de sesión que efectivamente existen en la API de Agno v2.6.18 (verificados en `agno/agent/agent.py:1336-1361`). **No se inventan parámetros.**
 
 | Parámetro YAML | Agno equivalent | Tipo | Validación |
 |----------------|-----------------|------|------------|
@@ -197,7 +197,7 @@ La tabla lista los parámetros de sesión que efectivamente existen en la API de
 | `add_session_state_to_context` | `run(add_session_state_to_context=...)` | `bool` | Inyecta session_state en contexto |
 | `max_iterations` | `run(max_iterations=...)` (límite de loop) | `int` | Integer >= 1 |
 
-> **@ai-directive (retention — FEATURE FUTURA)**: Agno **NO** tiene `retention_days` nativo ni un job de limpieza periódico listo. Hallazgos verificados en Agno v2.6.14:
+> **@ai-directive (retention — FEATURE FUTURA)**: Agno **NO** tiene `retention_days` nativo ni un job de limpieza periódico listo. Hallazgos verificados en Agno v2.6.18:
 > - **`Curator.prune(max_age_days=)`** (parte de `LearningMachine`, `agno/learn/curate.py:36`) solo limpia el store `user_profile`, **no** las memorias generales. Es síncrono y standalone (no requiere agente corriendo).
 > - **`RedisDb(expire=N)`**: TTL de backend Redis, borra claves solas al expirar (solo si el backend es Redis).
 > - **Scheduler de Agno** (`ScheduleManager`/`SchedulePoller`/`ScheduleExecutor`) **NO sirve directo** para purge: está acoplado a ejecutar runs HTTP de agents/teams/workflows (no funciones Python arbitrarias ni SQL de mantenimiento) y requiere AgentOS corriendo.
@@ -320,7 +320,7 @@ Los Teams en yaml-agno se mapean a `agno.team.Team` con todos sus modos y config
 
 #### Modos de Team Soportados
 
-`TeamMode` en Agno v2.6.14 define **4 modos** (verificado en `agno/team/mode.py:6-23`). **No existe `coroutine`** (era un error de versiones previas de este SPEC).
+`TeamMode` en Agno v2.6.18 define **4 modos** (verificado en `agno/team/mode.py:6-23`). **No existe `coroutine`** (era un error de versiones previas de este SPEC).
 
 | Modo YAML | Agno `TeamMode` | Descripción |
 |-----------|-----------------|-------------|
@@ -514,7 +514,7 @@ graph LR
     LTM -.-> |Agno LearningMachine / MemoryManager| CSM["Cross-Session Memory"]
 ```
 
-> **@ai-directive**: aclaraciones técnicas verificadas en Agno v2.6.14:
+> **@ai-directive**: aclaraciones técnicas verificadas en Agno v2.6.18:
 > - **Engram NO es de Agno** (0 menciones en código/doc de Agno). Es nuestro MCP tool. El runtime core de yaml-agno **no** lo muestra como capa nativa. El equivalente Agno para "long-term cross-session memory" es **`LearningMachine`** (6 stores: user_profile, user_memory, session_context, entity_memory, learned_knowledge, decision_log) o, más simple, **`MemoryManager`/`UserMemory`**. Engram se trata como **adapter opcional externo**, definido en SPEC_04, no en el runtime core.
 > - **Redis SÍ es de Agno**: `agno.db.redis.RedisDb` (DB de sessions/memory con `expire` TTL), `agno.vectordb.redis.RedisDB` (vector DB) y `RedisRunCancellationManager` (cancelación pub-sub). La etiqueta anterior "Redis/Agno" era imprecisa: Redis es una opción de backend Agno, no un cache genérico nuestro.
 > - **`learning` y `culture`**: `learning` = `LearningMachine` (sistema unificado de aprendizaje). `culture` = `CultureManager` (experimental, "shared cultural knowledge"). Ambos son de Agno. Memory (MemoryManager) ≠ Learning (LearningMachine es la evolución más rica). Ver SPEC_04 para detalle.
@@ -1048,7 +1048,7 @@ Implica: empezar con PostgreSQL single instance (SPEC_03 ya define partitioning 
 - **I**solación: transacciones concurrentes no interfieren entre sí (una no ve cambios a medias de otra).
 - **D**urabilidad: una vez confirmada (commit), el cambio sobrevive a crashes/cortes de luz.
 
-**@ai-directive (hallazgo verificado en Agno v2.6.14)**: ACID **NO viene por defecto** en Agno. Agno persiste el workflow como **un `upsert_session` de la sesión completa** (una escritura atómica, pero de toda la sesión junta, no step por step). **Si falla el step 3, los steps 1-2 NO se revierten**: quedan committed y el run se marca `cancelled`/`partial`. **No existe parámetro** `transactional`/`atomic` para controlarlo. (Verificado: cero coincidencias de `transaction|atomic|rollback` en `agno/workflow/`).
+**@ai-directive (hallazgo verificado en Agno v2.6.18)**: ACID **NO viene por defecto** en Agno. Agno persiste el workflow como **un `upsert_session` de la sesión completa** (una escritura atómica, pero de toda la sesión junta, no step por step). **Si falla el step 3, los steps 1-2 NO se revierten**: quedan committed y el run se marca `cancelled`/`partial`. **No existe parámetro** `transactional`/`atomic` para controlarlo. (Verificado: cero coincidencias de `transaction|atomic|rollback` en `agno/workflow/`).
 
 **Decisión**: ACID entre steps es una **extensión nuestra** sobre Agno, **no bloqueante para el MVP core**. Se implementa cuando tengamos workflows críticos (financieros/legales) que lo requieran. Ejemplo del valor: workflow facturación (validar → debitar → notificar); con ACID, si falla "notificar", se revierten "validar" y "debitar" (estado siempre consistente); sin ACID (Agno default), el débito queda hecho y hay que reconciliar a mano.
 

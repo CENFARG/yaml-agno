@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_13"
 Title: "Scheduler, Background Execution & Run Lifecycle"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Scheduler", "#Cron", "#Background", "#RunLifecycle", "#RunStatus", "#Resume", "#Cancel", "#SSE", "#TaskGroup"]
 Dependency_Hashes: ["SPEC_01", "SPEC_03"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - RunStatus imported from agno.run.base (never redefined); members corrected to Agno lowercase (no invented 'continued' state)."
+Last_Updated: "2026-06-26"
+Revision_Note: "Iter 2 (factual). Corrected Agno version reference v2.6.14 -> v2.6.18 (verified against agno/libs/agno/pyproject.toml). No design changes; iter1 decisions stand."
 ---
 
 # SPEC_13_SCHEDULER_BACKGROUND_LIFECYCLE
@@ -543,7 +543,7 @@ stateDiagram-v2
 ```python
 # yaml-agno/src/domain/runs/run_status.py
 # @ai-directive: RunStatus is IMPORTED from Agno (agno.run.base), never redefined.
-# Members (Agno v2.6.14): pending, running, completed, paused, cancelled, error.
+# Members (Agno v2.6.18): pending, running, completed, paused, cancelled, error.
 # yaml-agno does NOT invent extra states (e.g. no "continued"); pause -> running
 # transition is handled by Agno's continue_run, not a separate status.
 from agno.run.base import RunStatus

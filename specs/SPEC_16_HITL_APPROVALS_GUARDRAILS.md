@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_16"
 Title: "HITL, Approvals & Guardrails - Human Oversight, Input Validation and Safety Boundaries"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#HITL", "#Approvals", "#Guardrails", "#PII", "#Secrets", "#Hooks", "#Safety", "#AgnoPreHooks"]
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_09"]
-Last_Updated: "2026-06-17"
-Revision_Note: "iter1 cleanup: import RunStatus from agno.run.base (no YamlAgnoRunStatus); consume CircuitBreaker from SPEC_09 (no local CBState); EngramMemoryManager as optional LongTermMemoryPort adapter consistent with SPEC_04; allow_pii audited escape hatch added; English docstrings."
+Last_Updated: "2026-06-26"
+Revision_Note: "Iter 2 (factual). Corrected Agno version reference v2.6.14 -> v2.6.18 (verified against agno/libs/agno/pyproject.toml). Known debt (non-blocking, to resolve in the SPEC_16 deep-review iteration): EngramMemoryManager/LongTermMemoryPort adapter references inherited from iter1 — SPEC_04 iter2/iter3 eliminated the Port and Engram from the memory model; SPEC_16 still references them and must be realigned in its own iteration. No other design changes this iteration."
 ---
 
 # SPEC_16_HITL_APPROVALS_GUARDRAILS
@@ -102,7 +102,7 @@ Agno expone HITL a través de `active_requirements` en el `run_response`. Cada r
 
 # @ai-directive: RunStatus is IMPORTED from agno.run.base. yaml-agno does NOT
 # redefine it as YamlAgnoRunStatus (build ON TOP of Agno, not a parallel enum).
-# Agno v2.6.14 members (lowercase): pending / running / completed / paused /
+# Agno v2.6.18 members (lowercase): pending / running / completed / paused /
 # cancelled / error.
 from agno.run.base import RunStatus  # noqa: F401  (re-exported for HITL layer)
 
@@ -318,7 +318,7 @@ async def reject_request(db, approval_id: str, admin_user_id: str, reason: str) 
 
 ### 3.5 Persistencia y Audit Trail
 
-El record de approval se persiste en la tabla `approvals`, cuyo schema es **propio de Agno** (`agno/db/schemas/approval.py`). yaml-agno NO redefine esta tabla; la usa tal cual. Schema real (Agno v2.6.14):
+El record de approval se persiste en la tabla `approvals`, cuyo schema es **propio de Agno** (`agno/db/schemas/approval.py`). yaml-agno NO redefine esta tabla; la usa tal cual. Schema real (Agno v2.6.18):
 
 ```sql
 -- Agno-managed table (agno/db/schemas/approval.py). Do NOT redefine.

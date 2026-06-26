@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_08"
 Title: "TDD Microtasks - Master Catalog"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
 Last_Updated: "2026-06-26"
-Revision_Note: "Iter 3. Added S04-T05 (resolve_user_id - human user_id -> system_user_id template -> fail fast, never None, never Agno shared 'default' bucket) and S04-T06 (map_scope_to_namespace + build_scope_config - yaml-agno scope taxonomy -> Agno free-string namespace, with validation: scope='user' requires a resolved user_id before calling Agno, and learned_knowledge namespace is NOT inherited from the top-level namespace) to track the two new components SPEC_04 iter3 introduced (system_user_id + memory scopes). S04-T01..T04 unchanged from iter2. All other owner sections unchanged."
+Revision_Note: "Iter 4. Realigned the SPEC_05 catalog (section 2.5) to SPEC_05 iter2: S05-T07 changed from the removed team message protocol (message_protocol.py / TeamMessage, eliminated because Agno already ships A2A) to the new A2A YAML config task. S05-T03 corrected asyncio.gather -> asyncio.TaskGroup. S05-T05/T06 clarified to reference core-cenf ErrorHandlingManager.classify() (real API: TRANSIENT/RATE_LIMIT retryable, no should_retry, no local enum). All other owner sections unchanged."
 ---
 
 # SPEC_08_TDD_MICROTASKS
@@ -105,7 +105,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 
 ### 2.4 Owner SPEC_04 - Agno Native Memory Configuration
 
-> @ai-directive: yaml-agno does NOT own a session runtime, a memory FIFO, a `LongTermMemoryPort`, or any adapter. Long-term memory is 100% Agno native; yaml-agno only CONFIGURES it from YAML (Agent constructor flags + `learning:` block) and drives the REAL Agno v2.6.14 APIs. The rich path (`learning.enabled=true`) uses `LearningMachine` (recall via `arecall`, writes via `decision_log_store.asave(DecisionLog)` / `learned_knowledge_store.asave(...)`); the simple path uses `MemoryManager` (`aget_user_memories` for recall, the SYNCHRONOUS `add_user_memory(UserMemory, user_id)` for writes). Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
+> @ai-directive: yaml-agno does NOT own a session runtime, a memory FIFO, a `LongTermMemoryPort`, or any adapter. Long-term memory is 100% Agno native; yaml-agno only CONFIGURES it from YAML (Agent constructor flags + `learning:` block) and drives the REAL Agno v2.6.18 APIs. The rich path (`learning.enabled=true`) uses `LearningMachine` (recall via `arecall`, writes via `decision_log_store.asave(DecisionLog)` / `learned_knowledge_store.asave(...)`); the simple path uses `MemoryManager` (`aget_user_memories` for recall, the SYNCHRONOUS `add_user_memory(UserMemory, user_id)` for writes). Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
 
 | Catalog ID | Owner SPEC task | Component | File | Test |
 |------------|-----------------|-----------|------|------|
@@ -124,11 +124,11 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 |------------|-----------------|-----------|------|------|
 | S05-T01 | SPEC_05 TASK_001 | Workflow declaration via `WorkflowConfig`/`StepConfig` (SPEC_02) + `WorkflowFactory` build | `src/factories/workflow_factory.py` | `tests/unit/factories/test_workflow_factory.py` |
 | S05-T02 | SPEC_05 TASK_002 | Step executor (delegates to Agno primitive) | `src/workflows/step_executor.py` | `tests/unit/workflows/test_step_executor.py` |
-| S05-T03 | SPEC_05 TASK_003 | Parallel step executor (`asyncio.gather`) | `src/workflows/step_executor.py` | `tests/unit/workflows/test_step_executor.py` |
+| S05-T03 | SPEC_05 TASK_003 | Parallel step executor (`asyncio.TaskGroup`, NOT `asyncio.gather`) | `src/workflows/step_executor.py` | `tests/unit/workflows/test_step_executor.py` |
 | S05-T04 | SPEC_05 TASK_004 | Condition evaluator (CEL) | `src/workflows/condition_evaluator.py` | `tests/unit/workflows/test_condition_evaluator.py` |
-| S05-T05 | SPEC_05 TASK_005 | Step-level retry policy | `src/workflows/retry_policy.py` | `tests/unit/workflows/test_retry_policy.py` |
-| S05-T06 | SPEC_05 TASK_006 | Retry decision (classification delegated to Core Infra) | `src/workflows/retry_policy.py` | `tests/unit/workflows/test_retry_policy.py` |
-| S05-T07 | SPEC_05 TASK_007 | Team message protocol (`TeamMessage` Pydantic model) | `src/workflows/message_protocol.py` | `tests/unit/workflows/test_message_protocol.py` |
+| S05-T05 | SPEC_05 TASK_005 | Step-level retry policy (fills Agno's naive step-retry gap; backoff + jitter) | `src/workflows/retry_policy.py` | `tests/unit/workflows/test_retry_policy.py` |
+| S05-T06 | SPEC_05 TASK_006 | Retry decision via core-cenf `ErrorHandlingManager.classify()` (TRANSIENT/RATE_LIMIT retryable; no `should_retry`, no local enum) | `src/workflows/retry_policy.py` | `tests/unit/workflows/test_retry_policy.py` |
+| S05-T07 | SPEC_05 TASK_007 | A2A YAML config (enables Agno `a2a_interface`, expose/remote blocks; ACP explicitly rejected) | `src/workflows/a2a_config.py` | `tests/unit/workflows/test_a2a_config.py` |
 | S05-T08 | SPEC_05 TASK_008 | Verify Agno delegation (no proprietary workflow runtime) | `tests/integration/workflows/test_agno_delegation.py` | (same) |
 
 ### 2.6 Owner SPEC_06 - API and AX
