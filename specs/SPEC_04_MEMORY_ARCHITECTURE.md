@@ -614,5 +614,3 @@ It implies:
 - **Trade-off**: flexibility vs security
 
 ---
-
-*Do you want to deepen the technical specification to Level 6 for a specific component, or authorize the execution of these tasks by the agent team?*
