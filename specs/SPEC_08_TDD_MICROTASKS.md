@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_08"
 Title: "TDD Microtasks - Master Catalog"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
-Last_Updated: "2026-06-22"
-Revision_Note: "Iter 2. Realigned the SPEC_04 catalog (section 2.4) and the negative list to SPEC_04 iter2: there is NO LongTermMemoryPort, NO AgnoLearningMemoryAdapter, and NO Engram adapter. The S04-T* entries now map 1:1 to SPEC_04 TASK_001..TASK_004 (build_memory_config, build_learning_config, recall_on_start routing to LearningMachine.arecall/MemoryManager.aget_user_memories, AutosaveManager routing writes to LearningMachine stores or the SYNCHRONOUS MemoryManager.add_user_memory(UserMemory, user_id)). Prior iter1 catalog entries that referenced LongTermMemoryPort/EngramMemoryManager were removed because SPEC_04 iter2 eliminated them. All other owner sections unchanged from iter1."
+Last_Updated: "2026-06-26"
+Revision_Note: "Iter 3. Added S04-T05 (resolve_user_id - human user_id -> system_user_id template -> fail fast, never None, never Agno shared 'default' bucket) and S04-T06 (map_scope_to_namespace + build_scope_config - yaml-agno scope taxonomy -> Agno free-string namespace, with validation: scope='user' requires a resolved user_id before calling Agno, and learned_knowledge namespace is NOT inherited from the top-level namespace) to track the two new components SPEC_04 iter3 introduced (system_user_id + memory scopes). S04-T01..T04 unchanged from iter2. All other owner sections unchanged."
 ---
 
 # SPEC_08_TDD_MICROTASKS
@@ -113,6 +113,8 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 | S04-T02 | SPEC_04 TASK_002 | `build_learning_config()` - YAML `learning:` block -> Agno LearningMachine config (no Port, no adapter) | `src/memory/agno_memory_config.py` | `tests/unit/memory/test_learning_config.py` |
 | S04-T03 | SPEC_04 TASK_003 | `recall_on_start()` routing to `LearningMachine.arecall` (enabled) or `MemoryManager.aget_user_memories` (disabled) | `src/memory/agno_memory_config.py` | `tests/integration/memory/test_recall_on_start.py` |
 | S04-T04 | SPEC_04 TASK_004 | `AutosaveManager` routing writes to LearningMachine stores (enabled) or sync `add_user_memory(UserMemory)` (disabled) | `src/memory/autosave.py` | `tests/unit/memory/test_autosave.py` |
+| S04-T05 | SPEC_04 TASK_005 | `resolve_user_id()` - human user_id -> system_user_id template -> fail fast (never None, never Agno "default" bucket) | `src/memory/user_identity.py` | `tests/unit/memory/test_user_identity.py` |
+| S04-T06 | SPEC_04 TASK_006 | `map_scope_to_namespace()` + `build_scope_config()` - yaml-agno scope taxonomy -> Agno namespace, with validation (scope="user" needs user_id; learned_knowledge namespace NOT inherited) | `src/memory/scope_mapping.py` | `tests/unit/memory/test_scope_mapping.py` |
 
 ### 2.5 Owner SPEC_05 - Workflows and Teams
 
