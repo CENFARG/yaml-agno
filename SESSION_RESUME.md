@@ -6,8 +6,9 @@
 > cuando el proyecto avance a implementación.
 
 **Última actualización**: 2026-07-02
-**HEAD git**: `6d6c574` (rama `feature/specs-agno-coverage-10-25`, 76 commits)
+**HEAD git**: `13de014` (rama `feature/specs-agno-coverage-10-25`, 80 commits)
 **Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
+**AUDITORÍA 32-SPEC**: 72 hallazgos (9 CRÍTICO/33 MEDIO/30 BAJO). Wave 1 aplicada (SPEC_02 slots, SPEC_03 tenant seam fusionado, SPEC_09 record_metric, SPEC_25 namespace clarification). Faltan Waves 2-6.
 **user_id UNIFICADO**: composite `{tenant_id}:{principal_id}` SIEMPRE; `resolve_user_id()` (SPEC_04) es el único resolver; `TenantContextMiddleware` (SPEC_06) delega. Workflows autónomos también cubiertos por tenant isolation.
 
 ---
