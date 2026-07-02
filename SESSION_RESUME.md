@@ -5,8 +5,8 @@
 > Mantener actualizado mientras se siga corrigiendo/iterando SPECs. Borrar
 > cuando el proyecto avance a implementación.
 
-**Última actualización**: 2026-06-26
-**HEAD git**: `2f80ddb` (rama `feature/specs-agno-coverage-10-25`, 68 commits)
+**Última actualización**: 2026-07-02
+**HEAD git**: `d951117` (rama `feature/specs-agno-coverage-10-25`, 70 commits)
 **Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
 
 ---
@@ -74,9 +74,12 @@ Todos en `specs/SPEC_*.md`. Versiones:
 - **SPEC_00, 01, 02**: iteración 1 completa (0.2.0-iter1).
 - **SPEC_03**: 0.3.0-iter2 — **reescrita de fondo** integrando core-cenf real (consume DatabaseManager/TransactionScope/GenericRepository; elimina runtime de Agno; prefijo `yamlagno_*`; 3 niveles multi-tenant modelados; sección entorno vs ejecución). 10/10.
 - **SPEC_04**: 0.3.0-iter3 — directivas Engram/PII/Secret colapsadas en UN bloque canónico al inicio; agregado `system_user_id` (anti-bucket "default" compartido de Agno); mapeo de scopes org/tenant/agent/user/team → namespace Agno; retention configurable. v2.6.18.
-- **SPEC_05**: 0.3.0-iter2 — `message_protocol.py` ELIMINADO (Agno ya trae A2A completo; ACP no existe); consume API REAL de core-cenf `ErrorHandlingManager` (`classify`/`report` SYNC/`handle`/`ErrorClassification` sin CRITICAL, sin `should_retry`); `retry_policy.py` acotado al gap real de step-retry de Agno (model-retry delegado a Agno); retry/timeout configurables; §8 resuelto. v2.6.18.
-- **SPEC_01, 06, 13, 16**: bump factual v2.6.14→v2.6.18 (sin cambios de diseño).
-- **SPEC_08**: 0.2.0-iter4 — catálogo realineado a SPEC_05 iter2 (S05-T07 protocolo→A2A config, S05-T03 gather→TaskGroup, S05-T05/T06 API core-cenf) + v2.6.18.
+- **SPEC_05**: 0.3.0-iter2 — `message_protocol.py` ELIMINADO (Agno ya trae A2A completo; ACP no existe); consume API REAL de core-cenf `ErrorHandlingManager`; `retry_policy.py` acotado al gap real de step-retry; retry/timeout configurables; §8 resuelto. v2.6.18.
+- **SPEC_06**: 0.4.0-iter3 — **reformulada como capa fina sobre AgentOS**. ELIMINADOS todos los endpoints duplicados (`/run`, `/sessions`, `/health`, config — todos nativos de AgentOS). Eliminados DTOs `AgentRunRequest`/`AgentRunResponse` (wire contract nativo es multipart/form-data con `{id}`). Core job = `build_app()` wiring YAML→`AgentOS(...).get_app()`. Gaps reales en estilo AgentOS: readiness/liveness, RateLimitMiddleware, TenantScopeMiddleware, AX discovery.
+- **SPEC_17**: 0.2.0-iter3 (colateral) — removidas refs a `AgentRunRequest` (conserva `MediaInput` como modelo interno → agno.media.*); firma `run_multimodal_agent` corregida.
+- **SPEC_19**: 0.2.0-iter2 (colateral) — actualizadas refs cruzadas a SPEC_06 (RateLimitMiddleware §3.2, readiness §3.1, sin DTOs).
+- **SPEC_01, 06, 13, 16**: bump factual v2.6.14→v2.6.18.
+- **SPEC_08**: 0.2.0-iter5 — catálogo realineado a SPEC_06 iter3 (S06-T01..T07 thin-layer tasks).
 - **SPEC_17, 18, 23**: 0.2.0-iter2 — corregidas por impacto de SPEC_03.
 - **SPEC_05–16, 19–22, 24–32**: 0.2.0-iter1 — corregidas en ronda masiva.
 - **SPEC_26–32**: nuevos (A2A, Tracing, Reasoning, Workflow-HITL, Skills, Culture, Registry).
@@ -88,7 +91,7 @@ Todos en `specs/SPEC_*.md`. Versiones:
 - **Corregidas con revisión profunda (escritor + revisor adversarial + gate)**: SPEC_00, 01, 02, 03, 04 (+ SPEC_08 realineada por impacto).
 - **Corregidas en ronda masiva** (con re-audit + gate, pero NO con revisión adversarial individual detallada post-core-cenf): SPEC_05–32.
 - **Deuda inter-SPEC conocida** (no bloqueante, se liquida en cada iteración): SPEC_09 inventa `ErrorCategory`+`CRITICAL`+`_categorize_error` (contradice API real core-cenf `ErrorClassification`/`classify`); SPEC_16 aún define `EngramMemoryManager(LongTermMemoryPort)` (Ports/memory eliminados en SPEC_04 iter2/3). Se limpian en sus respectivas iteraciones.
-- **Próxima a revisar con el sistema nuevo**: **SPEC_06 (API and AX)** (el usuario la está validando ahora).
+- **Próxima a revisar con el sistema nuevo**: **SPEC_07 (Dashboard Architecture)**.
 
 ---
 
