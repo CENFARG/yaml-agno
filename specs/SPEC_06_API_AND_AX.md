@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_06"
 Title: "API and AX - YamlAgentOS(AgentOS) Inheritance Layer"
-Version: "0.5.0-iter4"
+Version: "0.5.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#FastAPI", "#AgentOS", "#Inheritance", "#REST", "#AX", "#MCP", "#MultiTenant", "#Middleware"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 4 (inheritance reformulation). Replaces parallel AgentOS composition with YamlAgentOS(AgentOS) subclass pattern: yaml-agno now INHERITS AgentOS and overrides get_app() to register extensions via app.include_router()/app.add_middleware() after super().get_app(). Adds composite user_id multi-tenancy (tenant_id:raw_user_id) layered on AgentOS native user_isolation (AuthorizationConfig). Resolves 10 corrections: inherit-not-compose; composite user_id + user_isolation always-on (NULL-bucket footgun documented via FODA); no gaps/ folder (SOTA src/api/ layout); readiness probe decoupled from optional external adapters; config loading consumes core-cenf-py ConfigManager; backend sanitization/validation mandatory directive; AX discovery via native MCP server (enable_mcp_server) instead of parallel REST endpoint; reinforce AgentOS coding patterns."
+Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared resolve_user_id() (SPEC_04) to build the composite user_id instead of constructing f'{tenant_id}:{raw_user_id}' inline. resolve_user_id is the single source of truth for the composite format (same resolver for HTTP and autonomous runs). No other behavior change. Iter 4 (inheritance reformulation). Replaces parallel AgentOS composition with YamlAgentOS(AgentOS) subclass pattern: yaml-agno now INHERITS AgentOS and overrides get_app() to register extensions via app.include_router()/app.add_middleware() after super().get_app(). Adds composite user_id multi-tenancy (tenant_id:raw_user_id) layered on AgentOS native user_isolation (AuthorizationConfig). Resolves 10 corrections: inherit-not-compose; composite user_id + user_isolation always-on (NULL-bucket footgun documented via FODA); no gaps/ folder (SOTA src/api/ layout); readiness probe decoupled from optional external adapters; config loading consumes core-cenf-py ConfigManager; backend sanitization/validation mandatory directive; AX discovery via native MCP server (enable_mcp_server) instead of parallel REST endpoint; reinforce AgentOS coding patterns."
 ---
 
 # SPEC_06_API_AND_AX
@@ -18,7 +18,7 @@ Revision_Note: "Iter 4 (inheritance reformulation). Replaces parallel AgentOS co
 > yaml-agno adds ONLY what AgentOS lacks:
 >
 > 1. **Wiring YAML -> AgentOS** — translate YAML files into the `agents=[...]` / `teams=[...]` / `workflows=[...]` lists that `YamlAgentOS(...)` consumes. This is yaml-agno's CORE job. Config is loaded via `core-cenf-py` `ConfigManager` (no direct `os.environ`).
-> 2. **Multi-tenant via composite user_id + native user_isolation** — a `TenantContextMiddleware` sets `request.state.user_id = f"{tenant_id}:{raw_user_id}"` (composite) BEFORE Agno handlers read it; `AuthorizationConfig(user_isolation=True)` threads that composite through every scoped DB read. `authorization=True` + `user_isolation=True` are ALWAYS ON (never None — avoids the NULL-bucket footgun).
+> 2. **Multi-tenant via composite user_id + native user_isolation** — a `TenantContextMiddleware` extracts `tenant_id` + principal from the request, then DELEGATES to the shared `resolve_user_id()` (SPEC_04 §1.4) to set `request.state.user_id` to the composite `"{tenant_id}:{principal_id}"` BEFORE Agno handlers read it; `AuthorizationConfig(user_isolation=True)` threads that composite through every scoped DB read. `resolve_user_id` is shared with SPEC_04 (memory); same composite for HTTP and autonomous runs. `authorization=True` + `user_isolation=True` are ALWAYS ON (never None — avoids the NULL-bucket footgun).
 > 3. **Readiness + Liveness routers** — AgentOS ships only `GET /health`. yaml-agno adds DB-gated readiness and process liveness as factory routers (`get_readiness_router` / `get_liveness_router`) in the SAME style as `get_health_router`.
 > 4. **Rate-limit middleware** — AgentOS has zero rate limiting. yaml-agno adds `RateLimitMiddleware` keyed on the composite user_id.
 >
@@ -219,7 +219,7 @@ class YamlAgentOS(AgentOS):
 
 Agno has NO `tenant_id` column anywhere; its own idiom (`teams/_session.py:52` docstring) calls `user_id` "the user_id for tenant isolation", and `user_id` is used as an opaque equality filter throughout the data layer (~40x in `postgres.py`). Therefore yaml-agno reuses `user_id` as the tenant boundary — but makes it COMPOSITE: `request.state.user_id = f"{tenant_id}:{raw_user_id}"`.
 
-A `TenantContextMiddleware` extracts `tenant_id` from the JWT `tnt` claim or the `X-Tenant-Id` header and the raw user id from the JWT `sub`, then sets `request.state.user_id` to the composite string BEFORE any Agno handler reads it. `AuthorizationConfig(user_isolation=True)` (`os/config.py:125`) makes Agno's `get_scoped_user_id(request)` (`user_scope.py:78`) return that composite for non-admins, so EVERY user-scoped DB read auto-filters by `tenant:user`. yaml-agno enables `authorization=True` + `user_isolation=True` ALWAYS.
+A `TenantContextMiddleware` extracts `tenant_id` from the JWT `tnt` claim or the `X-Tenant-Id` header and the principal (raw user id) from the JWT `sub`, then DELEGATES to the shared `resolve_user_id(memory_cfg, principal_id, tenant_id)` (SPEC_04 §1.4) to obtain the composite string and sets `request.state.user_id` to it BEFORE any Agno handler reads it. `resolve_user_id` is the ONLY place the composite format `"{tenant_id}:{principal_id}"` lives — the middleware does NOT build `f"{tenant_id}:{raw_user_id}"` inline. `AuthorizationConfig(user_isolation=True)` (`os/config.py:125`) makes Agno's `get_scoped_user_id(request)` (`user_scope.py:78`) return that composite for non-admins, so EVERY user-scoped DB read auto-filters by `tenant:principal`. yaml-agno enables `authorization=True` + `user_isolation=True` ALWAYS.
 
 #### FODA
 
@@ -239,29 +239,47 @@ A `TenantContextMiddleware` extracts `tenant_id` from the JWT `tnt` claim or the
 Agno has no tenant_id concept; it scopes native runs on request.state.user_id
 (agents/router.py:616, teams/router.py:588) and AuthorizationConfig.user_isolation
 (os/config.py:125) threads that value on every user-scoped DB read/write. This
-middleware builds the composite "{tenant_id}:{raw_user_id}" so Agno's own
-ownership machinery enforces tenant isolation with zero schema change.
+middleware extracts tenant_id + principal from the request, then DELEGATES the
+composite construction to the shared resolve_user_id() (SPEC_04 §1.4) so that
+the composite format lives in ONE place (HTTP and autonomous runs alike).
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from yaml_agno.memory.user_identity import resolve_user_id  # SPEC_04 §1.4
+
 
 class TenantContextMiddleware(BaseHTTPMiddleware):
-    """Set request.state.user_id to the composite "{tenant_id}:{raw_user_id}".
+    """Set request.state.user_id to the composite "{tenant_id}:{principal_id}".
 
-    @ai-directive: this middleware ONLY composes request.state.user_id. It does
-    NOT add a tenant_id column to agno_* tables (Agno does not support one),
+    @ai-directive: this middleware extracts tenant_id + principal from the
+    request, then DELEGATES to the shared resolve_user_id() (SPEC_04) to build
+    the composite. It does NOT construct f"{tenant_id}:{raw_user_id}" inline —
+    resolve_user_id is the single source of truth for the composite format. It
+    does NOT add a tenant_id column to agno_* tables (Agno does not support one),
     does NOT apply Postgres RLS, and does NOT open a DB session. Per SPEC_03 §5
     and SPEC_04 §3.3: tenant isolation of yaml-agno's OWN config rows is
     explicit WHERE filters on yamlagno_* tables; tenant_id on agno_* tables is
     the composite user_id only. A contextvar (set_tenant_id) is telemetry-only.
     """
 
+    def __init__(self, app, memory_cfg: Any = None) -> None:
+        """Initialize with the YAML memory block (for system_user_id fallback).
+
+        Args:
+            app: The ASGI app (passed by add_middleware).
+            memory_cfg: YAML ``memory:`` block (SPEC_02 *Config). Carries
+                ``system_user_id`` used by resolve_user_id when no human principal
+                is present on the request.
+        """
+        super().__init__(app)
+        self.memory_cfg = memory_cfg
+
     async def dispatch(self, request: Request, call_next) -> Response:
-        """Compose user_id and stamp request.state for native handlers.
+        """Delegate to resolve_user_id and stamp request.state for native handlers.
 
         Args:
             request: Incoming request; may carry JWT claims or X-Tenant-Id.
@@ -272,11 +290,15 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             get_scoped_user_id read request.state.user_id for scoping.
         """
         tenant_id = self._extract_tenant_id(request)
-        raw_user_id = self._extract_raw_user_id(request)
-        if tenant_id and raw_user_id:
-            # Agno's native scoping key. user_isolation makes get_scoped_user_id
-            # return this composite for non-admins.
-            request.state.user_id = f"{tenant_id}:{raw_user_id}"
+        principal_id = self._extract_raw_user_id(request)
+        # Single source of truth: resolve_user_id (SPEC_04) builds the composite
+        # and fails fast if tenant_id or principal is missing. Never None.
+        request.state.user_id = resolve_user_id(
+            memory_cfg=self.memory_cfg,
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            context=None,
+        )
         return await call_next(request)
 
     def _extract_tenant_id(self, request: Request) -> Optional[str]:
@@ -288,9 +310,11 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         )
 
     def _extract_raw_user_id(self, request: Request) -> Optional[str]:
-        """Extract raw user id from the JWT 'sub' claim."""
+        """Extract the principal (raw user id) from the JWT 'sub' claim."""
         return getattr(request.state, "user_sub", None)
 ```
+
+> **Cross-ref**: `resolve_user_id` is shared with SPEC_04 (memory); same composite `"{tenant_id}:{principal_id}"` for HTTP and autonomous runs. The middleware is the HTTP entry point; autonomous/workflow runs call `resolve_user_id` directly with the YAML `tenant_id` field.
 
 ### 3.3 Rules carried from SPEC_03 / SPEC_04 (unchanged)
 
@@ -571,7 +595,9 @@ AND checks.postgres is false
 ```gherkin
 GIVEN a request carries JWT with tenant claim tnt=tenant_42 and sub=user_7
 WHEN the TenantContextMiddleware resolves the request
-THEN request.state.user_id is set to "tenant_42:user_7"
+THEN the middleware delegates to the shared resolve_user_id() (SPEC_04 §1.4)
+AND request.state.user_id is set to "tenant_42:user_7" (the composite "{tenant_id}:{principal_id}")
+AND the middleware does NOT construct the composite inline (resolve_user_id is the single source of truth)
 AND no tenant_id column is added to agno_* tables
 AND no RLS policy is applied
 AND the downstream native POST /agents/{agent_id}/runs handler sees request.state.user_id == "tenant_42:user_7"
@@ -717,8 +743,8 @@ AND every user-scoped DB read carries the composite user_id filter
       client = app_with_tenant_context()
       # ... assert no request reaches a handler with user_id is None ...
   ```
-- **GREEN**: Implement `TenantContextMiddleware` composing `"{tenant_id}:{raw_user_id}"` on `request.state.user_id`; NO RLS, NO tenant_id column.
-- **Commit**: `feat: add TenantContextMiddleware (composite user_id for native user_isolation)`
+- **GREEN**: Implement `TenantContextMiddleware` extracting `tenant_id` + principal from the request, then DELEGATING to the shared `resolve_user_id()` (SPEC_04 §1.4) to set `request.state.user_id` to the composite `"{tenant_id}:{principal_id}"`. The middleware does NOT build the composite inline; NO RLS, NO tenant_id column.
+- **Commit**: `feat: add TenantContextMiddleware (delegates to resolve_user_id for composite user_id)`
 
 #### TASK_006: Document native wire contract (no JSON/{name})
 

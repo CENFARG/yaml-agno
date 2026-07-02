@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_04"
 Title: "Memory Architecture - Session, Working Memory and Long-term Storage"
-Version: "0.3.0-iter3"
+Version: "0.3.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Memory", "#ContextCompression", "#Session", "#Scopes", "#Retention"]
-Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-26"
-Revision_Note: "Iter 3. Collapsed the repeated 'no Engram / no Port / no adapter / no external backend' directives and the PII/secret pointers into ONE canonical @ai-directive block at the top (single source of truth), removing redundant repetitions from body sections. Added system_user_id (Agno user_id=None silently collapses to a shared 'default' bucket; yaml-agno always injects an explicit user_id and fails fast at config-build time when none resolves). Added configurable retention: block (replacing the fixed 30/90/7-day architecture constants; Agno has no native retention). Added memory scopes mapping (namespace taxonomy: org/tenant/agent/user/team) with the entity_memory/learned_knowledge namespace-inheritance gotcha. Marked compression_threshold as a task-dependent configurable example owned by SPEC_15. Rewrote Section 8 strategic questions as RESOLVED with their configured mechanism. Iter 3 (factual follow-up): corrected Agno version references v2.6.14 -> v2.6.18 throughout (verified against agno/libs/agno/pyproject.toml)."
+Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_06"]
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 4. Unified user_id as a single composite {tenant_id}:{principal_id} across all of yaml-agno (HTTP + autonomous). resolve_user_id() is now THE single resolver (SPEC_06 TenantContextMiddleware calls it instead of building the composite inline). Signature takes principal_id + tenant_id; returns f'{tenant_id}:{principal_id}', never bare, never None. system_user_id is documented as the principal part only (tenant prefixed at resolve time). TASK_005 updated to assert the composite. Iter 3. Collapsed the repeated 'no Engram / no Port / no adapter / no external backend' directives and the PII/secret pointers into ONE canonical @ai-directive block at the top (single source of truth), removing redundant repetitions from body sections. Added system_user_id (Agno user_id=None silently collapses to a shared 'default' bucket; yaml-agno always injects an explicit user_id and fails fast at config-build time when none resolves). Added configurable retention: block (replacing the fixed 30/90/7-day architecture constants; Agno has no native retention). Added memory scopes mapping (namespace taxonomy: org/tenant/agent/user/team) with the entity_memory/learned_knowledge namespace-inheritance gotcha. Marked compression_threshold as a task-dependent configurable example owned by SPEC_15. Rewrote Section 8 strategic questions as RESOLVED with their configured mechanism. Iter 3 (factual follow-up): corrected Agno version references v2.6.14 -> v2.6.18 throughout (verified against agno/libs/agno/pyproject.toml)."
 ---
 
 # SPEC_04_MEMORY_ARCHITECTURE
@@ -96,13 +96,18 @@ agent:
     num_history_messages: 50         # Agno-managed history window (messages)
 
     # User identity (see §1.4). yaml-agno NEVER lets user_id fall through to
-    # Agno's literal "default" bucket. system_user_id is used when there is no
-    # human user (agent-to-agent, autonomous workflows). Accepts an explicit
-    # string OR a derivation template resolved at config-build time.
-    system_user_id: "agent:my_agent"      # explicit string
+    # Agno's literal "default" bucket. system_user_id is the PRINCIPAL part of
+    # the composite user_id used when there is no human user (agent-to-agent,
+    # autonomous workflows). At resolve time, resolve_user_id() prefixes the
+    # tenant_id: the effective Agno user_id becomes "{tenant_id}:{system_user_id}"
+    # (e.g. "acme:agent:my_agent"). Accepts an explicit string OR a derivation
+    # template resolved at config-build time.
+    system_user_id: "agent:my_agent"      # principal part; tenant prefixed at resolve
     # system_user_id: "workflow:{workflow_id}"  # OR a derivation template
-    # If neither system_user_id nor a human user_id resolves at run time,
-    # yaml-agno FAILS FAST at config-build time (never returns user_id=None).
+    # tenant_id is resolved from the HTTP request (TenantContextMiddleware,
+    # SPEC_06) or, for autonomous runs with no HTTP request, from the
+    # agent/workflow YAML config (tenant_id field). If neither tenant_id nor a
+    # principal resolves, yaml-agno FAILS FAST (never None, never bare).
 
     session:
       storage_type: postgres         # sqlite|postgres|memory (Agno session DB)
@@ -145,16 +150,23 @@ agent:
       # purge job — they are global nukes with NO user/tenant filter (see §3.4).
 ```
 
-### 1.4 User Identity & Memory Scoping — no anonymous "default" bucket
+### 1.4 User Identity & Memory Scoping — composite user_id, no anonymous "default" bucket
 
 **Footgun (verified against Agno v2.6.18 source).** `user_id` is `Optional[str]=None` in `Agent.run`/`arun` (agno/agent/agent.py:1288,1342,1448) and in `Workflow.run`/`arun` (agno/workflow/workflow.py:405,468,495). When `user_id` is `None`, `MemoryManager` converts it to the literal string `"default"` in EVERY method (agno/memory/manager.py:177,191,205,239...). The result: **all anonymous runs across ALL agents in the process read/write the SAME shared `"default"` memory bucket**. This is cross-talk. Agno has NO concept of a "system user" or "agent user"; the only special `user_id` is `"default"` (the `None` fallback).
 
-**yaml-agno rule.** yaml-agno ALWAYS injects an explicit `user_id` on every `Agent.run`/`arun` and every `Workflow.run`/`arun`. When there is no human user (agent-to-agent calls, autonomous workflows), a `system_user_id` is used. If neither a human `user_id` nor a `system_user_id` resolves, yaml-agno **FAILS FAST at config-build time** — it does NOT silently fall through to Agno's `"default"` bucket.
+**yaml-agno rule — ONE composite user_id EVERYWHERE.** yaml-agno has a SINGLE user_id mechanism: the composite `"{tenant_id}:{principal_id}"`, ALWAYS. There is no bare principal and no tenant-less `system_user_id` reaching Agno. The composite flows through Agno's native `user_isolation` (SPEC_06), so tenant isolation covers BOTH HTTP requests AND autonomous/workflow runs (which carry their config's `tenant_id` into the composite).
+
+- **principal_id** = the human user id, OR `memory.system_user_id` (e.g. `"agent:facturacion"`, `"workflow:{workflow_id}"`) when there is no human.
+- **tenant_id** = resolved from the HTTP request (`TenantContextMiddleware`, SPEC_06) OR, for autonomous/workflow runs with no HTTP request, from the agent/workflow YAML `tenant_id` field.
+
+`resolve_user_id()` (below) is THE single resolver used EVERYWHERE in yaml-agno — HTTP and non-HTTP. The `TenantContextMiddleware` (SPEC_06) CALLS `resolve_user_id()` to build the composite; it does NOT duplicate the format inline. If neither tenant_id nor a principal resolves, yaml-agno **FAILS FAST** — never `None`, never a bare `"default"` bucket.
 
 ```python
 # yaml-agno/src/memory/user_identity.py
-# @ai-directive: Resolve the effective Agno user_id. NEVER return None and NEVER
-#                let Agno collapse to the shared "default" bucket.
+# @ai-directive: THE single user_id resolver for ALL of yaml-agno (HTTP + non-HTTP).
+#                Returns the COMPOSITE "{tenant_id}:{principal_id}", NEVER a bare
+#                principal, NEVER None. TenantContextMiddleware (SPEC_06) calls
+#                this instead of building the composite inline.
 #                Verified against Agno v2.6.18: MemoryManager coerces user_id=None
 #                to the literal "default" string (agno/memory/manager.py:177,191,
 #                205,239...), causing cross-talk between anonymous runs.
@@ -163,41 +175,68 @@ from typing import Any
 
 
 class UserIdentityResolutionError(RuntimeError):
-    """Raised when no user_id can be resolved and Agno's 'default' is disallowed."""
+    """Raised when user_id cannot be resolved and Agno's 'default' is disallowed."""
 
 
 def resolve_user_id(memory_cfg: Any,
-                    human_user_id: str | None,
+                    principal_id: str | None,
+                    tenant_id: str | None,
                     context: dict | None = None) -> str:
-    """Resolve the effective Agno user_id for a run.
+    """Resolve the effective Agno user_id as the composite "{tenant_id}:{principal_id}".
 
-    Selection order:
-      1. human_user_id (if a human user is present in the call).
-      2. memory_cfg.system_user_id, after expanding derivation templates such as
-         ``"workflow:{workflow_id}"`` or ``"agent:{agent_id}"`` against
+    This is THE single resolver used everywhere in yaml-agno (HTTP requests via
+    TenantContextMiddleware, and autonomous/workflow runs). The composite format
+    lives ONLY here; callers MUST NOT build ``f"{tenant}:{user}"`` inline.
+
+    Selection of the principal:
+      1. ``principal_id`` (the human user id, when a human is present).
+      2. ``memory_cfg.system_user_id``, after expanding derivation templates such
+         as ``"workflow:{workflow_id}"`` or ``"agent:{agent_id}"`` against
          ``context``.
       3. Nothing else — there is NO silent fallback to Agno's ``"default"``.
 
     Args:
         memory_cfg: YAML ``memory:`` block (SPEC_02 *Config). Carries
-            ``system_user_id`` (a literal string or a ``{placeholder}`` template).
-        human_user_id: Human user id when the run has one; ``None`` otherwise.
+            ``system_user_id`` (a literal string or a ``{placeholder}`` template)
+            used as the principal when no human is present.
+        principal_id: Human user id when the run has one; ``None`` otherwise
+            (the ``system_user_id`` is then used as the principal).
+        tenant_id: Tenant id. For HTTP requests it comes from the JWT/header
+            (TenantContextMiddleware, SPEC_06); for autonomous/workflow runs it
+            comes from the agent/workflow YAML ``tenant_id`` field.
         context: Optional dict used to expand templates (``workflow_id``,
-            ``agent_id``, ``tenant_id``, etc.).
+            ``agent_id``, etc.).
 
     Returns:
-        The resolved user_id string (never ``None``).
+        The composite ``"{tenant_id}:{principal_id}"`` string (never ``None``,
+        never a bare principal).
 
     Raises:
-        UserIdentityResolutionError: if neither a human user nor a
-            ``system_user_id`` resolves. The caller MUST surface this at
-            config-build time rather than passing ``user_id=None`` to Agno.
+        UserIdentityResolutionError: if ``tenant_id`` is missing, or if neither a
+            human principal nor a ``system_user_id`` resolves. The caller MUST
+            surface this at config-build/run time rather than passing
+            ``user_id=None`` to Agno.
     """
-    if human_user_id:
-        return human_user_id
+    if not tenant_id:
+        raise UserIdentityResolutionError(
+            "tenant_id is required to build the composite user_id "
+            "'{tenant_id}:{principal_id}'. For HTTP requests it comes from the "
+            "TenantContextMiddleware (SPEC_06); for autonomous runs set the "
+            "agent/workflow YAML 'tenant_id' field. Refusing to build a "
+            "tenant-less user_id (would break tenant isolation)."
+        )
 
-    template = getattr(memory_cfg, "system_user_id", None)
-    if template:
+    if principal_id:
+        resolved_principal = principal_id
+    else:
+        template = getattr(memory_cfg, "system_user_id", None)
+        if not template:
+            raise UserIdentityResolutionError(
+                "No principal resolves (no human user and no "
+                "memory.system_user_id). Refusing to fall through to Agno's "
+                "shared 'default' memory bucket; set memory.system_user_id or "
+                "pass an explicit principal_id."
+            )
         if "{" in template and "}" in template:
             if context is None:
                 raise UserIdentityResolutionError(
@@ -205,19 +244,16 @@ def resolve_user_id(memory_cfg: Any,
                     f"(workflow_id/agent_id/...) to expand."
                 )
             try:
-                return template.format(**context)
+                resolved_principal = template.format(**context)
             except KeyError as exc:
                 raise UserIdentityResolutionError(
                     f"system_user_id template {template!r} references missing "
                     f"key {exc}. Provide it in the run context."
                 ) from exc
-        return template
+        else:
+            resolved_principal = template
 
-    raise UserIdentityResolutionError(
-        "No user_id resolves (no human user and no memory.system_user_id). "
-        "Refusing to fall through to Agno's shared 'default' memory bucket; "
-        "set memory.system_user_id or pass an explicit user_id."
-    )
+    return f"{tenant_id}:{resolved_principal}"
 ```
 
 ### 1.5 Memory Scopes & Sharing — namespace mapping
@@ -687,33 +723,66 @@ AND no Port or adapter is involved
   learning.enabled=false
 - **Commit**: `feat: add Agno native autosave manager`
 
-#### TASK_005: Resolve Effective user_id (never fall through to Agno "default")
+#### TASK_005: Resolve composite user_id (single resolver, {tenant}:{principal})
 
 - **File**: `yaml-agno/src/memory/user_identity.py`
 - **Test**: `tests/unit/memory/test_user_identity.py`
 - **RED**:
   ```python
-  def test_resolve_user_id_prefers_human_user(memory_cfg):
-      uid = resolve_user_id(memory_cfg, human_user_id="human_1", context=None)
-      assert uid == "human_1"
+  def test_resolve_user_id_composite_for_human(memory_cfg):
+      # Human principal + tenant -> composite "{tenant}:{human}".
+      uid = resolve_user_id(
+          memory_cfg,
+          principal_id="human_1",
+          tenant_id="acme",
+          context=None,
+      )
+      assert uid == "acme:human_1"
 
-  def test_resolve_user_id_expands_template(memory_cfg_template):
-      # system_user_id = "workflow:{workflow_id}"
+  def test_resolve_user_id_composite_for_system_principal(memory_cfg):
+      # system_user_id becomes the principal part; tenant prefixed at resolve time.
+      uid = resolve_user_id(
+          memory_cfg,
+          principal_id=None,
+          tenant_id="acme",
+          context=None,
+      )
+      assert uid == "acme:agent:my_agent"
+
+  def test_resolve_user_id_expands_template_composite(memory_cfg_template):
+      # system_user_id = "workflow:{workflow_id}" -> composite "acme:workflow:wf_42".
       uid = resolve_user_id(
           memory_cfg_template,
-          human_user_id=None,
+          principal_id=None,
+          tenant_id="acme",
           context={"workflow_id": "wf_42"},
       )
-      assert uid == "workflow:wf_42"
+      assert uid == "acme:workflow:wf_42"
 
-  def test_resolve_user_id_raises_when_nothing_resolves(memory_cfg_empty):
-      # Neither human user nor system_user_id -> fail fast, never None.
+  def test_resolve_user_id_fails_fast_when_tenant_missing(memory_cfg):
+      # No tenant_id -> fail fast (never a tenant-less user_id).
       import pytest
       with pytest.raises(UserIdentityResolutionError):
-          resolve_user_id(memory_cfg_empty, human_user_id=None, context=None)
+          resolve_user_id(
+              memory_cfg,
+              principal_id="human_1",
+              tenant_id=None,
+              context=None,
+          )
+
+  def test_resolve_user_id_fails_fast_when_no_principal(memory_cfg_empty):
+      # Neither human principal nor system_user_id -> fail fast, never None.
+      import pytest
+      with pytest.raises(UserIdentityResolutionError):
+          resolve_user_id(
+              memory_cfg_empty,
+              principal_id=None,
+              tenant_id="acme",
+              context=None,
+          )
   ```
-- **GREEN**: Implement `resolve_user_id()` (human user_id → system_user_id template → fail fast). It MUST NEVER return `None` and MUST NEVER let Agno collapse to the shared `"default"` bucket.
-- **Commit**: `feat: resolve user_id with fail-fast (no Agno default bucket)`
+- **GREEN**: Implement `resolve_user_id()` returning the composite `"{tenant_id}:{principal_id}"` (human principal → `memory_cfg.system_user_id` template → fail fast). It MUST NEVER return `None`, NEVER return a bare principal, and MUST fail fast if `tenant_id` is missing. This is THE single resolver for all of yaml-agno (HTTP and autonomous); `TenantContextMiddleware` (SPEC_06) calls it instead of building the composite inline.
+- **Commit**: `feat: resolve composite user_id {tenant}:{principal} (single resolver)`
 
 #### TASK_006: Validate Memory Scope / Namespace Mapping
 

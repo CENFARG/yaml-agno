@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_08"
 Title: "TDD Microtasks - Master Catalog"
-Version: "0.2.0-iter6"
+Version: "0.2.0-iter7"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 6. Realigned the SPEC_06 catalog (section 2.6) to SPEC_06 iter4 inheritance reformulation: the build_app() composition was replaced by `class YamlAgentOS(AgentOS)` subclassing (override get_app() -> super().get_app() then register extensions). S06-T01..T08 now map to: YamlAgentOS subclass, config loader via core-cenf-py ConfigManager, readiness/liveness, RateLimitMiddleware, TenantContextMiddleware (composite user_id on native user_isolation, replacing the old TenantScopeMiddleware), AX discovery via native MCP server (enable_mcp_server — the parallel GET /ax/tools REST endpoint was dropped), wire-contract + backend-sanitization doc, and a contract test asserting no own routes + user_isolation always-on (NULL-bucket guard). File paths no longer use a gaps/ folder (SOTA src/api/ layout). All other owner sections unchanged from iter5."
+Revision_Note: "Iter 7. S04-T05 updated: resolve_user_id now returns the composite {tenant_id}:{principal_id} (shared single resolver for HTTP + autonomous). S06-T05 updated: TenantContextMiddleware delegates to resolve_user_id instead of building the composite inline. No other catalog rows changed. Iter 6. Realigned the SPEC_06 catalog (section 2.6) to SPEC_06 iter4 inheritance reformulation: the build_app() composition was replaced by `class YamlAgentOS(AgentOS)` subclassing (override get_app() -> super().get_app() then register extensions). S06-T01..T08 now map to: YamlAgentOS subclass, config loader via core-cenf-py ConfigManager, readiness/liveness, RateLimitMiddleware, TenantContextMiddleware (composite user_id on native user_isolation, replacing the old TenantScopeMiddleware), AX discovery via native MCP server (enable_mcp_server — the parallel GET /ax/tools REST endpoint was dropped), wire-contract + backend-sanitization doc, and a contract test asserting no own routes + user_isolation always-on (NULL-bucket guard). File paths no longer use a gaps/ folder (SOTA src/api/ layout). All other owner sections unchanged from iter5."
 ---
 
 # SPEC_08_TDD_MICROTASKS
@@ -113,7 +113,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 | S04-T02 | SPEC_04 TASK_002 | `build_learning_config()` - YAML `learning:` block -> Agno LearningMachine config (no Port, no adapter) | `src/memory/agno_memory_config.py` | `tests/unit/memory/test_learning_config.py` |
 | S04-T03 | SPEC_04 TASK_003 | `recall_on_start()` routing to `LearningMachine.arecall` (enabled) or `MemoryManager.aget_user_memories` (disabled) | `src/memory/agno_memory_config.py` | `tests/integration/memory/test_recall_on_start.py` |
 | S04-T04 | SPEC_04 TASK_004 | `AutosaveManager` routing writes to LearningMachine stores (enabled) or sync `add_user_memory(UserMemory)` (disabled) | `src/memory/autosave.py` | `tests/unit/memory/test_autosave.py` |
-| S04-T05 | SPEC_04 TASK_005 | `resolve_user_id()` - human user_id -> system_user_id template -> fail fast (never None, never Agno "default" bucket) | `src/memory/user_identity.py` | `tests/unit/memory/test_user_identity.py` |
+| S04-T05 | SPEC_04 TASK_005 | `resolve_user_id()` - returns the composite `{tenant_id}:{principal_id}` (shared single resolver for HTTP + autonomous; never None, never Agno "default" bucket) | `src/memory/user_identity.py` | `tests/unit/memory/test_user_identity.py` |
 | S04-T06 | SPEC_04 TASK_006 | `map_scope_to_namespace()` + `build_scope_config()` - yaml-agno scope taxonomy -> Agno namespace, with validation (scope="user" needs user_id; learned_knowledge namespace NOT inherited) | `src/memory/scope_mapping.py` | `tests/unit/memory/test_scope_mapping.py` |
 
 ### 2.5 Owner SPEC_05 - Workflows and Teams
@@ -141,7 +141,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 | S06-T02 | SPEC_06 TASK_002 | Config loader consuming core-cenf-py `ConfigManager` (no `os.environ`) | `yaml_agno/config/loader.py` | `tests/unit/config/test_loader.py` |
 | S06-T03 | SPEC_06 TASK_003 | `get_readiness_router()` + `get_liveness_router()` (DB-gated readiness; factory style mirroring `get_health_router`) | `src/api/health.py` | `tests/integration/api/test_health_endpoints.py` |
 | S06-T04 | SPEC_06 TASK_004 | `RateLimitMiddleware` (keyed on composite user_id; AgentOS has none) | `src/api/middleware/rate_limit.py` | `tests/unit/api/test_rate_limit.py` |
-| S06-T05 | SPEC_06 TASK_005 | `TenantContextMiddleware` (composite `"{tenant_id}:{raw_user_id}"` -> `request.state.user_id`; `user_isolation=True` always-on; no RLS) | `src/api/middleware/tenant_context.py` | `tests/unit/api/test_tenant_context.py` |
+| S06-T05 | SPEC_06 TASK_005 | `TenantContextMiddleware` (extracts tenant+principal, DELEGATES to `resolve_user_id()` (SPEC_04) for composite `{tenant_id}:{principal_id}` -> `request.state.user_id`; `user_isolation=True` always-on; no RLS) | `src/api/middleware/tenant_context.py` | `tests/unit/api/test_tenant_context.py` |
 | S06-T06 | SPEC_06 TASK_006 | AX discovery via native MCP server (`enable_mcp_server=True`; exposes `run_agent`/`run_team`/`run_workflow`) | (config wiring in `YamlAgentOS`) | `tests/integration/api/test_mcp_discovery.py` |
 | S06-T07 | SPEC_06 TASK_007 | Document native AgentOS multipart/{id} wire contract + backend sanitization/validation rule | `docs/api/wire_contract.md` | `tests/contract/test_wire_contract.py` |
 | S06-T08 | SPEC_06 TASK_008 | Contract: no own `/run`/`/sessions`/`/agents` routes AND `user_isolation` always-on + user_id never None (NULL-bucket guard) | `tests/contract/test_no_duplicate_routes.py` | (same) |
