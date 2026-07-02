@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_03"
 Title: "Persistence Architecture - Config Store on core-cenf DatabaseManager"
-Version: "0.3.0-iter2"
+Version: "0.3.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PostgreSQL", "#SQLAlchemy", "#core-cenf", "#MultiTenant", "#ConfigStore"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iter 2 - deep rewrite integrating the real core-cenf package (core_infrastructure). SPEC_03 no longer reimplements a TransactionManager or repositories: it CONSUMES DatabaseManager/TransactionScope/GenericRepository[T] from core-cenf and only declares DeclarativeBase ORM models. Dropped agent_sessions/session_contexts entirely (Agno runtime owns those in agno_*). All config-store tables renamed to the yamlagno_* prefix in a dedicated SQL schema to avoid collision with Agno's agno_* tables. Added environment-vs-execution variable classification, per-table JSON row example + illustrative query, three-level multi-tenant model (modeled, not MVP), auto-provisioning with checkfirst mirroring Agno, and a config_change_log retention/compaction future-feature section."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 3 - fused the tenant seam: TenantResolver is no longer a competitor of resolve_user_id() (SPEC_04). It is reframed as a CONSUMER of the composite user_id built by SPEC_04; it only PARSES tenant_id out of it for yamlagno_* WHERE filters + telemetry. Renamed its method to extract_tenant(composite_user_id). Updated TASK_006 test accordingly and resolved the §12.2 isolation questions via the composite user_id + explicit WHERE + no RLS + set_tenant_id telemetry-only contract. The 3-level org/org_user_roles/user MODEL is retained as a config-row scoping design surface."
 ---
 
 # SPEC_03_PERSISTENCE_ARCHITECTURE
@@ -95,7 +95,7 @@ graph TB
 | `database.pool_size`, `database.max_overflow` | **Environment** | `config.get_number` | Process | Engine pool tuning |
 | `app.env` (dev/staging/prod) | **Environment** | `config.get_string` | Process | Selects adapter, gates dotenv secret adapter |
 | `log.level` | **Environment** | `config.get_string` | Process | Forwarded to core logging |
-| `tenant.resolution_mode` | **Environment** | `config.get_string` | Process | `org` / `org_user_roles` / `user` (§5); selects TenantResolver strategy |
+| `tenant.resolution_mode` | **Environment** | `config.get_string` | Process | `org` / `org_user_roles` / `user` (§5); selects which tenant-hierarchy level config rows scope to. The composite user_id itself is built by resolve_user_id() (SPEC_04); this knob only selects scoping, not identity. |
 | `secrets.*` (DB password, vault token) | **Environment** | `SecretManager.get_secret` | Process | Never in env vars; Zero-Trust |
 | `configstore.auto_provision` | **Environment** | `config.get_bool` | Process | `true` (default) = `checkfirst` create; `false` = managed schema (§6) |
 | `configstore.schema` | **Environment** | `config.get_string` | Process | SQL schema name (`yamlagno`); separate from Agno's |
@@ -620,7 +620,9 @@ Time-based partitioning of the append-heavy `yamlagno_config_change_log` (by `cr
 
 ## 5. MULTI-TENANT MODEL (three levels, modeled not MVP)
 
-> **@ai-directive**: Agno isolates by `user_id` + `session_id` only — it has **no `tenant_id` concept** and **no native RLS**. yaml-agno, riding on Core Infra, models a richer three-level tenant hierarchy in `yamlagno_tenants.tenant_kind`. The columns and the resolution interface are defined **from day 1**, but enforcement (filters wired into every repository call, role checks) is **post-MVP**. Isolation is done at the **application layer via WHERE clauses** (like Agno), NOT via native Postgres RLS.
+> **@ai-directive**: Agno isolates by `user_id` + `session_id` only — it has **no `tenant_id` concept** and **no native RLS**. yaml-agno, riding on Core Infra, models a richer three-level tenant hierarchy in `yamlagno_tenants.tenant_kind`. The columns and the extraction interface are defined **from day 1**, but enforcement (filters wired into every repository call, role checks) is **post-MVP**. Isolation is done at the **application layer via WHERE clauses** (like Agno), NOT via native Postgres RLS.
+
+> **@ai-directive (single seam rule)**: `resolve_user_id()` (SPEC_04) is the SINGLE source of the composite `user_id` that reaches every consumer; that composite is `{tenant_id}:{principal_id}`. The `TenantResolver` defined here is NOT a second seam that derives a tenant FROM a raw user_id — that would be conceptually inverted. Its ONLY job is to **parse `tenant_id` out of the already-resolved composite** so it can be used as the explicit `WHERE tenant_id = ?` filter on `yamlagno_*` config rows and as the telemetry `set_tenant_id` value. Never build a composite here; never derive tenant from a raw Agno `user_id`. The 3-level `org/org_user_roles/user` MODEL below is a legitimate design surface for **config-row scoping** (which level of the tenant hierarchy a config belongs to), not for "resolving a tenant from identity".
 
 ### 5.1 The three levels
 
@@ -630,45 +632,69 @@ Time-based partitioning of the append-heavy `yamlagno_config_change_log` (by `cr
 | (b) Org + user + roles | `org_user_roles` | Org-scoped, per-user rows, RBAC | Multi-team SaaS: users within an org see their own rows + shared org rows by role |
 | (c) Direct user | `user` | Each user is its own tenant | Personal single-user deployment |
 
-### 5.2 TenantResolver interface (maps Agno identity → yaml-agno tenant)
+### 5.2 TenantResolver interface (parses tenant_id out of the composite user_id)
 
 ```python
 # yaml-agno/src/tenant/resolver.py
-"""TenantResolver maps Agno's (user_id, session_id) identity to the yaml-agno
-tenant model. This is a yaml-agno domain addition; Agno has no tenant concept.
+"""TenantResolver PARSES the tenant_id component out of the composite user_id
+that resolve_user_id() (SPEC_04) has ALREADY built. This is a yaml-agno domain
+addition; Agno has no tenant concept.
 
-Strategy is selected by the Environment variable tenant.resolution_mode
-(org | org_user_roles | user) read via ConfigManager. The resolver sets the
-Core Infra contextvar (set_tenant_id) so repositories can scope WHERE clauses.
-Contextvars are NEVER passed as arguments (core-cenf AGENTS.md rule)."""
+The composite format is owned by SPEC_04: ``{tenant_id}:{principal_id}``. This
+module NEVER builds a composite and NEVER derives a tenant from a raw Agno
+user_id. It only extracts the tenant_id prefix so it can be used as the explicit
+WHERE filter on yamlagno_* config rows and as the telemetry set_tenant_id value.
+
+The three-level model (org / org_user_roles / user) configured by the Environment
+variable tenant.resolution_mode selects which level of the tenant hierarchy a
+config row is scoped to; it does NOT redefine the composite user_id format."""
 
 from __future__ import annotations
 from typing import Protocol
-from uuid import UUID
 
-from core_infrastructure.common.context import set_tenant_id, set_user_id
+from core_infrastructure.common.context import set_tenant_id
 
 
 class TenantResolver(Protocol):
-    """Resolve a yaml-agno tenant from Agno runtime identity."""
+    """Parse tenant_id out of the composite user_id built by resolve_user_id()."""
 
-    async def resolve(self, user_id: str, session_id: str | None) -> UUID:
-        """Return the tenant_id for the given Agno user/session.
+    def extract_tenant(self, composite_user_id: str) -> str:
+        """Return the tenant_id parsed from the composite user_id.
 
-        Behavior depends on tenant.resolution_mode:
-            org             -> the single org tenant_id (level a)
-            org_user_roles  -> org tenant_id; user_id retained for row scoping (level b)
-            user            -> one tenant per user_id (level c)
+        The composite is ``{tenant_id}:{principal_id}`` (SPEC_04). This method
+        returns the substring before the first ``":"``. It does NOT validate that
+        the tenant exists in yamlagno_tenants; callers that need existence use the
+        repository (§7.2).
 
-        Side effect: sets Core Infra contextvars (set_tenant_id, set_user_id)
-        for **logging/tracing correlation**. These contextvars do NOT scope DB
-        queries automatically — callers MUST still pass tenant_id explicitly in
-        repository ``filters`` (see §5.3).
+        Args:
+            composite_user_id: The already-resolved composite user_id from
+                resolve_user_id() (SPEC_04). Must contain a ``":"`` separator.
+
+        Returns:
+            The tenant_id prefix of the composite.
+
+        Raises:
+            ValueError: If the composite does not contain ``":"``.
+
+        Side effect: callers are expected to invoke ``set_tenant_id(tenant_id)``
+        afterwards for **logging/tracing correlation** only. That contextvar does
+        NOT scope DB queries automatically — callers MUST still pass tenant_id
+        explicitly in repository ``filters`` (see §5.3).
+        """
+        ...
+
+    def scope_level(self, composite_user_id: str) -> str:
+        """Return the tenant_kind ('org' | 'org_user_roles' | 'user') that
+        config rows for this composite are scoped to.
+
+        Selection is driven by the Environment variable tenant.resolution_mode.
+        This governs WHICH level of the yamlagno_tenants hierarchy a config row
+        belongs to; it does NOT rebuild the composite user_id.
         """
         ...
 ```
 
-> **@ai-directive**: `tenant_id` is a **Core Infra** column, present on every `yamlagno_*` row. It is **not** an Agno-native column and is **not** added to any `agno_*` table. The resolver is the single seam between Agno's `(user_id, session_id)` world and yaml-agno's tenant world.
+> **@ai-directive**: `tenant_id` is a **Core Infra** column, present on every `yamlagno_*` row. It is **not** an Agno-native column and is **not** added to any `agno_*` table. `resolve_user_id()` (SPEC_04) is the single seam that builds the composite; the TenantResolver here only CONSUMES it. Never present this resolver as a competing identity seam.
 
 ### 5.3 Isolation mechanism (explicit WHERE filter, no native RLS)
 
@@ -677,6 +703,12 @@ class TenantResolver(Protocol):
 # This mirrors Agno's app-layer isolation (WHERE user_id=?); Postgres RLS is
 # NOT used (MVP). The core GenericRepository does NOT auto-scope by the tenant
 # contextvar, so tenant_id MUST be a filter on every read/write.
+#
+# tenant_id here is PARSED out of the composite user_id by TenantResolver (§5.2);
+# the composite itself is built by resolve_user_id() (SPEC_04).
+composite_user_id = resolve_user_id(...)           # SPEC_04 owns the composite format
+tenant_id = tenant_resolver.extract_tenant(composite_user_id)  # parse prefix before ":"
+
 async with db.transaction() as tx:                 # core-cenf TransactionScope
     set_tenant_id(tenant_id)                       # Core Infra contextvar (telemetry only)
     repo = db.get_repository(AgentConfigRecord)    # core-cenf GenericRepository[T]
@@ -952,8 +984,10 @@ AND no transaction is left open
 
 ```gherkin
 GIVEN tenant A and tenant B each have configs
-AND the TenantResolver set contextvar tenant_id = A
-WHEN listing configs via find_all
+AND resolve_user_id() (SPEC_04) returned composite "A:principal1" for the caller
+AND TenantResolver.extract_tenant("A:principal1") returned "A"
+AND set_tenant_id("A") was called for telemetry correlation
+WHEN listing configs via find_all with filters tenant_id = "A"
 THEN only tenant A rows are returned
 AND tenant B rows are never read (app-layer WHERE, not Postgres RLS)
 ```
@@ -1052,22 +1086,29 @@ THEN no DDL is executed (schema managed externally)
 - **GREEN**: Implement `AgentConfigRepository` (§7.2) using `async with db.transaction()` + `db.get_repository(AgentConfigRecord)` (on `DatabaseManager`, inside the transaction scope).
 - **Commit**: `feat: add AgentConfigRepository over core GenericRepository`
 
-#### TASK_006: TenantResolver interface
+#### TASK_006: TenantResolver interface (parses tenant from composite user_id)
 
 - **File**: `yaml-agno/src/tenant/resolver.py`
 - **Test**: `tests/unit/tenant/test_resolver.py`
 - **RED**:
   ```python
-  async def test_resolve_user_mode_returns_user_tenant(resolver):
-      tid = await resolver.resolve(user_id="u1", session_id="s1")
-      assert tid is not None
+  def test_extract_tenant_parses_composite_prefix(resolver):
+      # resolve_user_id() (SPEC_04) has ALREADY built "{tenant_id}:{principal_id}".
+      # TenantResolver only PARSES tenant_id out of it; it does NOT build it.
+      assert resolver.extract_tenant("acme:principal1") == "acme"
 
-  def test_resolver_sets_contextvar(resolver):
-      # after resolve, get_tenant_id() reflects the resolved tenant
-      ...
+  def test_extract_tenant_rejects_non_composite(resolver):
+      import pytest
+      with pytest.raises(ValueError):
+          resolver.extract_tenant("no-colon-here")
+
+  def test_scope_level_uses_resolution_mode(resolver):
+      # tenant.resolution_mode selects which level of yamlagno_tenants a config
+      # row is scoped to; it does NOT rebuild the composite user_id.
+      assert resolver.scope_level("acme:principal1") in ("org", "org_user_roles", "user")
   ```
-- **GREEN**: Implement `TenantResolver` (§5.2) with the three `resolution_mode` strategies and Core Infra contextvar side effects.
-- **Commit**: `feat: add TenantResolver mapping Agno identity to yaml-agno tenant`
+- **GREEN**: Implement `TenantResolver` (§5.2) — `extract_tenant` parses the prefix before the first `":"` of the composite user_id built by SPEC_04; `scope_level` reads `tenant.resolution_mode`. Never build a composite here; never derive tenant from a raw Agno user_id.
+- **Commit**: `feat: add TenantResolver parsing tenant_id from composite user_id (SPEC_04 seam)`
 
 #### TASK_007: Bootstrap on core-cenf DatabaseManager
 
@@ -1094,6 +1135,21 @@ THEN no DDL is executed (schema managed externally)
 - **[Q1] Retention horizon**: is `retention_days=365` for `config_change_log` adequate, or do compliance needs require longer? (Future feature; MVP ignores.)
 - **[Q2] Partition trigger threshold**: at what row count / age should monthly partitioning of `config_change_log` switch on? Proposed: 5M rows or 90 days.
 - **[Q3] Synchronous replication latency**: is sync replication acceptable for the config store write path in every target deployment, or do multi-region read-heavy setups need async?
+
+> **RESOLVED (audit Wave-1) — tenant isolation model**: the three isolation
+> questions that used to orbit the TenantResolver seam are closed by the
+> composite user_id contract:
+> - **Identity seam**: `resolve_user_id()` (SPEC_04) is the SINGLE source of the
+>   composite `{tenant_id}:{principal_id}`. `TenantResolver` (§5.2) only PARSES
+>   `tenant_id` out of it; it never builds a composite and never derives a tenant
+>   from a raw Agno `user_id`.
+> - **Isolation mechanism**: explicit `WHERE tenant_id = ?` on every `yamlagno_*`
+>   read/write (§5.3). No native Postgres RLS. The core `GenericRepository` does
+>   NOT auto-scope by the tenant contextvar.
+> - **Telemetry-only contextvar**: `set_tenant_id(tenant_id)` drives
+>   logging/tracing correlation only; it is NEVER assumed to scope DB queries.
+> - **No tenant column on `agno_*`**: tenant lives ONLY on `yamlagno_*` config
+>   rows; Agno runtime tables are untouched by yaml-agno.
 
 ---
 

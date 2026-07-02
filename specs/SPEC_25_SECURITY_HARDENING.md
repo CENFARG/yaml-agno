@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_25"
 Title: "Security Hardening - Pod Security, Network Policies, RBAC, Supply Chain y Compliance"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PodSecurityStandards", "#NetworkPolicies", "#RBAC", "#SupplyChain", "#Cosign", "#Kyverno", "#Falco", "#OWASP", "#GDPR", "#SOC2", "#ZeroTrust", "#CloudRun", "#IAM"]
 Dependency_Hashes: ["SPEC_19", "SPEC_21"]
-Last_Updated: "2026-06-17"
-Revision_Note: "iter1 — added Cloud Run hardening equivalents (no privileged, egress control, IAM, Secret Manager) as PRIMARY target; K8s hardening (PSS/NetworkPolicy/Kyverno/Falco) retained as FUTURE. Cleaned non-ASCII chars and mixed-language Gherkin."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - tenant-boundary clarification (audit Wave-1). Added @ai-directive stating K8s namespaces are a DEPLOYMENT boundary, NOT a tenant isolation boundary; tenant isolation is the composite user_id + explicit WHERE on yamlagno_* (SPEC_03/SPEC_04), never tenant-per-namespace. Aligned §2.2.7 and assumptions. The runAsUser UID conflict vs SPEC_20 (10001 vs 65532) is a separate Wave-5 issue, NOT touched here."
 ---
 
 # SPEC_25_SECURITY_HARDENING
@@ -113,6 +113,17 @@ gcloud container binauthz policy import policy.yaml \
 ---
 
 ## 2. SUBSECCIONES
+
+> **@ai-directive (tenant boundary)**: K8s namespaces are a **DEPLOYMENT boundary**,
+> NOT a tenant isolation boundary. Tenant isolation in yaml-agno is the **composite
+> user_id** built by `resolve_user_id()` (SPEC_04) plus the **explicit `WHERE tenant_id = ?`**
+> filter on every `yamlagno_*` config row (SPEC_03 §5.3). There is **no
+> `tenant_id` column on any `agno_*` table** and **no namespace-per-tenant model**.
+> A namespace may happen to host one tenant's workloads as a deployment choice
+> (blast-radius, quota, network-segmentation convenience), but it MUST NOT be
+> modelled as the tenant isolation boundary — that contract is owned by
+> SPEC_03/SPEC_04. Do not model tenant-per-namespace; do not add a `tenant_id`
+> label as a security boundary on pods.
 
 ### 2.1 Pod Security Standards (restricted profile)
 
@@ -300,17 +311,28 @@ Ausencia de NetworkPolicy que permita `from: podSelector: {}` dentro del namespa
 
 ```mermaid
 flowchart LR
-    subgraph T1[tenant: acme]
+    subgraph T1[deploy ns: tenant-acme]
         P1[AgentOS pod<br/>label tenant_id=acme]
     end
-    subgraph T2[tenant: globex]
+    subgraph T2[deploy ns: tenant-globex]
         P2[AgentOS pod<br/>label tenant_id=globex]
     end
     P1 -.denied.-> P2
     P1 -->|egress 443| MODEL[Model providers]
 ```
 
-Implementación: pods de tenants distintos en namespaces distintos (`tenant-acme`, `tenant-globex`) con default-deny por namespace, o mismo namespace con `NetworkPolicy` que solo permite `from` pods del mismo `tenant_id` label. Para MVP se opta por **namespace por tenant aislado** (más simple, alineado con SPEC_03 multi-tenant).
+> **@ai-directive (deployment, not isolation)**: the namespace separation shown
+> here (`tenant-acme`, `tenant-globex`) is a **deployment / blast-radius /
+> network-segmentation convenience**, NOT the tenant isolation boundary. Tenant
+> isolation is the composite `user_id` (SPEC_04) + explicit `WHERE tenant_id = ?`
+> on `yamlagno_*` config rows (SPEC_03 §5.3). A namespace MAY host a single
+> tenant's workloads, but the security contract that prevents tenant A from
+> reading tenant B's config rows is the app-layer WHERE filter on the composite
+> user_id — not the namespace boundary. Never model tenant-per-namespace as the
+> isolation primitive; never rely on a pod `tenant_id` label as a security
+> control.
+
+Implementación: pods de tenants distintos en namespaces distintos (`tenant-acme`, `tenant-globex`) con default-deny por namespace, o mismo namespace con `NetworkPolicy` que solo permite `from` pods del mismo `tenant_id` label. Esta separación es una **decisión de despliegue** (blast-radius, cuotas, conveniencia de segmentación de red); el contrato de aislamiento de tenant real vive en SPEC_03/SPEC_04 (composite user_id + WHERE explícito en `yamlagno_*`, sin RLS nativo).
 
 ---
 
@@ -804,7 +826,7 @@ Feature: Security Hardening enforced
 4. **Falco en modo eBPF** (no se necesita device plugin en nodos modernos con kernel ≥ 5.8).
 5. **etcd encryption at rest** habilitado a nivel de API server con KMS.
 6. **mTLS pod-to-pod**: post-MVP vía service mesh (Linkerd/Istio). MVP: TLS solo en edge + DB.
-7. **Namespace por tenant** para aislamiento de red (§2.2.7); alternativo label-based, más complejo.
+7. **Namespace por tenant** como **decisión de despliegue / segmentación de red** (§2.2.7), NO como boundary de aislamiento de tenant. El aislamiento de tenant real es el composite `user_id` (SPEC_04) + `WHERE tenant_id = ?` explícito en `yamlagno_*` (SPEC_03); el namespace acota blast-radius y cuotas. Alternativo label-based, más complejo.
 8. **Audit trail inmutable**: S3 Object Lock Compliance mode (no governance) para que ni root pueda borrar antes de retention.
 9. **CVE SLA** medido desde disponibilidad de fix, no desde publicación del CVE.
 10. **Trivy ignore file** (`.trivyignore`) auditado en PR; cada entrada con ticket y fecha de expiración.
@@ -816,7 +838,7 @@ Feature: Security Hardening enforced
 1. ¿**Kyverno vs OPA Gatekeeper**? Kyverno propuesto por verifyImages + policies YAML; ¿confirmar o preferencia existente por Gatekeeper/Rego?
 2. ¿**Cilium vs Calico** para FQDN egress? Impacta alcance del control de egress a model providers.
 3. ¿**Service mesh** (Linkerd/Istio) entra en MVP para mTLS pod-to-pod, o post-MVP con TLS solo en edge?
-4. ¿**Namespace por tenant** vs **label-based isolation**? Namespace = más simple pero más recursos; label = más denso pero NPs más complejas.
+4. ¿**Namespace por tenant** vs **label-based** como **topología de despliegue / segmentación de red** (§2.2.7)? Namespace = más simple (blast-radius, cuotas) pero más recursos; label = más denso pero NPs más complejas. Nota: ninguna de las dos es el boundary de aislamiento de tenant — ese contrato vive en SPEC_03/SPEC_04 (composite user_id + WHERE explícito); esta pregunta es sólo sobre conveniencia operativa.
 5. ¿**Postgres TDE** a nivel de cluster (EBS) basta para GDPR, o se requiere column-level (pgcrypto) para PII?
 6. ¿**Keyless Cosign** (GitHub OIDC) o clave almacenada en KMS? Keyless más seguro pero acopla a CI.
 7. ¿**Audit retention**: 90 días (Loki hot) + cuánto en WORM S3? SOC 2 sugiere 1 año; enterprise puede pedir más.

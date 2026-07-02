@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_09"
 Title: "Observability and SRE - Metrics, Tracing and Resilience"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#OpenTelemetry", "#SRE", "#CircuitBreaker", "#Resilience"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 metadata bump. Owns CircuitState/CircuitBreaker (resilience/SRE)."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - completed the ObservabilityManager Port: added record_metric(name, value, attributes) so distributions (latency, token usage) are first-class on the contract, not just counters. Unblocks the SPEC_24 adapter which already calls record_metric and attributes it to this Port. Other Wave-2 debts (ErrorCategory/CRITICAL categorization, LoggerManager Port duplication) remain out of scope."
 ---
 
 # SPEC_09_OBSERVABILITY_AND_SRE
@@ -102,8 +102,14 @@ from typing import Protocol, Any
 
 class ObservabilityManager(Protocol):
     def increment_counter(self, name: str, value: float = 1.0, labels: dict[str, Any] | None = None) -> None: ...
+    def record_metric(self, name: str, value: float, attributes: dict[str, str] | None = None) -> None: ...
     def start_span[T](self, name: str) -> T: ...
 ```
+
+> **@ai-directive**: counters (`increment_counter`) record events; `record_metric` records a
+> distribution/histogram value (latency, token usage, payload size). Backed by Agno-native
+> tracing/metrics when connected; this Port is the yaml-agno surface that the SPEC_24 adapter
+> conforms to. Do NOT build dashboards here — the Port only completes the contract.
 
 **Uso en yaml-agno**:
 ```python
@@ -124,11 +130,13 @@ class AgentExecutor:
             # Inyectar atributos
             span.set_attribute("agent_name", agent.name)
             span.set_attribute("tenant_id", tenant_id)
-            
+
+            import time
+            start = time.perf_counter()
             try:
                 result = await agent.run()
-                
-                # Métrica de éxito
+
+                # Métrica de éxito (counter)
                 self.obs.increment_counter(
                     "agent_execution_total",
                     value=1.0,
@@ -138,10 +146,20 @@ class AgentExecutor:
                         "status": "success"
                     }
                 )
+                # Distribución de latencia (histogram via record_metric)
+                elapsed = time.perf_counter() - start
+                self.obs.record_metric(
+                    "agent_execution_duration_seconds",
+                    value=elapsed,
+                    attributes={
+                        "agent_name": agent.name,
+                        "tenant_id": tenant_id,
+                    },
+                )
                 return result
-                
+
             except Exception as e:
-                # Métrica de error
+                # Métrica de error (counter)
                 self.obs.increment_counter(
                     "agent_execution_errors_total",
                     value=1.0,

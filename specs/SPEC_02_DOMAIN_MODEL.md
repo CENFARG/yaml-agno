@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_02"
 Title: "Domain Model - YAML Configuration Schemas (Pydantic V2)"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PydanticV2", "#YAMLSchema", "#ConfigModel", "#DIReference"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
-Last_Updated: "2026-06-16"
-Revision_Note: "Iteración 1 - eliminada sobre-ingeniería DDD (entities/VOs/events propios). SPEC_02 = solo schemas YAML *Config + DIReference. Enums referenciados de Agno (no duplicados)."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - added opaque delegated slots to AgentConfig for all Agno features (reasoning/skills/human_review/culture/persistence) following the existing dict[str, Any] | None pattern, plus human_review slot on StepConfig. Resolves the extra=forbid vs claimed-fields contradiction for SPEC_28/29/30/31/32."
 ---
 
 # SPEC_02_DOMAIN_MODEL
@@ -81,9 +81,12 @@ class AgentConfig(BaseModel):
         - Provider and model resolution is delegated to the DependencyManager
           (SPEC_01 §1.3) and the Agno model factory (SPEC_14). This schema does
           NOT enumerate providers (Agno already does) to avoid duplication.
-        - Nested config blocks (tools, knowledge, memory, session, ...) are
-          validated by their own schemas in dedicated SPECs (11/10/04/13) and are
-          referenced here as opaque dicts consumed by the factory.
+        - Nested config blocks (tools, knowledge, memory, session, reasoning,
+          skills, human_review, culture, persistence) are validated by their own
+          schemas in dedicated SPECs (11/10/04/03+13/28/29/30/31) and are
+          referenced here as opaque dicts consumed by the factory. AgentConfig is
+          the aggregate that names these slots; it does NOT enumerate their
+          internals (DRY/SSOT).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -101,6 +104,17 @@ class AgentConfig(BaseModel):
     knowledge: dict[str, Any] | None = Field(None, description="Knowledge/RAG config. See SPEC_10.")
     memory: dict[str, Any] | None = Field(None, description="Memory config. See SPEC_04.")
     session: dict[str, Any] | None = Field(None, description="Session/storage config. See SPEC_03 + SPEC_13.")
+
+    # @ai-directive: Each slot below is an OPAQUE dict validated by its owner SPEC
+    # (SSOT per feature); AgentConfig is the aggregate that REFERENCES them, it does
+    # NOT enumerate the feature internals (DRY/SSOT regla 9). This keeps extra="forbid"
+    # consistent: every Agno feature surfaced in YAML has a named slot here, so no
+    # feature needs to leak through `extra`.
+    reasoning: dict[str, Any] | None = Field(None, description="Reasoning/chain-of-thought config. See SPEC_28.")
+    skills: dict[str, Any] | None = Field(None, description="Agent skills config. See SPEC_30.")
+    human_review: dict[str, Any] | None = Field(None, description="Human-in-the-loop review config. See SPEC_29.")
+    culture: dict[str, Any] | None = Field(None, description="Culture/locale/persona config. See SPEC_31.")
+    persistence: dict[str, Any] | None = Field(None, description="Persistence config. See SPEC_03.")
 
     # Organization
     tags: list[Tag] = Field(default_factory=list, max_length=20, description="Tags for organization.")
@@ -287,6 +301,12 @@ class StepConfig(BaseModel):
     # Execution control
     execute: bool = Field(default=True, description="Enable/disable the step.")
     finally_: bool = Field(default=False, alias="finally", description="Run always (cleanup).")
+
+    # Human-in-the-loop review gate for this step (SPEC_29 workflow HITL).
+    # @ai-directive: opaque dict; the owner SPEC (29) validates its internals.
+    # Referenced as StepConfig.human_review by the workflow executor to pause for
+    # human approval before/after the step runs.
+    human_review: dict[str, Any] | None = Field(None, description="Per-step human-review gate config. See SPEC_29.")
 
     # Type-specific fields
     steps: list[dict[str, Any]] = Field(default_factory=list, description="Nested steps (Parallel/Steps).")
