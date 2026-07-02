@@ -6,7 +6,7 @@
 > cuando el proyecto avance a implementación.
 
 **Última actualización**: 2026-07-02
-**HEAD git**: `d951117` (rama `feature/specs-agno-coverage-10-25`, 70 commits)
+**HEAD git**: `1103694` (rama `feature/specs-agno-coverage-10-25`, 72 commits)
 **Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
 
 ---
@@ -75,11 +75,11 @@ Todos en `specs/SPEC_*.md`. Versiones:
 - **SPEC_03**: 0.3.0-iter2 — **reescrita de fondo** integrando core-cenf real (consume DatabaseManager/TransactionScope/GenericRepository; elimina runtime de Agno; prefijo `yamlagno_*`; 3 niveles multi-tenant modelados; sección entorno vs ejecución). 10/10.
 - **SPEC_04**: 0.3.0-iter3 — directivas Engram/PII/Secret colapsadas en UN bloque canónico al inicio; agregado `system_user_id` (anti-bucket "default" compartido de Agno); mapeo de scopes org/tenant/agent/user/team → namespace Agno; retention configurable. v2.6.18.
 - **SPEC_05**: 0.3.0-iter2 — `message_protocol.py` ELIMINADO (Agno ya trae A2A completo; ACP no existe); consume API REAL de core-cenf `ErrorHandlingManager`; `retry_policy.py` acotado al gap real de step-retry; retry/timeout configurables; §8 resuelto. v2.6.18.
-- **SPEC_06**: 0.4.0-iter3 — **reformulada como capa fina sobre AgentOS**. ELIMINADOS todos los endpoints duplicados (`/run`, `/sessions`, `/health`, config — todos nativos de AgentOS). Eliminados DTOs `AgentRunRequest`/`AgentRunResponse` (wire contract nativo es multipart/form-data con `{id}`). Core job = `build_app()` wiring YAML→`AgentOS(...).get_app()`. Gaps reales en estilo AgentOS: readiness/liveness, RateLimitMiddleware, TenantScopeMiddleware, AX discovery.
-- **SPEC_17**: 0.2.0-iter3 (colateral) — removidas refs a `AgentRunRequest` (conserva `MediaInput` como modelo interno → agno.media.*); firma `run_multimodal_agent` corregida.
-- **SPEC_19**: 0.2.0-iter2 (colateral) — actualizadas refs cruzadas a SPEC_06 (RateLimitMiddleware §3.2, readiness §3.1, sin DTOs).
+- **SPEC_06**: 0.5.0-iter4 — **inheritance layer**: `class YamlAgentOS(AgentOS)` subclass, override `get_app()` (super() + extensions). Multi-tenant via **composite `user_id`** (`{tenant}:{user}`) + `user_isolation` NATIVO de Agno (no tenant_id column, no RLS; NULL-bucket guard always-on). Sin carpeta `gaps/` (SOTA `src/api/`). Sin Engram. Config via core-cenf-py ConfigManager. AX discovery via **MCP nativo** (`enable_mcp_server`). Directiva sanitización backend mandatory.
+- **SPEC_17**: 0.2.0-iter3 (colateral) — removidas refs a `AgentRunRequest`; `MediaInput` conservado como modelo interno.
+- **SPEC_19**: 0.2.0-iter3 (colateral) — refs cruzadas a SPEC_06 actualizadas (RateLimitMiddleware §4.2, readiness §4.1, user_isolation nativo).
 - **SPEC_01, 06, 13, 16**: bump factual v2.6.14→v2.6.18.
-- **SPEC_08**: 0.2.0-iter5 — catálogo realineado a SPEC_06 iter3 (S06-T01..T07 thin-layer tasks).
+- **SPEC_08**: 0.2.0-iter6 — catálogo realineado a SPEC_06 iter4 (YamlAgentOS subclass tasks S06-T01..T08).
 - **SPEC_17, 18, 23**: 0.2.0-iter2 — corregidas por impacto de SPEC_03.
 - **SPEC_05–16, 19–22, 24–32**: 0.2.0-iter1 — corregidas en ronda masiva.
 - **SPEC_26–32**: nuevos (A2A, Tracing, Reasoning, Workflow-HITL, Skills, Culture, Registry).

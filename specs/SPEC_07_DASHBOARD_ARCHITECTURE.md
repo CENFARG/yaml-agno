@@ -1,481 +1,381 @@
 ---
 Spec_ID: "SPEC_07"
-Title: "Dashboard Architecture - Frontend and UI"
-Version: "0.2.0-iter1"
+Title: "Dashboard Architecture - UI Strategy: Playground and agent-ui"
+Version: "0.3.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#Frontend", "#Dashboard", "#UI", "#React"]
+Context_Tags: ["#UI", "#Playground", "#agent-ui", "#Strategy"]
 Dependency_Hashes: ["SPEC_00", "SPEC_06"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 metadata bump (was outside prior correction round scope)."
+Last_Updated: "2026-07-02"
+Revision_Note: "iter2 rewrite: drop the custom React dashboard. yaml-agno builds NO frontend in the MVP; it consumes Agno's hosted Playground (Free SaaS) for MVP and forks the official MIT agent-ui for a whitelabel UI POST-MVP. The old plan duplicated agent-ui and called the eliminated /api/v1/agents/{name}/run endpoints. Follow-up: replaced an invalid `python -m grep` placeholder in TASK_002 with a real pathlib-based source scan."
 ---
 
 # SPEC_07_DASHBOARD_ARCHITECTURE
 
-> **Propósito**: Especificar arquitectura frontend, interfaz reactiva, estados visuales y UX rules para el dashboard de yaml-agno.
+> **Propósito**: Definir la estrategia de UI de yaml-agno. yaml-agno **no construye** un frontend en el MVP: expone `YamlAgentOS` (SPEC_06) y consume las superficies de UI que Agno ya provee. Estrategia en dos fases: (1) **Playground SaaS gratuito** para MVP/dev/interno, y (2) **fork de `agent-ui` (MIT)** auto-alojado para whitelabel POST-MVP.
+
+@ai-directive: Do NOT build a custom React/Vue/Svelte dashboard that duplicates agent-ui or calls the eliminated `/api/v1/agents/{name}/run` endpoints. Those endpoints were removed in SPEC_06; AgentOS serves native `POST /agents/{agent_id}/runs`. The only frontend code yaml-agno owns is POST-MVP extensions layered on the MIT agent-ui fork.
 
 ---
 
-## 1. FRONTEND STACK AND CONFIGURATION
+## 1. LA JERARQUÍA DE SUPERFICIES DE UI (EXISTENTES — NO RECONSTRUIR)
 
-### 1.1 Stack Tecnológico
+yaml-agno **hereda** tres superficies de UI de Agno y no construye ninguna de ellas. Esta sección las cataloga para que ningún agente intente duplicarlas.
 
-| Componente | Tecnología | Versión | Justificación |
-|------------|-----------|---------|---------------|
-| **Framework** | React | 18+ | Component-based, gran ecosistema |
-| **Build Tool** | Vite | 5+ | Fast HMR, optimizado |
-| **UI Components** | shadcn/ui | Latest | Radix UI + Tailwind, accesible |
-| **Styling** | Tailwind CSS | 3+ | Utility-first, consistente |
-| **State Management** | Zustand | 4+ | Simple, sin boilerplate |
-| **Data Fetching** | React Query | 5+ | Caching, revalidación |
-| **Routing** | React Router | 6+ | Client-side routing |
-| **Type Safety** | TypeScript | 5+ | Type safety en frontend |
+### 1.1 Tabla de superficies existentes
 
-### 1.2 Estructura de Proyecto
+| Superficie | Tipo | Origen | Cómo se activa | Uso en yaml-agno |
+|------------|------|--------|----------------|------------------|
+| **Swagger / OpenAPI** | Nativa, local | `AgentOS` router + `/docs` | `AgnoAPISettings.docs_enabled=True` (os/settings.py:18) | Debug de API en dev. Sin custo. |
+| **Playground SaaS** | Hosteada, web app | `os.agno.com` (Agno Inc.) | `YamlAgentOS.serve()` arranca la API local en :7777 e imprime el link al SaaS | **MVP / dev / interno** (Plan Free). |
+| **agent-ui** | MIT, auto-alojable | `github.com/agno-agi/agent-ui` | `npx create-agent-ui@latest` → apunta a `http://localhost:7777` | **POST-MVP**: fork whitelabel para clientes. |
 
-```
-dashboard/
-├── src/
-│   ├── components/
-│   │   ├── ui/              # shadcn/ui components
-│   │   ├── agents/          # Agent-related components
-│   │   ├── teams/           # Team-related components
-│   │   ├── workflows/       # Workflow-related components
-│   │   └── sessions/        # Session-related components
-│   ├── pages/
-│   │   ├── overview.tsx     # Dashboard overview
-│   │   ├── agents.tsx       # Agents list/detail
-│   │   ├── teams.tsx        # Teams list/detail
-│   │   └── sessions.tsx     # Active sessions
-│   ├── store/
-│   │   ├── agentStore.ts    # Zustand agent store
-│   │   ├── teamStore.ts     # Zustand team store
-│   │   └── sessionStore.ts # Zustand session store
-│   ├── lib/
-│   │   ├── api.ts           # API client
-│   │   └── utils.ts        # Utilities
-│   └── types/
-│       └── api.ts           # TypeScript types from API
-├── tailwind.config.js
-├── vite.config.ts
-└── tsconfig.json
-```
+@ai-directive: yaml-agno construye **cero** de estas tres superficies. La única UI que yaml-agno posee son las extensiones POST-MVP (editor YAML multi-tenant, plantillas, billing) que se montan **sobre el fork de agent-ui**, no desde cero.
+
+### 1.2 Aclaración: AGUI NO es una UI
+
+`AGUI` (en `os/interfaces/agui/`) es un **adaptador de protocolo** AG-UI (`POST /agui` con SSE para un agente/equipo individual), opt-in vía `interfaces=[AGUI(agent=...)]`. Es un protocolo, no una aplicación. **No confundir** AGUI con el Playground ni con agent-ui.
+
+@ai-directive: When a spec or task says "AGUI", it refers to the SSE protocol adapter, not to any frontend. Do not route UI work through AGUI unless an explicit AG-UI-protocol consumer requires it (out of MVP scope).
+
+### 1.3 Hechos verificados sobre el empaquetado de Agno
+
+- El paquete `agno` **no incluye** archivos HTML ni estáticos. `GET /` devuelve JSON.
+- No existe el kwarg `enable_playground` en `AgentOS`. El Playground es un SaaS externo, no un flag.
+- CORS ya viene preconfigurado para los dominios de Agno (os/settings.py:36-44): `localhost:3000`, `agno.com`, `www.agno.com`, `app.agno.com`, `os-stg.agno.com`, `os.agno.com`. yaml-agno no necesita tocar CORS para conectar el Playground SaaS.
 
 ---
 
-## 2. VIEW MODULES AND INTERFACES
+## 2. FASE 1 (MVP) — PLAYGROUND SaaS GRATUITO
 
-### 2.1 Overview Page
+### 2.1 Cómo se habilita
+
+```python
+# yaml_agno/runtime/server.py
+"""Server bootstrap: serve YamlAgentOS on port 7777.
+
+The hosted Playground (os.agno.com) connects back to this local API.
+No frontend code is shipped by yaml-agno.
+"""
+from yaml_agno.runtime.agentos import YamlAgentOS
+
+
+def serve(host: str = "0.0.0.0", port: int = 7777) -> None:
+    """Start the YamlAgentOS JSON API.
+
+    Args:
+        host: Bind address.
+        port: Port for the Playground/agent-ui to connect to.
+    """
+    app = YamlAgentOS()  # subclasses AgentOS, no get_app() override
+    app.serve(host=host, port=port)  # prints the Playground link
+```
+
+```mermaid
+sequenceDiagram
+    participant DEV as ["Developer (browser)"]
+    participant SAAS as ["Playground SaaS<br/>(os.agno.com)"]
+    participant LOCAL as ["YamlAgentOS<br/>(localhost:7777)"]
+    participant DB as ["Local DB / memory"]
+    DEV->>SAAS: Opens app.agno.com
+    SAAS->>LOCAL: Connects to :7777 (CORS pre-allowed)
+    DEV->>SAAS: Sends chat message
+    SAAS->>LOCAL: POST /agents/{id}/runs (native)
+    LOCAL->>DB: Reads/writes (data stays local)
+    LOCAL-->>SAAS: SSE stream (runs/events)
+    SAAS-->>DEV: Renders chat + tool calls
+```
+
+### 2.2 Qué cubre el Plan Free
+
+Pricing verificado el **2026-07-02 en agno.com/pricing — recheck antes de decisiones de producción**:
+
+| Recurso | Plan Free ($0) |
+|---------|----------------|
+| Construir sistemas multi-agente | ✅ |
+| Ejecutar con AgentOS | ✅ |
+| **Control Plane para AgentOS LOCAL** | ✅ |
+| **Chatear con agents / teams / workflows** | ✅ |
+| **Monitoreo de sesiones y métricas** | ✅ |
+| **Gestión de conocimiento y memoria** | ✅ |
+| Soporte | Comunitario |
+
+Planes superiores (referencia, **no** usados en MVP): **Pro ($150/mes)** añade Control Plane para AgentOS *LIVE* + **$95/mes por conexión en vivo**; **Enterprise** permite self-hosted Control Plane (whitelabel).
+
+@ai-directive: For MVP, CENF internal/dev use, and any scenario where data privacy requires the SaaS to be only a panel (not a data store), the Free plan is sufficient. **"No data ever leaves your system"** — los datos viven en la DB local; el SaaS es solo el panel.
+
+### 2.3 Cuándo NO usar el SaaS Free
+
+Para **datos reales de clientes** (amBOTHS u otros), se prefiere la Fase 2 (agent-ui self-hosted) porque, aunque el SaaS no almacena datos, el tráfico de chat pasa por el navegador hacia un dominio de terceros. La Fase 2 elimina esa dependencia de red hacia os.agno.com.
+
+---
+
+## 3. FASE 2 (POST-MVP) — FORK DE agent-ui (MIT)
+
+### 3.1 Por qué fork en vez de construir desde cero
+
+| Criterio | Construir desde cero (plan viejo iter1) | Fork de agent-ui (MIT) |
+|----------|------------------------------------------|------------------------|
+| Esfuerzo | Meses de desarrollo | Días para arrancar |
+| Chat streaming + tool-calls | Implementar a mano | **Ya construido** |
+| Multimodalidad (imagen/video/audio) | Implementar a mano | **Ya construido** |
+| Pasos de razonamiento / referencias | Implementar a mano | **Ya construido** |
+| Dark mode | Implementar a mano | **Ya construido** |
+| Auth (`OS_SECURITY_KEY`) | Implementar a mano | **Ya construido** |
+| Whitelabel sin Enterprise | Imposible (requiere plan Enterprise del SaaS) | **Permitido por licencia MIT** |
+| Fidelidad a la API de Agno | Riesgo de desviación | **Garantizada** (es la UI oficial) |
+
+@ai-directive: The build-vs-reuse decision is RESOLVED in favor of REUSE (fork agent-ui, MIT). Do not open a new greenfield frontend project.
+
+### 3.2 Stack heredado del fork
+
+agent-ui usa exactamente el stack que el plan iter1 proponía construir desde cero:
+
+| Componente | Tecnología | Notas |
+|------------|-----------|-------|
+| Framework app | Next.js 15 + React 18 | SSR + ruteo |
+| Lenguaje | TypeScript | Type safety |
+| Estilos | Tailwind CSS | Utility-first |
+| Componentes UI | shadcn/ui (Radix) | Accesible |
+| Estado | Zustand | Sin boilerplate |
+| Animación | Framer Motion | Transiciones |
+| Compatibilidad | Agno v2.x (`main` branch) | Match con AgentOS 2.6.18 |
+
+@ai-directive: When extending the fork, follow agent-ui's existing stack and patterns (Zustand stores, shadcn primitives, Tailwind tokens). Do not introduce a competing state library or UI kit.
+
+### 3.3 Qué añade yaml-agno sobre el fork
 
 ```mermaid
 graph TD
-    OP["Overview Page"] --> SC["Stats Cards"]
-    OP --> RS["Recent Sessions"]
-    OP --> AA["Active Agents"]
-    OP --> QA["Quick Actions"]
-
-    SC --> TA["Total Agents"]
-    SC --> TT["Total Teams"]
-    SC --> AS["Active Sessions"]
-    SC --> ART["Avg Response Time"]
-
-    QA --> CA["Create Agent"]
-    QA --> CT["Create Team"]
-    QA --> VL["View Logs"]
+    BASE["agent-ui (MIT upstream)"] --> CHAT["Chat / streaming / tool-calls"]
+    BASE --> MM["Multimodalidad"]
+    BASE --> AUTH["Auth OS_SECURITY_KEY"]
+    BASE --> DARK["Dark mode"]
+    EXT["Extensiones yaml-agno"] --> YAMLEDIT["Editor YAML multi-tenant<br/>+ validación"]
+    EXT --> TEMPLATES["Gestor de plantillas"]
+    EXT --> BILLING["Vistas de billing"]
+    EXT --> TENANTS["Selector de tenant"]
+    EXT -.->|"merge upstream"| BASE
 ```
 
-### 2.2 Agent Detail Page
+Extensiones específicas de yaml-agno (POST-MVP, no bloquean el MVP):
 
-- **Header**: Agent name, status, version
-- **Config Section**: YAML config viewer/editor
-- **Execution Section**: Run agent form
-- **History Section**: Past executions table
-- **Metrics Section**: Response time, success rate
+1. **Editor YAML multi-tenant** — editor CodeMirror/Monaco con validación contra `AgentConfig`/`TeamConfig` (SPEC_02), scoped al tenant activo.
+2. **Gestor de plantillas** — CRUD de plantillas YAML, versionado.
+3. **Selector de tenant** — switch de contexto multi-cliente.
+4. **Vistas de billing** — sólo si el producto lo requiere (amBOTHS).
 
-### 2.3 Session Detail Page
+### 3.4 Riesgo: mantenimiento del merge con upstream
 
-- **Header**: Session ID, user, status
-- **Chat Interface**: Message history display
-- **Metadata Section**: Session timing, iteration count
-- **Actions Section**: Pause, resume, close session
+El fork diverge del `main` de agent-ui. Mitigaciones:
+
+- Mantener las extensiones en rutas aisladas (`app/yaml-agno/*`) para minimizar conflictos.
+- Sincronizar con upstream mensual; `git merge upstream/main` + resolver.
+- Tests E2E (Playwright) sobre el chat base para detectar regresiones tras cada merge.
 
 ---
 
-## 3. STATE MANAGEMENT AND CACHING
+## 4. CONEXIÓN DE LA UI CON YamlAgentOS
 
-### 3.1 Zustand Store Structure
+### 4.1 Contrato de transporte
 
-```typescript
-// dashboard/src/store/agentStore.ts
+La UI (Playground o agent-ui) habla con la **API nativa de AgentOS** expuesta por `YamlAgentOS`:
 
-import { create } from 'zustand';
-import { AgentConfig, AgentExecution } from '@/types/api';
+- **Base URL**: `http://localhost:7777` (dev) o HTTPS en prod.
+- **Wire contract**: multipart / `{id}` nativo de AgentOS (ver SPEC_06 § contrato de transporte).
+- **Auth**: header `Authorization: Bearer ${OS_SECURITY_KEY}`.
+- **Endpoints nativos consumidos**: `POST /agents/{agent_id}/runs`, `GET /sessions`, etc.
 
-interface AgentStore {
-  // State
-  agents: AgentConfig[];
-  selectedAgent: AgentConfig | null;
-  executions: AgentExecution[];
-  isLoading: boolean;
-  error: string | null;
-  
-  // Actions
-  fetchAgents: () => Promise<void>;
-  selectAgent: (id: string) => void;
-  runAgent: (name: string, input: string) => Promise<void>;
-  deleteAgent: (id: string) => Promise<void>;
-  
-  // Actions (internal)
-  setLoading: (loading: boolean) => void;
-  setError: (error: string | null) => void;
-}
+@ai-directive: The UI must call NATIVE AgentOS endpoints only. The yaml-agno-specific `/api/v1/agents/{name}/run` endpoint does NOT exist (eliminated in SPEC_06) and must never appear as a frontend target. A contract test (§6) enforces this.
 
-export const useAgentStore = create<AgentStore>((set, get) => ({
-  // Initial state
-  agents: [],
-  selectedAgent: null,
-  executions: [],
-  isLoading: false,
-  error: null,
-  
-  // Actions implementation
-  fetchAgents: async () => {
-    set({ isLoading: true, error: null });
-    try {
-      const response = await fetch('/api/v1/agents');
-      const data = await response.json();
-      set({ agents: data.agents, isLoading: false });
-    } catch (error) {
-      set({ error: 'Failed to fetch agents', isLoading: false });
-    }
-  },
-  
-  selectAgent: (id: string) => {
-    const agent = get().agents.find(a => a.id === id);
-    set({ selectedAgent: agent || null });
-  },
-  
-  runAgent: async (name: string, input: string) => {
-    set({ isLoading: true, error: null });
-    try {
-      const response = await fetch(`/api/v1/agents/${name}/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input, user_id: 'current_user' })
-      });
-      const data = await response.json();
-      set({ 
-        executions: [data, ...get().executions],
-        isLoading: false 
-      });
-    } catch (error) {
-      set({ error: 'Failed to run agent', isLoading: false });
-    }
-  },
-  
-  deleteAgent: async (id: string) => {
-    set({ isLoading: true, error: null });
-    try {
-      await fetch(`/api/v1/agents/${id}`, { method: 'DELETE' });
-      set({ 
-        agents: get().agents.filter(a => a.id !== id),
-        isLoading: false 
-      });
-    } catch (error) {
-      set({ error: 'Failed to delete agent', isLoading: false });
-    }
-  },
-  
-  setLoading: (loading: boolean) => set({ isLoading: loading }),
-  setError: (error: string | null) => set({ error }),
-}));
-```
+### 4.2 YamlAgentOS no rompe el pipeline de AgentOS
 
-### 3.2 React Query Configuration
+`YamlAgentOS(AgentOS)` (SPEC_06) **no** debe sobreescribir `get_app()` sin llamar `super().get_app()` — eso dropearía routers, middleware y exception handlers nativos. Playground y agent-ui se conectan al `AgentOS` que `YamlAgentOS` produce; no se requiere manejo especial.
 
-```typescript
-// dashboard/src/lib/api.ts
+```python
+# yaml_agno/runtime/agentos.py
+"""YamlAgentOS: thin subclass, delegates app assembly to AgentOS."""
+from agno.os import AgentOS
 
-import { QueryClient, QueryCache } from '@tanstack/react-query';
 
-export const queryClient = new QueryClient({
-  queryCache: new QueryCache({
-    onError: (error) => {
-      console.error('Query error:', error);
-    },
-  }),
-  defaultOptions: {
-    queries: {
-      staleTime: 5 * 60 * 1000, // 5 minutes
-      gcTime: 10 * 60 * 1000, // 10 minutes
-      refetchOnWindowFocus: false,
-      retry: 1,
-    },
-  },
-});
+class YamlAgentOS(AgentOS):
+    """AgentOS configured from YAML. Does NOT override get_app()."""
+
+    # ... YAML-loading init per SPEC_06 ...
+    # get_app() is inherited unchanged so all routers/middleware survive.
 ```
 
 ---
 
-## 4. UX RULES AND OPTIMISTIC UI
+## 5. BEHAVIOR DELTA — ESCENARIOS BDD
 
-### 4.1 Dark Mode
+### 5.1 Escenarios de aceptación
 
-**Strategy**: System preference + manual toggle
-
-```typescript
-// dashboard/src/components/theme-provider.tsx
-
-import { createContext, useContext, useEffect, useState } from 'react';
-
-type Theme = 'dark' | 'light' | 'system';
-
-interface ThemeContextType {
-  theme: Theme;
-  setTheme: (theme: Theme) => void;
-}
-
-const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
-
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('system');
-  
-  useEffect(() => {
-    const root = window.document.documentElement;
-    root.classList.remove('light', 'dark');
-    
-    if (theme === 'system') {
-      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light';
-      root.classList.add(systemTheme);
-    } else {
-      root.classList.add(theme);
-    }
-  }, [theme]);
-  
-  return (
-    <ThemeContext.Provider value={{ theme, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  );
-}
-```
-
-### 4.2 Optimistic Updates
-
-```typescript
-// dashboard/src/components/agents/agent-list.tsx
-
-import { useAgentStore } from '@/store/agentStore';
-
-export function AgentList() {
-  const { agents, deleteAgent } = useAgentStore();
-  
-  const handleDelete = async (id: string) => {
-    // Optimistic update
-    const previousAgents = useAgentStore.getState().agents;
-    useAgentStore.setState({ 
-      agents: agents.filter(a => a.id !== id) 
-    });
-    
-    try {
-      await deleteAgent(id);
-    } catch (error) {
-      // Rollback on error
-      useAgentStore.setState({ agents: previousAgents });
-    }
-  };
-  
-  return (
-    // ... render
-  );
-}
-```
-
----
-
-## 5. BEHAVIOR DELTA - BDD SCENARIOS
-
-### 5.1 Escenarios de Aceptación
-
-#### Scenario 1: Golden Path - View Agent List
+#### Scenario 1: MVP — servir YamlAgentOS y chatear vía Playground Free
 
 ```gherkin
-GIVEN the user navigates to /agents
-AND agents exist in the database
-WHEN the page loads
-THEN the agent list is displayed
-AND each agent shows name, model, status
-AND the list is sorted by name alphabetically
+Feature: MVP UI via hosted Playground (Free plan)
+  Scenario: Developer chats with a YAML-defined agent through os.agno.com
+    GIVEN a YamlAgentOS configured from specs/examples/hello_agent.yaml
+    AND the OS_SECURITY_KEY is set in the environment
+    WHEN the developer runs `yaml-agno serve`
+    THEN the JSON API starts on port 7777
+    AND the console prints a link to os.agno.com
+    WHEN the developer opens the Playground and points it at localhost:7777
+    THEN CORS allows the connection (pre-configured by Agno)
+    AND the agent appears in the Playground agent list
+    WHEN the developer sends a chat message
+    THEN the response streams back over SSE
+    AND session data is stored in the local DB (data does not leave the system)
 ```
 
-#### Scenario 2: Golden Path - Run Agent
+#### Scenario 2: La UI usa endpoints nativos de AgentOS (no eliminados)
 
 ```gherkin
-GIVEN the user is on the agent detail page
-AND the agent is active
-WHEN the user enters input and clicks "Run"
-THEN a loading spinner appears
-AND the agent execution starts
-AND upon completion the result is displayed
-AND the execution is added to history
+  Scenario: No frontend calls the eliminated yaml-agno run endpoint
+    GIVEN the yaml-agno codebase and any future agent-ui fork
+    WHEN a static scan searches for "/api/v1/agents/" as a fetch target
+    THEN it finds zero active calls
+    AND the only run endpoint referenced is POST /agents/{agent_id}/runs (native AgentOS)
 ```
 
-#### Scenario 3: Error Case - Agent Execution Fails
+#### Scenario 3: POST-MVP — fork de agent-ui y extensión
 
 ```gherkin
-GIVEN the user attempts to run an agent
-AND the agent execution fails
-WHEN the error occurs
-THEN an error toast notification appears
-AND the error message is descriptive
-AND the loading spinner is removed
-AND the user can retry
-```
-
-#### Scenario 4: Golden Path - Dark Mode Toggle
-
-```gherkin
-GIVEN the user is on any page
-AND the current theme is light
-WHEN the user clicks the theme toggle
-THEN the theme changes to dark
-AND all components reflect the dark theme
-AND the preference is persisted to localStorage
+Feature: POST-MVP whitelabel UI (agent-ui fork)
+  Scenario: Fork agent-ui and connect to local AgentOS
+    GIVEN a developer has cloned the agent-ui MIT repo via create-agent-ui
+    AND set the AgentOS base URL to http://localhost:7777
+    AND set OS_SECURITY_KEY in the fork's env
+    WHEN the developer runs `pnpm dev`
+    THEN the Next.js app boots
+    AND chat with a YAML-defined agent renders streaming responses
+    AND tool-call visualizations and reasoning steps render correctly
+  Scenario: yaml-agno YAML editor layered on the fork
+    GIVEN the forked agent-ui with yaml-agno extensions mounted at app/yaml-agno/*
+    WHEN the developer opens the YAML editor route
+    THEN a multi-tenant YAML editor loads with validation against AgentConfig
+    AND saving persists the YAML to the tenant-scoped store
 ```
 
 ---
 
 ## 6. TDD MICRO-TASK EXECUTION PROTOCOL
 
-### 6.1 Cascading Task Checklist
+### 6.1 Tareas MVP (bloqueantes)
 
-#### TASK_001: Setup Project with Vite
+#### TASK_001: Smoke — YamlAgentOS serve expone la API
 
-- **File**: `dashboard/package.json`
-- **Test**: Verify `npm run dev` starts successfully
-- **RED**: `npm run dev` fails (project doesn't exist)
-- **GREEN**: Initialize Vite + React + TypeScript project
-- **Commit**: `feat: initialize dashboard with Vite`
-
-#### TASK_002: Configure Tailwind CSS
-
-- **File**: `dashboard/tailwind.config.js`
-- **Test**: Verify Tailwind classes work in component
-- **RED**: Tailwind classes have no effect
-- **GREEN**: Configure Tailwind with shadcn/ui
-- **Commit**: `feat: configure Tailwind CSS and shadcn/ui`
-
-#### TASK_003: Create AgentStore
-
-- **File**: `dashboard/src/store/agentStore.ts`
-- **Test**: `tests/unit/store/test_agent_store.test.ts`
+- **File**: `tests/runtime/test_serve_smoke.py`
 - **RED**:
-  ```typescript
-  test('agentStore initial state', () => {
-    const store = useAgentStore.getState();
-    expect(store.agents).toEqual([]);
-  });
+  ```python
+  def test_serve_opens_port_and_prints_playground_link(monkeypatch, capsys):
+      monkeypatch.setenv("OS_SECURITY_KEY", "test-key")
+      served = {}
+      def fake_serve(self, host, port):
+          served["host"] = host
+          served["port"] = port
+      monkeypatch.setattr("agno.os.AgentOS.serve", fake_serve)
+      from yaml_agno.runtime.server import serve
+      serve()
+      out = capsys.readouterr().out
+      assert served["port"] == 7777
+      assert "os.agno.com" in out or "agno.com" in out
   ```
-- **GREEN**: Implement Zustand store
-- **Commit**: `feat: add agent store with Zustand`
+- **GREEN**: Implementar `serve()` que instancia `YamlAgentOS` y llama `.serve()`.
+- **Commit**: `feat: serve YamlAgentOS and print Playground link`
 
-#### TASK_004: Create Overview Page
+#### TASK_002: Contrato — ningún frontend llama a `/api/v1/agents/`
 
-- **File**: `dashboard/src/pages/overview.tsx`
-- **Test**: Component renders without crashing
-- **RED**: Component doesn't exist
-- **GREEN**: Implement overview page with stats cards
-- **Commit**: `feat: add overview page`
-
-#### TASK_005: Create Agent List Page
-
-- **File**: `dashboard/src/pages/agents.tsx`
-- **Test**: Component renders list of agents
-- **RED**: Component doesn't exist
-- **GREEN**: Implement agents page with table
-- **Commit**: `feat: add agents list page`
-
-#### TASK_006: Implement API Client
-
-- **File**: `dashboard/src/lib/api.ts`
-- **Test**: `tests/unit/lib/test_api.test.ts`
+- **File**: `tests/contracts/test_no_eliminated_endpoints.py`
 - **RED**:
-  ```typescript
-  test('fetchAgents returns data', async () => {
-    const agents = await fetchAgents();
-    expect(Array.isArray(agents)).toBe(true);
-  });
+  ```python
+  def test_no_frontend_calls_eliminated_run_endpoint():
+      """The UI must NOT call the eliminated /api/v1/agents/{name}/run.
+      Only native AgentOS endpoints (POST /agents/{id}/runs) are allowed.
+      """
+      import pathlib
+      eliminated = "/api/v1/agents/"
+      offenders = []
+      for path in pathlib.Path("dashboard").rglob("*.{ts,tsx,js,jsx}"):
+          if eliminated in path.read_text(encoding="utf-8"):
+              offenders.append(str(path))
+      assert not offenders, f"found eliminated endpoint in: {offenders}"
   ```
-- **GREEN**: Implement `fetchAgents()` function
-- **Commit**: `feat: add API client functions`
+- **GREEN**: Asegurar que el codebase (y el futuro fork) sólo referencia endpoints nativos.
+- **Commit**: `test: contract gate against eliminated run endpoint`
 
-#### TASK_007: Implement Theme Provider
+### 6.2 Tareas POST-MVP (NO bloqueantes — marcadas explícitamente)
 
-- **File**: `dashboard/src/components/theme-provider.tsx`
-- **Test**: Theme toggle switches dark/light
-- **RED**: Theme doesn't toggle
-- **GREEN**: Implement theme provider with toggle
-- **Commit**: `feat: add theme provider and toggle`
+> @ai-directive: These tasks are POST-MVP. They must NOT block the MVP release. They live here to document the agent-ui fork path.
 
----
+#### TASK_003 (POST-MVP): Scaffold del fork agent-ui
 
-## 7. SUPUESTOS TÉCNICOS ADOPTADOS
+- Acción: `npx create-agent-ui@latest`, commit del scaffold.
+- Config: `.env.local` con `AGENTOS_URL=http://localhost:7777`, `OS_SECURITY_KEY=...`.
+- **Test**: `pnpm dev` levanta la app y el chat responde a un agente YAML.
 
-### [Decisión 1] Client-Side Routing
+#### TASK_004 (POST-MVP): Vista Editor YAML multi-tenant
 
-**Justificación**:
-- Mejor UX (no page reload)
-- Navegación más rápida
-- Estado preservado entre páginas
-
-### [Decisión 2] Zustand sobre Redux
-
-**Justificación**:
-- Menos boilerplate
-- Más simple para apps medianas
-- TypeScript friendly
-
-### [Decisión 3] shadcn/ui sobre Material-UI
-
-**Justificación**:
-- Componentes accesibles (Radix UI)
-- Customizable con Tailwind
-- No runtime overhead
+- **File**: `app/yaml-agno/yaml-editor/page.tsx` (dentro del fork)
+- **Test**: Carga un YAML, valida contra `AgentConfig` (SPEC_02), guarda.
+- **Commit**: `feat(post-mvp): multi-tenant YAML editor view`
 
 ---
 
-## 8. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
+## 7. SUPUESTOS Y DECISIONES ADOPTADAS
 
-### [Pregunta 1] Real-time Updates
+### [Decisión 1] Sin frontend custom en el MVP
 
-**¿El dashboard debe soportar actualizaciones en tiempo real (WebSocket)?**
+**Decisión**: yaml-agno **no construye** frontend en el MVP. Usa el Playground SaaS Free.
 
-Implica:
-- **Sí**: WebSocket connection, más complejidad
-- **No**: Polling o refresh manual
-- **Trade-off**: Freshness vs complejidad
+**Justificación**:
+- Cero trabajo de frontend, cero costo.
+- El Free plan cubre chat, sesiones, métricas, memoria y conocimiento.
+- "No data ever leaves your system" — los datos viven en la DB local.
 
-### [Pregunta 2] Offline Support
+### [Decisión 2] POST-MVP = fork de agent-ui (MIT), no build-from-scratch
 
-**¿Debe haber soporte offline con service worker?**
+**Decisión**: Para whitelabel POST-MVP se forkea `agent-ui` (licencia MIT).
 
-Implica:
-- **Sí**: PWA, cache, más complejidad
-- **No**: Online-only, más simple
-- **Trade-off**: UX vs complejidad
+**Justificación**:
+- Ahorra meses de trabajo (chat/tool-calls/multimodal ya construidos).
+- Whitelabel sin necesidad del plan Enterprise del SaaS.
+- Fidelidad garantizada a la API de Agno (es la UI oficial).
 
-### [Pregunta 3] Mobile Responsiveness
+### [Decisión 3] Los datos se quedan locales (privacidad)
 
-**¿Prioridad mobile-first o desktop-first?**
+**Decisión**: Tanto el Playground como el fork apuntan a la API local; la DB nunca se replica en el SaaS.
 
-Implica:
-- **Mobile-first**: Diseño para mobile, expande a desktop
-- **Desktop-first**: Diseño para desktop, adapta a mobile
-- **Trade-off**: UX mobile vs effort
+**Justificación**: Cumple requisitos de privacidad de CENF y clientes. El SaaS es sólo un panel.
+
+### [Decisión 4] Seguir el stack y patrones de agent-ui al extender
+
+**Decisión**: Las extensiones POST-MVP usan el mismo stack del fork (Zustand, shadcn, Tailwind).
+
+**Justificación**: Fidelidad al sistema, mínimos conflictos en merges con upstream.
 
 ---
 
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente específico o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
+## 8. PREGUNTAS DE CALIBRACIÓN — RESUELTAS
+
+### [Pregunta 1] ¿Actualizaciones en tiempo real (WebSocket)?
+
+**Resuelto**: SÍ, nativo. Tanto el Playground como agent-ui ya implementan streaming en tiempo real (SSE/WebSocket sobre la API de AgentOS). yaml-agno no añade nada.
+
+### [Pregunta 2] ¿Soporte offline?
+
+**Resuelto**: No es objetivo del MVP. agent-ui requiere conexión al AgentOS. Se pospone indefinidamente.
+
+### [Pregunta 3] ¿Mobile responsiveness?
+
+**Resuelto**: agent-ui ya es responsive. Se adopta su comportamiento; no se hace trabajo mobile-first específico.
+
+### [Pregunta 4 — implícita] ¿Construir o reutilizar?
+
+**Resuelto**: **REUTILIZAR**. Se forkea agent-ui (MIT) en vez de construir desde cero. Esta es la decisión central de este SPEC.
+
+---
+
+*Estrategia cerrada: MVP = Playground SaaS Free; POST-MVP = fork agent-ui MIT whitelabel. yaml-agno no posee frontend propio hasta la Fase 2, y aun entonces son extensiones sobre el fork.*
