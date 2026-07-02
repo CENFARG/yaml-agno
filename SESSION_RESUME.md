@@ -6,8 +6,8 @@
 > cuando el proyecto avance a implementación.
 
 **Última actualización**: 2026-06-26
-**HEAD git**: `8373d64` (rama `feature/specs-agno-coverage-10-25`, 66 commits)
-**Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations.
+**HEAD git**: `2f80ddb` (rama `feature/specs-agno-coverage-10-25`, 68 commits)
+**Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
 
 ---
 
@@ -73,8 +73,10 @@ Agno enteramente en YAML, con templates heredables y DI System. Se construye
 Todos en `specs/SPEC_*.md`. Versiones:
 - **SPEC_00, 01, 02**: iteración 1 completa (0.2.0-iter1).
 - **SPEC_03**: 0.3.0-iter2 — **reescrita de fondo** integrando core-cenf real (consume DatabaseManager/TransactionScope/GenericRepository; elimina runtime de Agno; prefijo `yamlagno_*`; 3 niveles multi-tenant modelados; sección entorno vs ejecución). 10/10.
-- **SPEC_04**: 0.3.0-iter3 — directivas Engram/PII/Secret colapsadas en UN bloque canónico al inicio; agregado `system_user_id` (anti-bucket "default" compartido de Agno); mapeo de scopes org/tenant/agent/user/team → namespace Agno (con gotcha de herencia entity/learned_knowledge); retention configurable (bloque `retention:` con `max_age_days`); compression_threshold marcado como ejemplo configurable owned by SPEC_15; §8 preguntas resueltas. TDD: 6 tasks (TASK_005 resolve_user_id, TASK_006 scope_mapping).
-- **SPEC_08**: 0.2.0-iter3 — catálogo TDD realineado a SPEC_04 iter3 (agregado S04-T05/T06 para system_user_id y scope mapping).
+- **SPEC_04**: 0.3.0-iter3 — directivas Engram/PII/Secret colapsadas en UN bloque canónico al inicio; agregado `system_user_id` (anti-bucket "default" compartido de Agno); mapeo de scopes org/tenant/agent/user/team → namespace Agno; retention configurable. v2.6.18.
+- **SPEC_05**: 0.3.0-iter2 — `message_protocol.py` ELIMINADO (Agno ya trae A2A completo; ACP no existe); consume API REAL de core-cenf `ErrorHandlingManager` (`classify`/`report` SYNC/`handle`/`ErrorClassification` sin CRITICAL, sin `should_retry`); `retry_policy.py` acotado al gap real de step-retry de Agno (model-retry delegado a Agno); retry/timeout configurables; §8 resuelto. v2.6.18.
+- **SPEC_01, 06, 13, 16**: bump factual v2.6.14→v2.6.18 (sin cambios de diseño).
+- **SPEC_08**: 0.2.0-iter4 — catálogo realineado a SPEC_05 iter2 (S05-T07 protocolo→A2A config, S05-T03 gather→TaskGroup, S05-T05/T06 API core-cenf) + v2.6.18.
 - **SPEC_17, 18, 23**: 0.2.0-iter2 — corregidas por impacto de SPEC_03.
 - **SPEC_05–16, 19–22, 24–32**: 0.2.0-iter1 — corregidas en ronda masiva.
 - **SPEC_26–32**: nuevos (A2A, Tracing, Reasoning, Workflow-HITL, Skills, Culture, Registry).
@@ -85,8 +87,8 @@ Todos en `specs/SPEC_*.md`. Versiones:
 ### Qué SPECs están CORREGIDAS vs PENDIENTES de revisión profunda
 - **Corregidas con revisión profunda (escritor + revisor adversarial + gate)**: SPEC_00, 01, 02, 03, 04 (+ SPEC_08 realineada por impacto).
 - **Corregidas en ronda masiva** (con re-audit + gate, pero NO con revisión adversarial individual detallada post-core-cenf): SPEC_05–32.
-- **Deuda inter-SPEC conocida** (no bloqueante, se liquida al revisar cada SPEC): SPEC_16 aún define `EngramMemoryManager(LongTermMemoryPort)` (Ports/memory eliminados en SPEC_04 iter2); se limpiará en la iteración de SPEC_16.
-- **Próxima a revisar con el sistema nuevo**: **SPEC_05 (Workflows and Teams)** — nota: al revisar SPEC_05 aplicar el mismo hallazgo de SPEC_04: workflow.user_id es Optional en Agno (workflow.py:405), cae a "default" si None; requiere system_user_id.
+- **Deuda inter-SPEC conocida** (no bloqueante, se liquida en cada iteración): SPEC_09 inventa `ErrorCategory`+`CRITICAL`+`_categorize_error` (contradice API real core-cenf `ErrorClassification`/`classify`); SPEC_16 aún define `EngramMemoryManager(LongTermMemoryPort)` (Ports/memory eliminados en SPEC_04 iter2/3). Se limpian en sus respectivas iteraciones.
+- **Próxima a revisar con el sistema nuevo**: **SPEC_06 (API and AX)** (el usuario la está validando ahora).
 
 ---
 
