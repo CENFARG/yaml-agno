@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_19"
 Title: "Security, Auth and API Surface - JWT, RBAC, Per-User Isolation and Endpoint Catalog"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#JWT", "#RBAC", "#Scopes", "#PerUserIsolation", "#BasicAuth", "#CORS", "#SecurityHeaders", "#AgentOS", "#API"]
 Dependency_Hashes: ["SPEC_06", "SPEC_03", "SPEC_01"]
 Last_Updated: "2026-07-02"
-Revision_Note: "iter2 (collateral): updated the SPEC_06 cross-reference after SPEC_06 iter3 reformulated the API as a thin AgentOS layer — RateLimitMiddleware now §3.2, readiness/liveness §3.1, and the AgentRunRequest/AgentRunResponse DTOs were removed (native AgentOS multipart/{id} wire contract). iter1 stands: JWTMiddleware imported from agno.os.middleware.jwt (configured, not reimplemented); RBAC/per-user-isolation owned by yaml-agno; CORS/SecurityHeaders merged over AgentOS defaults; tenant_id is Core Infra responsibility."
+Revision_Note: "iter3 (collateral): updated SPEC_06 cross-references after SPEC_06 iter4 switched to an inheritance layer (class YamlAgentOS(AgentOS)). RateLimitMiddleware now §4.2, readiness/liveness §4.1, mounted via the subclass get_app() (§1-2). Per-user isolation is now NATIVE AgentOS user_isolation enabled by yaml-agno TenantContextMiddleware (composite user_id, §3); RBAC remains owned by yaml-agno. iter1/iter2 stand otherwise: JWTMiddleware imported from agno.os.middleware.jwt (configured, not reimplemented); CORS/SecurityHeaders merged over AgentOS defaults; tenant_id is Core Infra responsibility."
 ---
 
 # SPEC_19_SECURITY_AUTH_API_SURFACE
@@ -25,7 +25,7 @@ Existe una frontera deliberada entre SPEC_06 y SPEC_19. Ambos tocan API, pero en
 |-----------|----------------------|--------------------------|
 | **Alcance** | Contratos REST genéricos de FastAPI + AX function calling | JWT/scopes/isolation + catálogo exhaustivo de endpoints AgentOS |
 | **Endpoints cubiertos** | `POST /agents/{name}/run`, health, readiness (6 endpoints) | Catálogo completo: agents, teams, workflows, sessions, memory, knowledge, metrics, evals, approvals, schedules, registry, components, a2a, agui, slack, whatsapp, traces, health |
-| **Rate Limiting** | Sí (definido aquí, §1.4) | Referencia SPEC_06 §1.4 (NO duplica) |
+| **Rate Limiting** | Sí (definido aquí, §1.4) | Referencia SPEC_06 §4 RateLimitMiddleware (NO duplica) |
 | **Auth middleware** | No | Sí (JWTMiddleware, BasicAuth, ScopeEnforcer, RBACManager) |
 | **Health checks** | Liveness/readiness (aquí referencia) | Extiende con endpoints del AgentOS API surface |
 | **AX schemas** | Sí (JSON schemas function calling) | No |
@@ -37,9 +37,10 @@ Existe una frontera deliberada entre SPEC_06 y SPEC_19. Ambos tocan API, pero en
 SPEC_19 **extiende** SPEC_06: reutiliza el patrón FastAPI + el middleware de rate-limit de SPEC_06 (gaps sobre AgentOS) sin redefinirlo. Especifica las políticas de auth/authorization y el catálogo completo de endpoints del AgentOS.
 
 **Referencia cruzada explícita**:
-- `RateLimitMiddleware` (per-tenant + per-IP; AgentOS has none): SPEC_06 §3.2.
-- Liveness/Readiness probes: SPEC_06 §3.1.
-- Run/session/config endpoints: NATIVE AgentOS (mounted via `get_app()`; SPEC_06 §1). There is NO yaml-agno `AgentRunRequest`/`AgentRunResponse` DTO (removed in SPEC_06 iter3; native wire contract is multipart/form-data with `{agent_id}`/`{team_id}`/`{workflow_id}`).
+- `RateLimitMiddleware` (keyed on composite user_id; AgentOS has none): SPEC_06 §4.2.
+- Liveness/Readiness probes: SPEC_06 §4.1.
+- Run/session/config endpoints: NATIVE AgentOS (mounted via the `YamlAgentOS(AgentOS)` subclass `get_app()`; SPEC_06 §1–2). There is NO yaml-agno `AgentRunRequest`/`AgentRunResponse` DTO (removed; native wire contract is multipart/form-data with `{agent_id}`/`{team_id}`/`{workflow_id}`).
+- Per-user / per-tenant isolation: NATIVE AgentOS `user_isolation` (enabled by yaml-agno `TenantContextMiddleware` building a composite `user_id`; SPEC_06 §3). RBAC is owned by yaml-agno.
 - Persistencia sessions/memoria (modelo filas con `user_id`): SPEC_03, SPEC_04.
 
 ---
@@ -1161,7 +1162,7 @@ api:
 
   rate_limiting:
     enabled: true
-    tenant_limit_per_min: 100  # ver SPEC_06 §1.4
+    tenant_limit_per_min: 100  # ver SPEC_06 §4.2 (RateLimitMiddleware)
     ip_limit_per_min: 20
 
   run_defaults:
@@ -1751,7 +1752,7 @@ Off por defecto porque requiere DB con `user_id` en filas. On en producción mul
 `cors_allowed_origins` se mergea con los dominios default de Agno (`os.agno.com`). Esto permite que el dashboard de Agno funcione sin config adicional.
 
 ### [Decisión 6] Rate limiting delegado a SPEC_06
-No se redefine el `RateLimiter`. Se referencia SPEC_06 §1.4 (100 req/min tenant, 20 req/min IP). Esto evita duplicación.
+No se redefine el `RateLimiter`. Se referencia SPEC_06 §4.2 (`RateLimitMiddleware`, 100 req/min tenant, 20 req/min IP) registrado en `YamlAgentOS.get_app()`. Esto evita duplicación.
 
 ### [Decisión 7] Audit trail siempre on para denegaciones
 `auth.failed`, `authz.denied`, e `isolation.coerced` se loguean siempre (incluso con `audit.enabled=false` para esos tres). Los éxitos son configurables.
