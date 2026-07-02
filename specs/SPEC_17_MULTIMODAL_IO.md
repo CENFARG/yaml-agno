@@ -1,15 +1,14 @@
 ---
 Spec_ID: "SPEC_17"
 Title: "Multimodal I/O - Images, Audio, Video and Files Processing and Generation"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Multimodal", "#Media", "#Images", "#Audio", "#Video", "#Files", "#ToolResult", "#FileStorage"]
 Dependency_Hashes: ["SPEC_02", "SPEC_11"]
-Last_Updated: "2026-06-17"
-Revision_Note: "iter1: AgentRunRequest/Response ya no se redefinen (SSOT=SPEC_06, solo se documenta la extensión multimodal); TTL/retention marcado como feature futura (no nativo Agno); datetime.utcnow() -> datetime.now(timezone.utc). iter2: media_artifacts moved to yamlagno.* config store via core GenericRepository, no raw SQL — MediaRegistry reescrito como wrapper de db.get_repository(MediaArtifactRecord) dentro de async with db.transaction() as tx + tx.commit(); MediaArtifactRecord(DeclarativeBase, schema='yamlagno') replaces migrations/media_artifacts.sql (provisioned by ConfigStoreProvisioner SPEC_03 §6, create_all checkfirst); MediaArtifact VO remapeado (media_type/storage_uri/bytes_size/duration_ms/run_id/expires_at); multi-tenant explicit en todos los filtros."
----
+Last_Updated: "2026-07-02"
+Revision_Note: "iter3 (collateral): updated §2.1 references after SPEC_06 iter3 eliminated AgentRunRequest/AgentRunResponse (no own /run endpoint — the run endpoint is AgentOS native multipart/form-data POST /agents/{agent_id}/runs). MediaInput is retained as an INTERNAL yaml-agno model (maps to agno.media.Image/Audio/Video/File); it is no longer described as a field added to an AgentRunRequest DTO. The rest of iter2 (MediaRegistry via core GenericRepository, yamlagno.* schema, MediaArtifactRecord) is unchanged. A full SPEC_17 deep review is deferred to its own iteration. (Prior iter1/iter2 history: AgentRunRequest/Response no longer redefined; TTL/retention future feature; datetime.now(timezone.utc); media_artifacts to yamlagno.* via core GenericRepository; MediaArtifactRecord(DeclarativeBase, schema='yamlagno') provisioned by ConfigStoreProvisioner; MediaArtifact VO remapped; multi-tenant explicit filters.)"
 
 # SPEC_17_MULTIMODAL_IO
 
@@ -92,28 +91,26 @@ from agno.media import Image, Audio, Video, File
 
 ### 2.1 Modalidades de Entrada
 
-yaml-agno acepta media de entrada en el endpoint de run (`/api/v1/agents/{name}/run`):
+yaml-agno acepta media de entrada en el endpoint de run NATIVO de AgentOS (`POST /agents/{agent_id}/runs`, multipart/form-data con `files`). yaml-agno NO tiene endpoint propio (SPEC_06 iter3).
 
-<!-- @ai-directive SSOT: AgentRunRequest/AgentRunResponse son DTOs de API cuyo OWNER es SPEC_06.
-     Esta SPEC NO los redefinen. yaml-agno los IMPORTA de SPEC_06.
-     Los campos multimodales (images/audio/videos/files + send_media_to_model + store_media)
-     se AÑADEN al DTO definido en SPEC_06; esta sección solo documenta esa extensión. -->
+<!-- @ai-directive SSOT: el endpoint /run es NATIVO de AgentOS (multipart/form-data,
+     ver SPEC_06 iter3). NO existe AgentRunRequest/AgentRunResponse propios (eliminados).
+     MediaInput es un modelo INTERNO de yaml-agno (owner compartido SPEC_06/SPEC_17) que
+     valida el input y se mapea a las clases nativas agno.media.Image/Audio/Video/File.
+     Los campos multimodales nativos del Agent.run() (images/audio/videos/files +
+     send_media_to_model + store_media) se pasan directamente a AgentOS; esta sección
+     solo documenta el modelo interno MediaInput y el mapeo. -->
 
 ```python
-# yaml-agno/src/api/endpoints/agents.py (extensión multimodal)
+# yaml-agno/src/media/models.py
 #
-# NOTA: AgentRunRequest/AgentRunResponse son propiedad de SPEC_06 (SSOT).
-# yaml-agno los importa; aquí solo se documentan los campos multimodales
-# que se añaden al DTO base de SPEC_06.
+# NOTA: el endpoint /run es NATIVO de AgentOS (no propio). MediaInput es un
+# modelo INTERNO de yaml-agno (no un DTO de endpoint) que se mapea a las
+# clases nativas agno.media.Image/Audio/Video/File antes de delegar a AgentOS.
 #
-# from src.api.models import AgentRunRequest  # owner: SPEC_06
-
-# Campos multimodales añadidos al AgentRunRequest de SPEC_06:
-#   images:  list[MediaInput] = Field(default_factory=list)
-#   audio:   list[MediaInput] = Field(default_factory=list)
-#   videos:  list[MediaInput] = Field(default_factory=list)
-#   files:   list[MediaInput] = Field(default_factory=list)
-#   # ---- Modos ----
+# Campos nativos del Agno Agent.run() que yaml-agno configura desde YAML / media:
+#   images:  list[Image]   audio: list[Audio]
+#   videos:  list[Video]   files: list[File]
 #   send_media_to_model: bool = True
 #   store_media: bool = False
 ```
@@ -1121,14 +1118,28 @@ class MultimodalAgentBuilder:
 ### 12.2 Flujo de un Run Multimodal
 
 ```python
+# NOTE: there is NO AgentRunRequest DTO anymore (SPEC_06 iter3 removed it; the
+# run endpoint is AgentOS native multipart/form-data). This helper receives the
+# parsed media inputs and scoping ids directly (extracted from the native
+# multipart form by the caller / AgentOS), not a request DTO.
+
 async def run_multimodal_agent(
-    agent, config: MediaConfig, request: AgentRunRequest, processor: MediaProcessor
+    agent,
+    config: MediaConfig,
+    images: list[MediaInput],
+    audio: list[MediaInput],
+    videos: list[MediaInput],
+    files: list[MediaInput],
+    user_id: str,
+    session_id: str | None,
+    tenant_id: str | None,
+    processor: MediaProcessor,
 ):
     # 1. Procesar media de entrada
     artifacts_by_type = {}
-    if request.images:
+    if images:
         artifacts_by_type["image"] = await processor.process_inputs(
-            "image", request.images, request.tenant_id, request.session_id,
+            "image", images, tenant_id, session_id,
             config.storage.backend,
         )
     # ... audio, video, file

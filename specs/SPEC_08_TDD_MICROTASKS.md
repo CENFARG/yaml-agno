@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_08"
 Title: "TDD Microtasks - Master Catalog"
-Version: "0.2.0-iter4"
+Version: "0.2.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
-Last_Updated: "2026-06-26"
-Revision_Note: "Iter 4. Realigned the SPEC_05 catalog (section 2.5) to SPEC_05 iter2: S05-T07 changed from the removed team message protocol (message_protocol.py / TeamMessage, eliminated because Agno already ships A2A) to the new A2A YAML config task. S05-T03 corrected asyncio.gather -> asyncio.TaskGroup. S05-T05/T06 clarified to reference core-cenf ErrorHandlingManager.classify() (real API: TRANSIENT/RATE_LIMIT retryable, no should_retry, no local enum). All other owner sections unchanged."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 5. Realigned the SPEC_06 catalog (section 2.6) to SPEC_06 iter3 thin-layer reformulation: removed the old S06-T01..T06 entries (AgentRunRequest/AgentRunResponse DTOs and POST /api/v1/agents/{name}/run endpoint — eliminated because AgentOS already serves these natively). New S06-T01..T07 map to build_app() YAML->AgentOS wiring, readiness/liveness factory routers, RateLimitMiddleware, TenantScopeMiddleware, GET /ax/tools AX discovery, native multipart/{id} wire-contract documentation, and a contract test asserting yaml-agno defines NO own duplicate execution routes. MediaInput is retained as an internal model shared with SPEC_17. All other owner sections unchanged from iter4."
 ---
 
 # SPEC_08_TDD_MICROTASKS
@@ -131,18 +131,19 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 | S05-T07 | SPEC_05 TASK_007 | A2A YAML config (enables Agno `a2a_interface`, expose/remote blocks; ACP explicitly rejected) | `src/workflows/a2a_config.py` | `tests/unit/workflows/test_a2a_config.py` |
 | S05-T08 | SPEC_05 TASK_008 | Verify Agno delegation (no proprietary workflow runtime) | `tests/integration/workflows/test_agno_delegation.py` | (same) |
 
-### 2.6 Owner SPEC_06 - API and AX
+### 2.6 Owner SPEC_06 - API and AX (thin layer over AgentOS)
 
-> @ai-directive: `AgentRunRequest`/`AgentRunResponse` are DTOs owned by SPEC_06 (the API layer), not duplicated from a runtime model. Readiness probe does NOT depend on Engram (Engram is optional). SPEC_06 depends on SPEC_02 schemas for request validation.
+> @ai-directive: yaml-agno does NOT own `/run`, `/sessions`, `/agents` config, or `/health` endpoints — those are AgentOS native (mounted via `get_app()`). SPEC_06 only adds: YAML→AgentOS wiring, readiness/liveness routers, rate-limit-by-tenant middleware, tenant-scope middleware, and an AX discovery surface. `AgentRunRequest`/`AgentRunResponse` JSON DTOs were REMOVED in SPEC_06 iter3 (no own /run endpoint); the native wire contract is AgentOS multipart/form-data with `{agent_id}`/`{team_id}`/`{workflow_id}`. `MediaInput` is kept as an INTERNAL yaml-agno model (maps to `agno.media.Image/Audio/Video/File`), owned jointly with SPEC_17.
 
 | Catalog ID | Owner SPEC task | Component | File | Test |
 |------------|-----------------|-----------|------|------|
-| S06-T01 | SPEC_06 TASK_001 | `AgentRunRequest` model (API DTO) | `src/api/models/agents.py` | `tests/unit/api/test_agent_models.py` |
-| S06-T02 | SPEC_06 TASK_002 | `AgentRunResponse` model (API DTO) | `src/api/models/agents.py` | `tests/unit/api/test_agent_models.py` |
-| S06-T03 | SPEC_06 TASK_003 | `POST /api/v1/agents/{name}/run` endpoint | `src/api/endpoints/agents.py` | `tests/integration/api/test_agent_endpoints.py` |
-| S06-T04 | SPEC_06 TASK_004 | `GET /health` endpoint | `src/api/endpoints/health.py` | `tests/integration/api/test_health_endpoints.py` |
-| S06-T05 | SPEC_06 TASK_005 | `GET /health/readiness` probe (Engram-independent) | `src/api/endpoints/health.py` | `tests/integration/api/test_health_endpoints.py` |
-| S06-T06 | SPEC_06 TASK_006 | AX schema definitions | `src/api/ax/schemas.py` | `tests/unit/api/test_ax_schemas.py` |
+| S06-T01 | SPEC_06 TASK_001 | `build_app()` YAML -> AgentOS wiring (mounts native routers; no own /run) | `src/api/app.py` | `tests/integration/api/test_build_app.py` |
+| S06-T02 | SPEC_06 TASK_002 | `get_readiness_router()` + `get_liveness_router()` (DB-gated readiness; factory style mirroring `get_health_router`) | `src/api/gaps/readiness.py` | `tests/integration/api/test_health_endpoints.py` |
+| S06-T03 | SPEC_06 TASK_003 | `RateLimitMiddleware` (per-tenant + per-IP; AgentOS has none) | `src/api/middleware/rate_limit.py` | `tests/unit/api/test_rate_limit.py` |
+| S06-T04 | SPEC_06 TASK_004 | `TenantScopeMiddleware` (tenant_id -> `request.state.user_id`; no RLS) | `src/api/middleware/tenant_scope.py` | `tests/unit/api/test_tenant_scope.py` |
+| S06-T05 | SPEC_06 TASK_005 | `GET /ax/tools` AX discovery router (publishes function-calling JSON schemas; read-only) | `src/api/gaps/ax_tools.py` | `tests/integration/api/test_ax_tools.py` |
+| S06-T06 | SPEC_06 TASK_006 | Document native AgentOS multipart/{id} wire contract (no invented JSON/{name} shim) | `docs/api/wire_contract.md` | `tests/contract/test_wire_contract.py` |
+| S06-T07 | SPEC_06 TASK_007 | Verify yaml-agno defines NO own /run, /sessions, or /agents config routes (contract test) | `tests/contract/test_no_duplicate_routes.py` | (same) |
 
 ### 2.7 Owner SPEC_00 - Core DI / Templates (cross-cutting, no inline TDD tasks)
 

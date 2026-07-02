@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_19"
 Title: "Security, Auth and API Surface - JWT, RBAC, Per-User Isolation and Endpoint Catalog"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#JWT", "#RBAC", "#Scopes", "#PerUserIsolation", "#BasicAuth", "#CORS", "#SecurityHeaders", "#AgentOS", "#API"]
 Dependency_Hashes: ["SPEC_06", "SPEC_03", "SPEC_01"]
-Last_Updated: "2026-06-17"
-Revision_Note: "iter1: JWTMiddleware ya no se reimplementa (se importa de agno.os.middleware.jwt y solo se configura; RBAC y per-user-isolation son propios de yaml-agno). CORS/SecurityHeaders aclarados como merge de defaults sobre AgentOS (no reimplementacion). tenant_id es responsabilidad de Core Infra (no nativo de Agno)."
+Last_Updated: "2026-07-02"
+Revision_Note: "iter2 (collateral): updated the SPEC_06 cross-reference after SPEC_06 iter3 reformulated the API as a thin AgentOS layer — RateLimitMiddleware now §3.2, readiness/liveness §3.1, and the AgentRunRequest/AgentRunResponse DTOs were removed (native AgentOS multipart/{id} wire contract). iter1 stands: JWTMiddleware imported from agno.os.middleware.jwt (configured, not reimplemented); RBAC/per-user-isolation owned by yaml-agno; CORS/SecurityHeaders merged over AgentOS defaults; tenant_id is Core Infra responsibility."
 ---
 
 # SPEC_19_SECURITY_AUTH_API_SURFACE
@@ -34,12 +34,12 @@ Existe una frontera deliberada entre SPEC_06 y SPEC_19. Ambos tocan API, pero en
 - Si la pregunta es "¿cómo implemento un endpoint `/run` o un health check?" → SPEC_06.
 - Si la pregunta es "¿cómo valido un JWT, qué scope requiere `/agents/*/runs`, o cómo aíslo datos por usuario?" → SPEC_19.
 
-SPEC_19 **extiende** SPEC_06: reutiliza el patrón FastAPI + el `RateLimiter` de SPEC_06 §1.4 sin redefinirlo. Especifica las políticas de auth/authorization y el catálogo completo de endpoints del AgentOS.
+SPEC_19 **extiende** SPEC_06: reutiliza el patrón FastAPI + el middleware de rate-limit de SPEC_06 (gaps sobre AgentOS) sin redefinirlo. Especifica las políticas de auth/authorization y el catálogo completo de endpoints del AgentOS.
 
 **Referencia cruzada explícita**:
-- `RateLimiter` (tenant/IP buckets, 100 req/min tenant, 20 req/min IP): SPEC_06 §1.4.
-- Liveness/Readiness probes: SPEC_06 §1.3.
-- `AgentRunRequest`/`AgentRunResponse`: SPEC_06 §1.2.
+- `RateLimitMiddleware` (per-tenant + per-IP; AgentOS has none): SPEC_06 §3.2.
+- Liveness/Readiness probes: SPEC_06 §3.1.
+- Run/session/config endpoints: NATIVE AgentOS (mounted via `get_app()`; SPEC_06 §1). There is NO yaml-agno `AgentRunRequest`/`AgentRunResponse` DTO (removed in SPEC_06 iter3; native wire contract is multipart/form-data with `{agent_id}`/`{team_id}`/`{workflow_id}`).
 - Persistencia sessions/memoria (modelo filas con `user_id`): SPEC_03, SPEC_04.
 
 ---

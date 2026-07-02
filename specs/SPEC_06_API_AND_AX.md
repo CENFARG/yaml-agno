@@ -1,614 +1,720 @@
 ---
 Spec_ID: "SPEC_06"
-Title: "API and AX - REST Endpoints and Function Calling"
-Version: "0.2.0-iter2"
+Title: "API and AX - Thin Layer over AgentOS"
+Version: "0.4.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#FastAPI", "#REST", "#AX", "#FunctionCalling"]
-Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-26"
-Revision_Note: "Iter 2 (factual). Corrected Agno version references v2.6.14 -> v2.6.18 (verified against agno/libs/agno/pyproject.toml). No design changes; all decisions from iter1 stand."
+Context_Tags: ["#FastAPI", "#AgentOS", "#REST", "#AX", "#FunctionCalling", "#Middleware"]
+Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04"]
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 3 (thin-layer reformulation). Removes all yaml-agno-owned /run, /sessions, /agents-config and /health endpoints that duplicated AgentOS v2.6.18 native routers. Reformulates SPEC_06 as a THIN LAYER that mounts AgentOS native routers via get_app() and adds only genuine gaps: (1) YAML->AgentOS wiring, (2) readiness/liveness routers replicating get_health_router factory, (3) rate-limit-by-tenant middleware (none in AgentOS), (4) tenant_id->request.state.user_id middleware, (5) thin GET /ax/tools discovery surface. Documents AgentOS's native multipart/form-data + {id} wire contract instead of inventing a JSON/{name} contract. Strategic questions resolved. Faithful to AgentOS coding patterns (factory routers, _add_router mounting)."
 ---
 
 # SPEC_06_API_AND_AX
 
-> **Purpose**: Define the additional REST management layer and AX (function-calling) profiles for yaml-agno, plus health checks. This API is an ADDITIONAL management/AX layer mounted ON TOP of the Agno app served by AgentOS (`get_app()`). It does NOT duplicate Agno's native `/run` execution endpoints; it complements them with management, discovery, and observability surfaces. *Config schemas are the SSOT defined in SPEC_02; this API imports and validates against them rather than redefining them.
+> **Purpose**: yaml-agno is a THIN LAYER over AgentOS (Agno v2.6.18). It does NOT ship its own `/run`, `/sessions`, `/agents` config, or `/health` execution endpoints — those are **native to AgentOS** and yaml-agno MOUNTS them via `AgentOS(...).get_app()`. yaml-agno adds only what AgentOS lacks:
+>
+> 1. **Wiring YAML -> AgentOS** — translate YAML files into the `agents=[...]` / `teams=[...]` / `workflows=[...]` lists that `AgentOS(...)` consumes. This is yaml-agno's CORE job.
+> 2. **Readiness + Liveness routers** — AgentOS ships only `GET /health` (simple). yaml-agno adds DB-gated readiness and process liveness, as router factories in the SAME style as `get_health_router`.
+> 3. **Rate-limit-by-tenant middleware** — AgentOS has zero rate limiting (grep `ratelimit|throttle|slowapi` in `os/` = 0 hits). yaml-agno adds a FastAPI middleware keyed on `tenant_id`.
+> 4. **Tenant scoping middleware** — `tenant_id` does NOT exist in any native AgentOS endpoint (only `user_id` / `session_id`). yaml-agno resolves `tenant_id` -> stamps `request.state.user_id` so native routers scope correctly (Agno honours `request.state.user_id` at `agents/router.py:616`, `teams/router.py:588`).
+> 5. **AX REST discovery** — `run_agent` / `run_team` / `run_workflow` exist ONLY over MCP (`os/mcp.py:227-264`, `enable_mcp_server=True`). There is NO REST JSON-schema discovery endpoint. yaml-agno adds a thin `GET /ax/tools` publishing function-calling schemas.
+>
+> *Config schemas (`*Config`) are the SSOT defined in SPEC_02; this API imports and validates against them rather than redefining them. `MediaInput` is owned by SPEC_17 (Multimodal I/O) and is only referenced by one-line pointer here.*
 
 ---
 
-## 1. REST/RPC ENDPOINTS CONTRACTS
+## 1. NATIVE AGENTOS ENDPOINTS yaml-agno MOUNTS (do NOT reimplement)
 
-### 1.1 Endpoints Principales
+yaml-agno mounts these via `AgentOS(agents=..., teams=..., workflows=..., db=...).get_app()`. Every native router is a FACTORY `get_*_router(...)` returning an `APIRouter`, mounted by `os._add_router(app, get_xxx_router(...))` (`os/app.py:509-540` and `app.py:969-1007`, ~22 routers total). Native endpoints are far more complete than anything yaml-agno could clone: streaming, background runs, SSE resume, checkpoints, fork, continue, cancel, multimodal upload (~1744 lines in `agents/router.py` alone).
 
-| Método | Endpoint | Payload | Response | Descripción |
-|--------|----------|---------|----------|-------------|
-| POST | `/api/v1/agents/{name}/run` | AgentRunRequest | AgentRunResponse | Ejecutar agente |
-| GET | `/api/v1/agents/{name}` | - | AgentConfigResponse | Obtener config |
-| POST | `/api/v1/teams/{name}/run` | TeamRunRequest | TeamRunResponse | Ejecutar team |
-| POST | `/api/v1/workflows/{name}/run` | WorkflowRunRequest | WorkflowRunResponse | Ejecutar workflow |
-| GET | `/api/v1/sessions/{id}` | - | SessionContextResponse | Obtener sesión |
-| DELETE | `/api/v1/sessions/{id}` | - | DeleteResponse | Eliminar sesión |
+### 1.1 Native run / session / config / health endpoints
 
-### 1.2 Agent Run Endpoint
+| yaml-agno role | AgentOS native endpoint | file:line (v2.6.18) |
+|---|---|---|
+| Mount, do NOT reimplement | `POST /agents/{agent_id}/runs` | `agents/router.py:551` |
+| Mount, do NOT reimplement | `GET /agents/{agent_id}`, `GET /agents`, `GET /config` | `agents/router.py:1320`, `agents/router.py:1216`, `os/router.py:79` |
+| Mount, do NOT reimplement | `POST /teams/{team_id}/runs` | `teams/router.py:527` |
+| Mount, do NOT reimplement | `POST /workflows/{workflow_id}/runs` | `workflows/router.py:1118` |
+| Mount, do NOT reimplement | `GET /sessions/{session_id}` | `session/session.py:331` |
+| Mount, do NOT reimplement | `DELETE /sessions/{session_id}` | `session/session.py:804` |
+| Mount, do NOT reimplement | `GET /health` | `health.py:13` |
+
+> @ai-directive: yaml-agno MUST NOT define its own `/run`, `/sessions`, `/agents` config, or `/health` routers. It builds an `AgentOS(...)` instance from YAML (see §2) and calls `.get_app()`, which mounts all native routers. The ONLY routers yaml-agno adds itself are the 4 gaps in §3. A verification test (§5, TASK_007) asserts yaml-agno's router list contains NO `/run`, `/sessions`, or `/agents` config route.
+
+### 1.2 Wire contract (MUST document, do NOT invent)
+
+> @ai-directive: AgentOS run endpoints are **`multipart/form-data`** (`Form` fields + `UploadFile`), NOT JSON. Path params are `{agent_id}` / `{team_id}` / `{workflow_id}` (numeric/string IDs from the resolved config), NOT `{name}`. yaml-agno MUST NOT invent a JSON-body + `{name}` path contract; doing so would require an adapter shim that diverges from Agno's real API surface and breaks native streaming/upload/SSE semantics. yaml-agno clients call the native form API directly.
+
+For multimodal input on native run endpoints, clients attach `images` / `audio` / `videos` / `files` as `UploadFile` parts in the SAME multipart request, plus the boolean form fields `send_media_to_model` / `store_media`. The media reference model is `MediaInput`, owned by **SPEC_17** — see that spec for the full multimodal pipeline (validation, storage, `ToolResult`). yaml-agno does not redefine it here.
+
+---
+
+## 2. YAML -> AgentOS WIRING (yaml-agno core job)
+
+yaml-agno's reason to exist is turning YAML files into a running AgentOS app. The pipeline below is the canonical wiring; it produces the `FastAPI` app that already carries every native router from §1 plus the gaps from §3.
 
 ```python
-# yaml-agno/src/api/endpoints/agents.py
+# yaml-agno/src/wiring/build_app.py
+"""Wires YAML config files into a served AgentOS FastAPI app.
 
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, Field
-from typing import Any, Dict
+Mirrors AgentOS's own construction pattern: build the object lists, hand them
+to AgentOS(...), call get_app(), then mount any extra routers/middleware.
+"""
 
-router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
+from pathlib import Path
+from typing import Any
 
-class MediaInput(BaseModel):
-    """Multimodal media reference.
+from agno.os import AgentOS
 
-    @ai-directive: maps to Agno's native media classes (agno.media.Image /
-    Audio / Video / File), which accept exactly one content source among
-    `url` (remote), `filepath` (local) or `content` (raw bytes). Verified
-    in agno/media.py v2.6.18. See SPEC_17 (Multimodal I/O) for full detail.
+from yaml_agno.config.loader import load_yaml_site          # SPEC_02 SSOT
+from yaml_agno.factory.agent_factory import build_agents     # SPEC_01
+from yaml_agno.factory.team_factory import build_teams       # SPEC_01
+from yaml_agno.factory.workflow_factory import build_workflows  # SPEC_01
+from yaml_agno.db.session import resolve_agentos_db          # SPEC_03
+from yaml_agno.api.gaps.readiness import get_readiness_router, get_liveness_router
+from yaml_agno.api.gaps.ax_tools import get_ax_tools_router
+from yaml_agno.api.middleware.tenant_scope import TenantScopeMiddleware
+from yaml_agno.api.middleware.rate_limit import RateLimitMiddleware
+
+
+def build_app(yaml_root: str | Path) -> Any:
+    """Build a served AgentOS app from a YAML site directory.
+
+    Args:
+        yaml_root: Path to the YAML site (agents/, teams/, workflows/ subdirs).
+
+    Returns:
+        A FastAPI application with all native AgentOS routers mounted
+        (run/sessions/config/health) plus yaml-agno's 4 genuine gaps.
+
+    @ai-directive: this is yaml-agno's CORE function. It MUST call
+    AgentOS(...).get_app() so native routers are mounted. It MUST NOT
+    register its own /run, /sessions, or /agents config routes.
     """
-    url: str | None = Field(None, description="Remote media location.")
-    filepath: str | None = Field(None, description="Local media file path.")
-    content: str | None = Field(None, description="Base64-encoded media bytes (transport only).")
+    site = load_yaml_site(yaml_root)                          # SPEC_02 SSOT
 
-class AgentRunRequest(BaseModel):
-    """HTTP transport DTO for an agent run request.
+    # 1. Translate YAML -> Agno object lists (SPEC_01 factories).
+    agents = build_agents(site)
+    teams = build_teams(site)
+    workflows = build_workflows(site)
 
-    @ai-directive: this is an API-level DTO (request body), NOT the
-    AgentConfig SSOT from SPEC_02. When the request references an agent by
-    name, the resolved AgentConfig is loaded and validated against the
-    SPEC_02 schema. SPEC_17 imports these DTOs from this module.
+    # 2. Resolve the AgentOS-compatible DB (SPEC_03).
+    agentos_db = resolve_agentos_db(site)
 
-    Multimodal fields (images/audio/videos/files, send_media_to_model,
-    store_media) are OWNED by this DTO; they map to the Agno Agent.run()
-    kwargs of the same name (verified in agno/agent/agent.py v2.6.18).
-    See SPEC_17 for the multimodal pipeline (validation, storage, ToolResult).
-    """
-    input: str | Dict[str, Any] = Field(..., max_length=10000, description="Input for the agent")
-    session_id: str | None = Field(None, description="Existing session ID")
-    user_id: str = Field(..., description="User ID")
-    tenant_id: str = Field(..., description="Tenant ID")
-    stream: bool = Field(default=False, description="Streaming response")
-    max_iterations: int | None = Field(None, ge=1, le=100, description="Maximum iterations")
-    # Multimodal input (Agno native kwargs)
-    images: list[MediaInput] = Field(default_factory=list, description="Input images (Agno Image).")
-    audio: list[MediaInput] = Field(default_factory=list, description="Input audio (Agno Audio).")
-    videos: list[MediaInput] = Field(default_factory=list, description="Input videos (Agno Video).")
-    files: list[MediaInput] = Field(default_factory=list, description="Input files (Agno File).")
-    send_media_to_model: bool = Field(default=True, description="Send media to the model (Agno native kwarg).")
-    store_media: bool = Field(default=False, description="Persist media artifacts (Agno native kwarg).")
+    # 3. Hand everything to AgentOS and let IT mount the native routers.
+    agentos = AgentOS(
+        agents=agents,
+        teams=teams,
+        workflows=workflows,
+        db=agentos_db,
+        # Native MCP server carries run_agent/run_team/run_workflow over MCP
+        # (os/mcp.py:227-264). Enabled per site config; see §3.4.
+        enable_mcp_server=site.get("mcp", {}).get("enabled", False),
+    )
+    app = agentos.get_app()
 
-class AgentRunResponse(BaseModel):
-    """HTTP transport DTO for an agent run response.
+    # 4. Mount ONLY the genuine gaps (see §3) in AgentOS _add_router style.
+    app.include_router(get_readiness_router())
+    app.include_router(get_liveness_router())
+    app.include_router(get_ax_tools_router(agents, teams, workflows))
 
-    @ai-directive: API-level DTO (response body). SPEC_17 imports this DTO.
-    Multimodal output (images/videos/audio) maps to Agno's RunOutput media
-    fields (verified in agno/run/agent.py v2.6.18).
-    """
-    agent_name: str
-    session_id: str
-    result: Dict[str, Any]
-    iterations: int
-    duration_ms: float
-    tool_calls: list[Dict[str, Any]] = Field(default_factory=list)
-    # Multimodal output (Agno native RunOutput fields)
-    images: list[MediaInput] = Field(default_factory=list, description="Generated/returned images.")
-    audio: list[MediaInput] = Field(default_factory=list, description="Generated/returned audio.")
-    videos: list[MediaInput] = Field(default_factory=list, description="Generated/returned videos.")
+    # 5. Middleware: tenant scoping + rate limit (AgentOS has neither).
+    app.add_middleware(TenantScopeMiddleware)
+    app.add_middleware(RateLimitMiddleware)
 
-@router.post("/{name}/run", response_model=AgentRunResponse)
-async def run_agent(
-    name: str,
-    request: AgentRunRequest,
-    agent_service: AgentService = Depends()
-) -> AgentRunResponse:
-    """
-    Executes an agent resolved from its YAML config.
-
-    Raises:
-        404: Agent not found
-        400: Invalid input
-        500: Execution error
-    """
-    try:
-        result = await agent_service.run_agent(
-            agent_name=name,
-            user_input=request.input,
-            session_id=request.session_id,
-            user_id=request.user_id,
-            tenant_id=request.tenant_id,
-            stream=request.stream,
-            max_iterations=request.max_iterations
-        )
-        return result
-    
-    except AgentNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Agent not found: {name}")
-    except InvalidInputError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except AgentExecutionError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return app
 ```
 
-### 1.3 Health Check Endpoints
+> @ai-directive: the wiring MUST keep `AgentOS(...)` as the single source of execution. yaml-agno never instantiates its own run/session handlers; it only feeds and lightly extends AgentOS.
+
+---
+
+## 3. THE GENUINE GAPS yaml-agno ADDS (in AgentOS style)
+
+All routers below are FACTORIES returning `APIRouter`, mirroring `agno/os/routers/health.py:get_health_router` (`health.py:8`). Mounting uses `app.include_router(...)` (FastAPI standard; equivalent to AgentOS's internal `_add_router`).
+
+### 3.1 Readiness + Liveness routers (AgentOS ships only `GET /health`)
 
 ```python
-# yaml-agno/src/api/endpoints/health.py
+# yaml-agno/src/api/gaps/readiness.py
+"""Readiness and liveness routers, mirroring get_health_router structure.
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+AgentOS ships only a simple GET /health (health.py:8-13). yaml-agno adds
+DB-gated readiness (Kubernetes removes the pod from rotation when not ready)
+and a process liveness probe. Both are factory routers in the same style as
+agno/os/routers/health.py.
+"""
+
 from typing import Dict
 
-router = APIRouter(prefix="/health", tags=["health"])
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
-class HealthResponse(BaseModel):
-    """Health check response."""
-    status: str  # healthy|degraded|unhealthy
-    version: str
-    dependencies: Dict[str, str]
 
 class LivenessResponse(BaseModel):
-    """Liveness probe response."""
-    status: str  # alive|dead
+    """Liveness probe response (process alive?)."""
+
+    status: str = Field(..., description="alive | dead")
+
 
 class ReadinessResponse(BaseModel):
-    """Readiness probe response."""
-    status: str  # ready|not_ready
-    checks: Dict[str, bool]
+    """Readiness probe response (ready to receive traffic?)."""
 
-@router.get("/", response_model=HealthResponse)
-async def health() -> HealthResponse:
-    """General health check.
+    status: str = Field(..., description="ready | not_ready")
+    checks: Dict[str, bool] = Field(
+        default_factory=dict,
+        description="Per-dependency readiness. Only MANDATORY deps gate status.",
+    )
 
-    Lists only MANDATORY dependencies. Engram is an OPTIONAL external MCP
-    adapter and MUST NOT appear here; a missing Engram config does not make
-    the service unhealthy.
+
+def get_liveness_router(liveness_endpoint: str = "/health/liveness") -> APIRouter:
+    """Build the liveness router (factory, mirrors get_health_router).
+
+    Args:
+        liveness_endpoint: Path for the liveness probe.
+
+    Returns:
+        An APIRouter exposing the liveness probe.
     """
-    return HealthResponse(
-        status="healthy",
-        version="0.1.0-MVP",
-        dependencies={
-            "postgres": "connected",
+    router = APIRouter(tags=["Health"])
+
+    @router.get(
+        liveness_endpoint,
+        operation_id="liveness_check",
+        summary="Liveness Check",
+        response_model=LivenessResponse,
+    )
+    async def liveness_check() -> LivenessResponse:
+        """Return liveness; Kubernetes restarts the pod on failure."""
+        return LivenessResponse(status="alive")
+
+    return router
+
+
+def get_readiness_router(
+    readiness_endpoint: str = "/health/readiness",
+    db_dependency=None,
+) -> APIRouter:
+    """Build the readiness router (factory, mirrors get_health_router).
+
+    Args:
+        readiness_endpoint: Path for the readiness probe.
+        db_dependency: Callable resolving the AgentOS DB to ping.
+
+    Returns:
+        An APIRouter exposing the readiness probe.
+
+    @ai-directive: Only MANDATORY dependencies gate readiness. Engram is an
+    OPTIONAL external MCP adapter and MUST NOT appear in the check set;
+    a missing Engram config never flips status to not_ready. Per SPEC_04,
+    Engram is not part of yaml-agno's data model (canonical directive), so
+    a readiness probe MUST NOT depend on it.
+    """
+    router = APIRouter(tags=["Health"])
+
+    @router.get(
+        readiness_endpoint,
+        operation_id="readiness_check",
+        summary="Readiness Check",
+        response_model=ReadinessResponse,
+        responses={503: {"description": "Not ready"}},
+    )
+    async def readiness_check() -> ReadinessResponse:
+        """Return readiness; Kubernetes removes the pod from rotation when not ready."""
+        checks: Dict[str, bool] = {
+            "postgres": await _ping_postgres(db_dependency),
         }
-    )
+        mandatory_ready = all(checks.values())
+        # NOTE: no Engram key here. Optional deps are intentionally absent so
+        # they can never force not_ready.
+        return ReadinessResponse(
+            status="ready" if mandatory_ready else "not_ready",
+            checks=checks,
+        )
 
-@router.get("/liveness", response_model=LivenessResponse)
-async def liveness() -> LivenessResponse:
-    """
-    Liveness probe - is the process alive?
+    return router
 
-    Kubernetes uses this endpoint to restart the pod on failure.
-    """
-    return LivenessResponse(status="alive")
 
-@router.get("/readiness", response_model=ReadinessResponse)
-async def readiness() -> ReadinessResponse:
-    """
-    Readiness probe - is the service ready to receive traffic?
-
-    Kubernetes uses this endpoint to remove the pod from rotation when
-    not ready. Only MANDATORY dependencies gate readiness.
-
-    @ai-directive: Engram is an OPTIONAL external MCP adapter. Its check
-    MUST be skippable: if Engram is not configured, the probe skips it
-    (returns "skipped") and MUST NOT mark the service not_ready. Only
-    mandatory dependencies (e.g., postgres) can flip status to not_ready.
-    """
-    checks: Dict[str, bool] = {
-        "postgres": await check_postgres(),
-    }
-
-    # Optional, non-gating Engram check. Reported for observability only.
-    # @ai-directive: skipped/False here never forces not_ready.
-    if is_engram_configured():
-        checks["engram"] = await check_engram()
-    else:
-        checks["engram"] = False  # skipped, optional
-
-    mandatory_ready = checks["postgres"]
-    return ReadinessResponse(
-        status="ready" if mandatory_ready else "not_ready",
-        checks=checks
-    )
+async def _ping_postgres(db_dependency) -> bool:
+    """Ping the AgentOS DB. Returns True if reachable."""
+    # Implemented in SPEC_03 (DB session layer).
+    raise NotImplementedError("Wired in SPEC_03; see resolve_agentos_db.")
 ```
 
-### 1.4 Rate Limiting
+### 3.2 Rate-limit-by-tenant middleware (AgentOS has NONE)
+
+AgentOS ships no rate limiting (`grep ratelimit|throttle|slowapi` in `os/` = 0 hits). yaml-agno adds a FastAPI middleware keyed on `tenant_id`. It runs BEFORE the native run endpoints, so it protects `POST /agents/{agent_id}/runs`, `POST /teams/{team_id}/runs`, and `POST /workflows/{workflow_id}/runs` without yaml-agno owning those routes.
 
 ```python
 # yaml-agno/src/api/middleware/rate_limit.py
+"""Rate-limit middleware keyed on tenant_id (+ client IP fallback).
 
-from fastapi import Request, HTTPException
-from typing import Dict
+AgentOS ships no rate limiting. This middleware protects every mounted
+native router by running on the request before AgentOS handlers see it.
+"""
+
 import time
+from typing import Dict, Tuple
 
-class RateLimiter:
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Token-bucket rate limit per tenant and per client IP.
+
+    Attributes:
+        tenant_buckets: tenant_id -> (window_start, count).
+        ip_buckets: client_ip -> (window_start, count).
+        tenant_limit: Max requests per window per tenant.
+        ip_limit: Max requests per window per IP.
+        window: Window size in seconds.
     """
-    Rate limiter by tenant and IP.
 
-    Limits:
-    - Per tenant: 100 requests/minute
-    - Per IP: 20 requests/minute
-    """
-
-    def __init__(self):
-        # tenant_id -> {timestamp, count}
-        self.tenant_buckets: Dict[str, Dict[str, int]] = {}
-        # ip -> {timestamp, count}
-        self.ip_buckets: Dict[str, Dict[str, int]] = {}
-
-        self.tenant_limit = 100  # requests per minute
-        self.ip_limit = 20  # requests per minute
-        self.window = 60  # seconds
-
-    async def check_rate_limit(
+    def __init__(
         self,
-        tenant_id: str,
-        client_ip: str
+        app,
+        tenant_limit: int = 100,
+        ip_limit: int = 20,
+        window: int = 60,
     ) -> None:
-        """
-        Checks rate limits.
+        """Initialize the middleware with per-tenant and per-IP limits.
 
-        Raises:
-            HTTPException: 429 Too Many Requests
+        Args:
+            app: The ASGI app (passed by add_middleware).
+            tenant_limit: Max requests per window per tenant.
+            ip_limit: Max requests per window per IP.
+            window: Window size in seconds.
         """
+        super().__init__(app)
+        self.tenant_buckets: Dict[str, Tuple[int, int]] = {}
+        self.ip_buckets: Dict[str, Tuple[int, int]] = {}
+        self.tenant_limit = tenant_limit
+        self.ip_limit = ip_limit
+        self.window = window
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        """Apply tenant + IP limits; return 429 on breach.
+
+        Args:
+            request: Incoming request (tenant_id resolved by TenantScopeMiddleware).
+            call_next: Next ASGI handler.
+
+        Returns:
+            The downstream response, or 429 JSON on rate-limit breach.
+        """
+        tenant_id = getattr(request.state, "tenant_id", None) or "anonymous"
+        client_ip = request.client.host if request.client else "unknown"
         now = int(time.time())
 
-        # Check tenant limit
-        if not self._check_bucket(self.tenant_buckets, tenant_id, now, self.tenant_limit):
-            raise HTTPException(
+        if not self._allow(self.tenant_buckets, tenant_id, now, self.tenant_limit):
+            return JSONResponse(
                 status_code=429,
-                detail=f"Tenant rate limit exceeded: {self.tenant_limit} req/min"
+                content={"detail": f"Tenant rate limit exceeded: {self.tenant_limit} req/{self.window}s"},
             )
-
-        # Check IP limit
-        if not self._check_bucket(self.ip_buckets, client_ip, now, self.ip_limit):
-            raise HTTPException(
+        if not self._allow(self.ip_buckets, client_ip, now, self.ip_limit):
+            return JSONResponse(
                 status_code=429,
-                detail=f"IP rate limit exceeded: {self.ip_limit} req/min"
+                content={"detail": f"IP rate limit exceeded: {self.ip_limit} req/{self.window}s"},
             )
+        return await call_next(request)
 
-    def _check_bucket(
+    def _allow(
         self,
-        buckets: Dict[str, Dict[str, int]],
+        buckets: Dict[str, Tuple[int, int]],
         key: str,
         now: int,
-        limit: int
+        limit: int,
     ) -> bool:
-        """Checks whether the bucket allows the request."""
-        if key not in buckets:
-            buckets[key] = {"timestamp": now, "count": 0}
-
-        bucket = buckets[key]
-
-        # Reset if the window has expired
-        if now - bucket["timestamp"] >= self.window:
-            bucket = {"timestamp": now, "count": 0}
-            buckets[key] = bucket
-
-        # Check limit
-        if bucket["count"] >= limit:
+        """Return True if the bucket allows one more request."""
+        window_start, count = buckets.get(key, (now, 0))
+        if now - window_start >= self.window:
+            window_start, count = now, 0
+        if count >= limit:
+            buckets[key] = (window_start, count)
             return False
-
-        bucket["count"] += 1
+        buckets[key] = (window_start, count + 1)
         return True
 ```
 
+### 3.3 Tenant scoping middleware (`tenant_id` -> `request.state.user_id`)
+
+`tenant_id` does NOT exist in any native AgentOS endpoint; only `user_id` / `session_id` do. AgentOS honours `request.state.user_id` for scoping (`agents/router.py:616`, `teams/router.py:588`). yaml-agno resolves `tenant_id` from the request (header or token) and stamps `request.state.user_id` so native routers scope correctly.
+
+> @ai-directive: this middleware ONLY resolves `tenant_id` and sets `request.state.user_id` (Agno's native key). It does NOT add Postgres RLS, does NOT auto-scope, and does NOT mutate `agno_*` rows. Per SPEC_03 §5 and SPEC_04 §3.3: tenant isolation is **explicit** via WHERE filters on `yamlagno_*` config rows only; `tenant_id` is NEVER added to `agno_*` tables; isolation is app-layer filters + contextvar telemetry, NOT RLS. The middleware's sole job is to translate yaml-agno's `tenant_id` into Agno's native `user_id` key.
+
+```python
+# yaml-agno/src/api/middleware/tenant_scope.py
+"""Tenant scoping middleware: resolve tenant_id -> request.state.user_id.
+
+AgentOS has no tenant_id concept; it scopes native runs on request.state.user_id
+(agents/router.py:616, teams/router.py:588). This middleware performs ONLY that
+translation. It adds NO RLS and NO auto-scope (SPEC_03 §5, SPEC_04 §3.3).
+"""
+
+from typing import Optional
+
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from yaml_agno.tenant.resolver import TenantResolver  # SPEC_03 Core Infra
+
+
+class TenantScopeMiddleware(BaseHTTPMiddleware):
+    """Resolve tenant_id and stamp request.state.user_id (Agno native key).
+
+    @ai-directive: tenant_id is resolved EXPLICITLY (Core Infra TenantResolver,
+    SPEC_03). The resolved value is set on request.state.user_id ONLY. The
+    middleware MUST NOT open a DB session, MUST NOT add a tenant_id column to
+    agno_* tables, and MUST NOT apply RLS. Tenant isolation of yaml-agno's OWN
+    config rows is handled by explicit WHERE filters in the config repositories
+    (SPEC_03), not here.
+    """
+
+    def __init__(self, app, tenant_resolver: Optional[TenantResolver] = None) -> None:
+        """Initialize with an optional TenantResolver (defaults to Core Infra)."""
+        super().__init__(app)
+        self.resolver = tenant_resolver or TenantResolver()
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        """Resolve tenant_id and set request.state.user_id for native routers.
+
+        Args:
+            request: Incoming request; may carry X-Tenant-Id or an auth claim.
+            call_next: Next ASGI handler.
+
+        Returns:
+            The downstream response. Native AgentOS handlers read
+            request.state.user_id for scoping.
+        """
+        tenant_id = self.resolver.resolve(request)  # SPEC_03 Core Infra
+        if tenant_id is not None:
+            # Agno's native scoping key. Native routers honour this value.
+            request.state.user_id = str(tenant_id)
+            request.state.tenant_id = str(tenant_id)  # yaml-agno audit metadata only
+        return await call_next(request)
+```
+
+### 3.4 AX REST discovery (`GET /ax/tools`)
+
+`run_agent` / `run_team` / `run_workflow` exist ONLY over MCP (`os/mcp.py:227-264`, enabled by `enable_mcp_server=True`). There is NO REST JSON-schema discovery endpoint. yaml-agno adds a thin `GET /ax/tools` publishing function-calling schemas derived from the resolved YAML objects, so REST clients can discover callable tools without enabling the MCP server.
+
+> @ai-directive: this is a READ-ONLY discovery surface. It publishes function-calling schemas; it does NOT execute. Execution stays on the native AgentOS run endpoints (§1) or MCP. Keep this router minimal.
+
+```python
+# yaml-agno/src/api/gaps/ax_tools.py
+"""Thin AX discovery router: publishes function-calling schemas.
+
+AgentOS exposes run_agent/run_team/run_workflow ONLY over MCP
+(os/mcp.py:227-264). This router adds a REST JSON-schema discovery surface so
+clients can list callable YAML-defined tools without enabling the MCP server.
+It is read-only and does NOT execute.
+"""
+
+from typing import Any, Dict, List
+
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
+
+
+class AXToolSchema(BaseModel):
+    """Function-calling schema for one discoverable tool."""
+
+    name: str = Field(..., description="Tool name (e.g. run_agent).")
+    description: str = Field("", description="Human-readable description.")
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="JSON-schema parameters object.",
+    )
+
+
+class AXToolsResponse(BaseModel):
+    """Response model for GET /ax/tools."""
+
+    tools: List[AXToolSchema] = Field(
+        default_factory=list,
+        description="Discoverable function-calling schemas.",
+    )
+
+
+def get_ax_tools_router(agents, teams, workflows, endpoint: str = "/ax/tools") -> APIRouter:
+    """Build the AX discovery router (factory, mirrors get_health_router style).
+
+    Args:
+        agents: Resolved Agent objects (from §2 wiring).
+        teams: Resolved Team objects.
+        workflows: Resolved Workflow objects.
+        endpoint: Path for the discovery surface.
+
+    Returns:
+        An APIRouter exposing GET /ax/tools.
+    """
+    router = APIRouter(tags=["AX"])
+
+    @router.get(
+        endpoint,
+        operation_id="list_ax_tools",
+        summary="List AX Function-Calling Schemas",
+        response_model=AXToolsResponse,
+    )
+    async def list_ax_tools() -> AXToolsResponse:
+        """Publish function-calling schemas derived from the resolved YAML objects."""
+        tools: List[AXToolSchema] = []
+        # run_agent / run_team / run_workflow mirror the MCP tool surface
+        # (os/mcp.py:227-264) so REST clients see the same callable names.
+        tools.append(AXToolSchema(
+            name="run_agent",
+            description="Execute an agent via the native POST /agents/{agent_id}/runs endpoint.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "description": "Resolved agent ID."},
+                    "input": {"type": "string", "description": "Prompt input."},
+                    "user_id": {"type": "string", "description": "Agno user_id (scoped by TenantScopeMiddleware)."},
+                },
+                "required": ["agent_id", "input", "user_id"],
+            },
+        ))
+        return AXToolsResponse(tools=tools)
+
+    return router
+```
+
+The JSON-schema shapes mirror the MCP tool surface (`os/mcp.py:227-264`) so REST and MCP clients see the same callable names. Clients then execute via the native AgentOS run endpoints (§1) — yaml-agno does not provide an AX execution path.
+
 ---
 
-## 2. AX FUNCTION CALLING (JSON SCHEMAS)
+## 4. BEHAVIOR DELTA - BDD SCENARIOS
 
-### 2.1 AX Profile para Agent Creation
+### 4.1 Acceptance Scenarios
 
-```json
-{
-  "name": "create_agent",
-  "description": "Creates a new agent configuration from YAML",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "tenant_id": {
-        "type": "string",
-        "description": "UUID of the tenant"
-      },
-      "name": {
-        "type": "string",
-        "description": "Agent name (unique per tenant)"
-      },
-      "model": {
-        "type": "string",
-        "description": "Model ID (e.g., openai/gpt-4o)"
-      },
-      "instructions": {
-        "type": "string",
-        "description": "System prompt for the agent"
-      },
-      "tools": {
-        "type": "array",
-        "items": {"type": "object"},
-        "description": "List of tool configurations"
-      }
-    },
-    "required": ["tenant_id", "name", "model"]
-  }
-}
-```
-
-### 2.2 AX Profile para Agent Execution
-
-```json
-{
-  "name": "run_agent",
-  "description": "Executes an agent and returns the result",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "agent_name": {
-        "type": "string",
-        "description": "Name of the agent to execute"
-      },
-      "input": {
-        "oneOf": [
-          {"type": "string"},
-          {"type": "object"}
-        ],
-        "description": "Input for the agent (text or structured)"
-      },
-      "session_id": {
-        "type": "string",
-        "description": "Optional session ID for continuity"
-      },
-      "user_id": {
-        "type": "string",
-        "description": "User ID executing the agent"
-      }
-    },
-    "required": ["agent_name", "input", "user_id"]
-  }
-}
-```
-
-### 2.3 AX Profile para Team Execution
-
-```json
-{
-  "name": "run_team",
-  "description": "Executes a team of agents and returns the result",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "team_name": {
-        "type": "string",
-        "description": "Name of the team to execute"
-      },
-      "input": {
-        "type": "object",
-        "description": "Input for the team"
-      },
-      "user_id": {
-        "type": "string",
-        "description": "User ID executing the team"
-      }
-    },
-    "required": ["team_name", "input", "user_id"]
-  }
-}
-```
-
----
-
-## 3. BEHAVIOR DELTA - BDD SCENARIOS
-
-### 3.1 Acceptance Scenarios
-
-#### Scenario 1: Golden Path - Agent Execution via API
+#### Scenario 1: Wiring produces a mounted AgentOS app with native /run working
 
 ```gherkin
-GIVEN an agent configuration exists
-AND the agent is active
-WHEN POST /api/v1/agents/my_agent/run is called
-AND the request body contains valid input
-THEN the response status is 200
-AND the response contains result from the agent
-AND the session_id is returned
-AND the duration_ms is populated
+GIVEN a YAML site with one agent definition
+WHEN build_app(yaml_root) is called
+THEN the returned FastAPI app includes the native route POST /agents/{agent_id}/runs
+AND the app includes the native route GET /health
+AND the app includes yaml-agno's GET /health/readiness
+AND the app includes yaml-agno's GET /ax/tools
+AND no yaml-agno-owned /run route exists in the app's router list
 ```
 
-#### Scenario 2: Error Case - Agent Not Found
-
-```gherkin
-GIVEN an agent configuration does NOT exist
-WHEN POST /api/v1/agents/nonexistent/run is called
-THEN the response status is 404
-AND the error message mentions "Agent not found"
-```
-
-#### Scenario 3: Golden Path - Health Check
+#### Scenario 2: Readiness gates on the DB
 
 ```gherkin
 GIVEN the service is running
-AND all dependencies are connected
-WHEN GET /health is called
+AND PostgreSQL is reachable
+WHEN GET /health/readiness is called
 THEN the response status is 200
-AND the status field is "healthy"
-AND all dependencies show "connected"
-```
+AND the status field is "ready"
+AND checks.postgres is true
+AND there is NO engram key in checks
 
-#### Scenario 4: Error Case - Readiness Fails
-
-```gherkin
 GIVEN the service is running
 BUT PostgreSQL is disconnected
 WHEN GET /health/readiness is called
 THEN the response status is 503
 AND the status field is "not_ready"
-AND the checks.postgres is false
+AND checks.postgres is false
+```
+
+#### Scenario 3: Tenant middleware scopes a native run
+
+```gherkin
+GIVEN a request carries header X-Tenant-Id: tenant_42
+WHEN the TenantScopeMiddleware resolves the request
+THEN request.state.user_id is set to "tenant_42"
+AND request.state.tenant_id is set to "tenant_42"
+AND no RLS policy is applied to agno_* tables
+AND the downstream native POST /agents/{agent_id}/runs handler sees request.state.user_id == "tenant_42"
+```
+
+#### Scenario 4: Rate limit protects native runs
+
+```gherkin
+GIVEN tenant tenant_42 has a limit of 100 requests per 60 seconds
+WHEN the 101st request from tenant_42 arrives at POST /agents/{agent_id}/runs
+THEN the response status is 429
+AND the response detail mentions "Tenant rate limit exceeded"
+```
+
+#### Scenario 5: AX discovery returns schemas
+
+```gherkin
+GIVEN the app is built from a YAML site defining agents
+WHEN GET /ax/tools is called
+THEN the response status is 200
+AND the response contains a tool named "run_agent"
+AND that tool's parameters reference agent_id and user_id
+AND the endpoint does NOT execute any agent
+```
+
+#### Scenario 6: Wire contract is native (no invented JSON/{name})
+
+```gherkin
+GIVEN the mounted native AgentOS app
+WHEN a client calls POST /agents/{agent_id}/runs
+THEN the request content-type is multipart/form-data
+AND the path uses {agent_id} (NOT {name})
+AND yaml-agno exposes NO POST /agents/{name}/run JSON endpoint
 ```
 
 ---
 
-## 4. TDD MICRO-TASK EXECUTION PROTOCOL
+## 5. TDD MICRO-TASK EXECUTION PROTOCOL
 
-### 4.1 Cascading Task Checklist
+### 5.1 Cascading Task Checklist
 
-#### TASK_001: Define AgentRunRequest Model
+#### TASK_001: Implement YAML -> AgentOS wiring
 
-- **File**: `yaml-agno/src/api/models/agents.py`
-- **Test**: `tests/unit/api/test_agent_models.py`
+- **File**: `yaml-agno/src/wiring/build_app.py`
+- **Test**: `tests/integration/wiring/test_build_app.py`
 - **RED**:
   ```python
-  def test_agent_run_request_validation():
-      req = AgentRunRequest(
-          input="test input",
-          user_id="user1",
-          tenant_id="tenant1"
-      )
-      assert req.input == "test input"
+  async def test_build_app_mounts_native_run_route(tmp_yaml_site):
+      app = build_app(tmp_yaml_site)
+      routes = {r.path for r in app.routes}
+      assert "/agents/{agent_id}/runs" in routes
+      assert "/health" in routes
+
+  async def test_build_app_has_no_yamlagno_owned_run_route(tmp_yaml_site):
+      app = build_app(tmp_yaml_site)
+      routes = {r.path for r in app.routes}
+      assert "/api/v1/agents/{name}/run" not in routes
   ```
-- **GREEN**: Implement `AgentRunRequest` with Pydantic
-- **Commit**: `feat: add AgentRunRequest model`
+- **GREEN**: Implement `build_app()` calling `AgentOS(...).get_app()` and mounting the gap routers.
+- **Commit**: `feat: wire YAML into AgentOS app with native routers`
 
-#### TASK_002: Define AgentRunResponse Model
+#### TASK_002: Implement readiness + liveness routers (factory style)
 
-- **File**: `yaml-agno/src/api/models/agents.py`
-- **Test**: `tests/unit/api/test_agent_models.py`
+- **File**: `yaml-agno/src/api/gaps/readiness.py`
+- **Test**: `tests/integration/api/test_readiness.py`
 - **RED**:
   ```python
-  def test_agent_run_response_validation():
-      resp = AgentRunResponse(
-          agent_name="test",
-          session_id="s1",
-          result={"output": "test"},
-          iterations=1,
-          duration_ms=100.5
-      )
-      assert resp.agent_name == "test"
+  async def test_liveness_returns_alive(client):
+      resp = await client.get("/health/liveness")
+      assert resp.status_code == 200
+      assert resp.json()["status"] == "alive"
+
+  async def test_readiness_has_no_engram_key(client):
+      resp = await client.get("/health/readiness")
+      data = resp.json()
+      assert "engram" not in data["checks"]
   ```
-- **GREEN**: Implement `AgentRunResponse` with Pydantic
-- **Commit**: `feat: add AgentRunResponse model`
+- **GREEN**: Implement `get_readiness_router` / `get_liveness_router` factories.
+- **Commit**: `feat: add readiness and liveness factory routers`
 
-#### TASK_003: Implement Run Agent Endpoint
+#### TASK_003: Implement rate-limit-by-tenant middleware
 
-- **File**: `yaml-agno/src/api/endpoints/agents.py`
-- **Test**: `tests/integration/api/test_agent_endpoints.py`
+- **File**: `yaml-agno/src/api/middleware/rate_limit.py`
+- **Test**: `tests/unit/api/middleware/test_rate_limit.py`
 - **RED**:
   ```python
-  async def test_run_agent_endpoint(client, agent_service):
-      response = await client.post(
-          "/api/v1/agents/test/run",
-          json={
-              "input": "test",
-              "user_id": "user1",
-              "tenant_id": "tenant1"
-          }
-      )
-      assert response.status_code == 200
+  async def test_rate_limit_429_after_breach(app_with_rate_limit):
+      client = app_with_rate_limit(tenant_limit=2)
+      await client.get("/health", headers={"X-Tenant-Id": "t1"})
+      await client.get("/health", headers={"X-Tenant-Id": "t1"})
+      resp = await client.get("/health", headers={"X-Tenant-Id": "t1"})
+      assert resp.status_code == 429
   ```
-- **GREEN**: Implement `run_agent()` endpoint
-- **Commit**: `feat: add run agent endpoint`
+- **GREEN**: Implement `RateLimitMiddleware` (token bucket per tenant + IP).
+- **Commit**: `feat: add rate-limit-by-tenant middleware`
 
-#### TASK_004: Implement Health Check Endpoint
+#### TASK_004: Implement tenant scoping middleware
 
-- **File**: `yaml-agno/src/api/endpoints/health.py`
-- **Test**: `tests/integration/api/test_health_endpoints.py`
+- **File**: `yaml-agno/src/api/middleware/tenant_scope.py`
+- **Test**: `tests/unit/api/middleware/test_tenant_scope.py`
 - **RED**:
   ```python
-  async def test_health_endpoint(client):
-      response = await client.get("/health")
-      assert response.status_code == 200
-      data = response.json()
-      assert data["status"] == "healthy"
+  async def test_tenant_scope_sets_user_id(app_with_tenant_scope):
+      client = app_with_tenant_scope()
+      await client.get("/health", headers={"X-Tenant-Id": "tenant_42"})
+      # request.state.user_id must be "tenant_42" for native routers
+      # (verified via a spy handler that reads request.state.user_id).
   ```
-- **GREEN**: Implement `health()` endpoint
-- **Commit**: `feat: add health check endpoint`
+- **GREEN**: Implement `TenantScopeMiddleware` (resolve tenant_id -> `request.state.user_id`; NO RLS).
+- **Commit**: `feat: add tenant scope middleware (tenant_id -> request.state.user_id)`
 
-#### TASK_005: Implement Readiness Probe
+#### TASK_005: Implement AX discovery router
 
-- **File**: `yaml-agno/src/api/endpoints/health.py`
-- **Test**: `tests/integration/api/test_health_endpoints.py`
+- **File**: `yaml-agno/src/api/gaps/ax_tools.py`
+- **Test**: `tests/integration/api/test_ax_tools.py`
 - **RED**:
   ```python
-  async def test_readiness_endpoint(client):
-      response = await client.get("/health/readiness")
-      assert response.status_code == 200
-      data = response.json()
-      assert "status" in data
-      assert "checks" in data
+  async def test_ax_tools_lists_run_agent(client):
+      resp = await client.get("/ax/tools")
+      assert resp.status_code == 200
+      names = [t["name"] for t in resp.json()["tools"]]
+      assert "run_agent" in names
+
+  async def test_ax_tools_does_not_execute(client):
+      resp = await client.get("/ax/tools")
+      # read-only: no agent run side effects
+      assert resp.status_code == 200
   ```
-- **GREEN**: Implement `readiness()` endpoint
-- **Commit**: `feat: add readiness probe`
+- **GREEN**: Implement `get_ax_tools_router` factory publishing function-calling schemas.
+- **Commit**: `feat: add AX REST discovery router (GET /ax/tools)`
 
-#### TASK_006: Define AX Schemas
+#### TASK_006: Document native wire contract (no JSON/{name})
 
-- **File**: `yaml-agno/src/api/ax/schemas.py`
-- **Test**: `tests/unit/api/test_ax_schemas.py`
+- **File**: `yaml-agno/docs/api_contract.md`
+- **Test**: `tests/contract/test_native_wire_contract.py`
 - **RED**:
   ```python
-  def test_create_agent_ax_schema():
-      schema = get_ax_schema("create_agent")
-      assert schema["name"] == "create_agent"
-      assert "parameters" in schema
+  def test_native_run_endpoint_is_multipart_form():
+      # Asserts the mounted route expects multipart/form-data, not JSON,
+      # and uses {agent_id}, not {name}.
+      app = build_app(tmp_yaml_site)
+      run_route = next(r for r in app.routes if r.path.endswith("/agents/{agent_id}/runs"))
+      assert "multipart/form-data" in str(run_route.body_field)
   ```
-- **GREEN**: Implement `get_ax_schema()` function
-- **Commit**: `feat: add AX schema definitions`
+- **GREEN**: Document the multipart/{id} contract; assert no invented JSON/{name} shim.
+- **Commit**: `docs: document native AgentOS multipart/{id} wire contract`
+
+#### TASK_007: Verify yaml-agno defines NO own /run, /sessions, or /agents config routes
+
+- **File**: `tests/contract/test_no_duplicate_routes.py`
+- **RED**:
+  ```python
+  def test_yamlagno_has_no_owned_run_or_sessions_router():
+      app = build_app(tmp_yaml_site)
+      paths = {r.path for r in app.routes}
+      # These are native AgentOS routes; yaml-agno MUST NOT own a parallel one.
+      forbidden_yamlagno_owned = {
+          "/api/v1/agents/{name}/run",
+          "/api/v1/sessions/{id}",
+          "/api/v1/agents/{name}",
+      }
+      assert forbidden_yamlagno_owned.isdisjoint(paths)
+  ```
+- **GREEN**: Confirm all execution routes come from `AgentOS.get_app()`; no yaml-agno duplicate.
+- **Commit**: `test: assert no yaml-agno-owned duplicate execution routes`
 
 ---
 
-## 5. SUPUESTOS TÉCNICOS ADOPTADOS
+## 6. STRATEGIC QUESTIONS (RESOLVED)
 
-### [Decision 1] FastAPI for REST API
-
-**Justificación**:
-- Soporte nativo para async/await
-- Validación automática con Pydantic
-- OpenAPI schema generation
-- WebSocket support para streaming
-
-### [Decision 2] Liveness vs Readiness Separation
-
-**Justificación**:
-- **Liveness**: Proceso vivo (siempre true si running)
-- **Readiness**: Listo para tráfico (depende de dependencies)
-- Kubernetes necesita ambos para rolling updates
-
-### [Decision 3] AX Schemas for Function Calling
-
-**Justificación**:
-- Estándar de facto para AI function calling
-- Compatible con OpenAI, Anthropic, Google
-- Permite discovery de tools vía API
-
----
-
-## 6. STRATEGIC CALIBRATION QUESTIONS
-
-### [Pregunta 1] Streaming Response
+### [Pregunta 1] Streaming Response — RESUELTO: nativo (no rebuild)
 
 **¿El endpoint /run debe soportar Server-Sent Events (SSE) para streaming?**
 
-Implica:
-- **Sí**: Mejor UX para respuestas largas, más complejidad
-- **No**: Más simple, polling alternativo
-- **Trade-off**: UX vs complejidad de implementación
+**Resolución**: AgentOS YA hace streaming nativamente en `POST /agents/{agent_id}/runs` (SSE resume, background runs, checkpoints, fork, continue, cancel). yaml-agno NO reconstruye streaming; monta el endpoint nativo vía `get_app()`. Reconstruirlo sería duplicar ~1744 líneas de `agents/router.py` y romper la semántica nativa de upload/SSE.
 
-### [Pregunta 2] Rate Limiting
+### [Pregunta 2] Rate Limiting — RESUELTO: SÍ, yaml-agno lo agrega (gap)
 
 **¿Debería haber rate limiting por tenant/user en los endpoints?**
 
-Implica:
-- **Sí**: Previene abuso, requiere infra adicional
-- **No**: Más simple, deja rate limiting a gateway
-- **Trade-off**: Security vs simplicidad
+**Resolución**: SÍ. AgentOS no trae nada de rate limiting (`grep` en `os/` = 0 hits). yaml-agno agrega `RateLimitMiddleware` (§3.2) como un middleware FastAPI estándar keyed en `tenant_id`, que protege TODOS los routers nativos montados sin que yaml-agno los posea. Es un gap genuino.
 
-### [Pregunta 3] API Versioning
+### [Pregunta 3] API Versioning — RESUELTO: defer a las convenciones nativas de AgentOS
 
 **¿Estrategia de versioning: /api/v1/ vs Accept header?**
 
-Implica:
-- **URL versioning**: Más explícito, breaking changes obvios
-- **Header versioning**: URLs más limpias, menos visible
-- **Trade-off**: Claridad vs limpieza
+**Resolución**: yaml-agno NO introduce su propio namespace `/api/v1/`. Monta los routers nativos de AgentOS tal cual (`POST /agents/{agent_id}/runs`, etc.), que siguen las convenciones de ruteo de Agno. Inventar un prefijo `/api/v1/` own crearía un shim de re-ruteo innecesario y rompería la fidelidad al sistema. Los gaps propios (readiness, AX tools) se montan sin prefijo de versión, siguiendo el mismo estilo de AgentOS (p. ej. `GET /health` no lleva versión).
 
 ---
 
