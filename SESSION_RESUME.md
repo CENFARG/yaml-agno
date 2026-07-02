@@ -6,8 +6,9 @@
 > cuando el proyecto avance a implementación.
 
 **Última actualización**: 2026-07-02
-**HEAD git**: `57e8347` (rama `feature/specs-agno-coverage-10-25`, 73 commits)
+**HEAD git**: `6d6c574` (rama `feature/specs-agno-coverage-10-25`, 76 commits)
 **Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
+**user_id UNIFICADO**: composite `{tenant_id}:{principal_id}` SIEMPRE; `resolve_user_id()` (SPEC_04) es el único resolver; `TenantContextMiddleware` (SPEC_06) delega. Workflows autónomos también cubiertos por tenant isolation.
 
 ---
 
@@ -80,7 +81,7 @@ Todos en `specs/SPEC_*.md`. Versiones:
 - **SPEC_19**: 0.2.0-iter3 (colateral) — refs cruzadas a SPEC_06 actualizadas (RateLimitMiddleware §4.2, readiness §4.1, user_isolation nativo).
 - **SPEC_01, 06, 13, 16**: bump factual v2.6.14→v2.6.18.
 - **SPEC_08**: 0.2.0-iter6 — catálogo realineado a SPEC_06 iter4 (YamlAgentOS subclass tasks S06-T01..T08).
-- **SPEC_07**: 0.3.0-iter2 — **reescrita**: NO hay frontend propio en MVP. MVP usa SaaS Free de Agno (os.agno.com, $0, data local). POST-MVP = fork de `agent-ui` (MIT, oficial Agno, Next.js) extendido con vistas yaml-agno (YAML editor multi-tenant, plantillas, billing) para whitelabel self-hosted.
+- **SPEC_07**: 0.4.0-iter3 — UI: SaaS Free (MVP) + fork agent-ui MIT (POST-MVP). §2.2 prácticas deploy seguro obligatorias (no-root, JWT refuse-to-start, SecretManager, .env/.env.production, network isolation, Trivy). §2.3 cherry-pick agent-platform-railway (Apache-2.0): reusar Docker/JWT/Postgres/Railway, RECHAZAR modelo chat-centric (yaml-agno = autónomos/flujos). §3.2 versiones siguen upstream agent-ui.
 - **SPEC_17, 18, 23**: 0.2.0-iter2 — corregidas por impacto de SPEC_03.
 - **SPEC_05–16, 19–22, 24–32**: 0.2.0-iter1 — corregidas en ronda masiva.
 - **SPEC_26–32**: nuevos (A2A, Tracing, Reasoning, Workflow-HITL, Skills, Culture, Registry).
