@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_07"
 Title: "Dashboard Architecture - UI Strategy: Playground and agent-ui"
-Version: "0.3.0-iter2"
+Version: "0.4.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#UI", "#Playground", "#agent-ui", "#Strategy"]
 Dependency_Hashes: ["SPEC_00", "SPEC_06"]
 Last_Updated: "2026-07-02"
-Revision_Note: "iter2 rewrite: drop the custom React dashboard. yaml-agno builds NO frontend in the MVP; it consumes Agno's hosted Playground (Free SaaS) for MVP and forks the official MIT agent-ui for a whitelabel UI POST-MVP. The old plan duplicated agent-ui and called the eliminated /api/v1/agents/{name}/run endpoints. Follow-up: replaced an invalid `python -m grep` placeholder in TASK_002 with a real pathlib-based source scan."
+Revision_Note: "iter3 (user corrections 1/3 + agent-platform-railway). Added §2.2 'Despliegue seguro' (obligatory practices: no-root container, JWT refuse-to-start, SecretManager for secrets, .env/.env.production split, network isolation, backend sanitization, image scanning) — Docker alone is NOT enough. Added §2.3 cherry-pick of agent-platform-railway (Apache-2.0, official Agno): reuse its Docker/JWT/Postgres/Railway infra but REJECT its chat-centric model because yaml-agno targets autonomous agents/teams/workflows. §3.2 added versioning directive: follow agent-ui upstream versions (Next 15 line); do not pin below upstream. iter2 content stands otherwise."
 ---
 
 # SPEC_07_DASHBOARD_ARCHITECTURE
@@ -72,6 +72,38 @@ def serve(host: str = "0.0.0.0", port: int = 7777) -> None:
     app.serve(host=host, port=port)  # prints the Playground link
 ```
 
+### 2.2 Despliegue seguro — prácticas obligatorias (no solo `docker run`)
+
+@ai-directive: Levantar el servidor con un comando simple (`serve()` o `docker compose up`) **NO es suficiente** para producción. Docker por sí solo no garantiza seguridad. Estas prácticas son OBLIGATORIAS para cualquier despliegue de yaml-agno (y de todo software que despleguemos), y se validan en SPEC_19 (Security) y SPEC_20 (Docker):
+
+- **No-root**: el contenedor NUNCA corre como `root`. Se crea un usuario sin privilegios con acceso únicamente a su carpeta de trabajo (`USER nonroot` + `WORKDIR /app`). Es la directiva general: ninguna cuenta de despliegue es root.
+- **Auth on por defecto (refuse-to-start)**: producción debe arrancar con autorización JWT activa. Si no hay `JWT_VERIFICATION_KEY` / `JWT_JWKS_FILE` configurado, el servidor **se niega a servir tráfico** (safe default "refuse to start"). yaml-agno hereda este comportamiento de AgentOS (`authorization=True`).
+- **Secrets fuera del env plano**: `OPENAI_API_KEY`, `JWT_VERIFICATION_KEY`, DB credentials se cargan vía `core-cenf-py` `SecretManager` (o el gestor de secretos del entorno: Google Secret Manager, etc.), NUNCA commiteadas ni expuestas como `os.environ` directo en código.
+- **`.env` vs `.env.production` separados**: claves distintas local vs prod (diferentes API keys, credenciales solo-prod, workspaces distintos). `.env.production` está gitignored.
+- **Mínimos privilegios + network isolation**: el servicio habla solo con su Postgres en una red privada; no expone puertos innecesarios; el tráfico pasa por un reverse proxy (TLS termination, headers de seguridad).
+- **Sanitización/validación backend**: toda API y JSON se validan en backend antes de procesar (regla global, ver SPEC_06 §1.3).
+- **Imágenes escaneadas**: CI escanea la imagen con Trivy y bloquea el push si hay vulnerabilidades HIGH/CRITICAL sin fijar (SPEC_20/SPEC_22).
+
+@ai-directive: Las mejores prácticas de deploy evolucionan; este checklist es la base. Cuando corrijas SPEC_19/20/22, re-validar estas prácticas contra el SOTA de hardening de contenedores (CIS Docker Benchmark, distroless images, read-only filesystem, drop ALL capabilities).
+
+### 2.3 Cherry-pick de `agent-platform-railway` (Apache-2.0, oficial Agno)
+
+`agno-agi/agent-platform-railway` (Apache-2.0, Python) es la plataforma de referencia oficial de Agno para levantar AgentOS en producción segura. yaml-agno **toma selectivamente** lo que aporta valor y **descarta** lo que no aplica:
+
+| Tomar de agent-platform-railway | Por qué |
+|--------------------------------|---------|
+| Docker Compose local + scripts de deploy Railway (Postgres + app en red privada) | Infra probada, no hay que inventarla |
+| JWT "refuse-to-start" sin `JWT_VERIFICATION_KEY` | Safe default de seguridad (§2.2) |
+| Separación `.env` / `.env.production` | Entorno vs producción (regla general) |
+| Contenedor no-root | Hardening (§2.2) |
+
+| Descartar / no adoptar | Por qué |
+|------------------------|---------|
+| Modelo **chat-centric** (humano charlando con Agent Builder en la UI) | yaml-agno se enfoca en **agentes autónomos / equipos / flujos agénticos** (background runs, workflows, HITL), no en chat interactivo. El chat es un caso de uso menor para nosotros. |
+| Depender de la UI hosteada de Agno para el loop "create→improve→evaluate" | Ese loop en yaml-agno lo cubre el propio `system-architect` agente de CENF (SDD/BDD/CDD/TDD) + yaml-agno materializando blueprints en YAML ejecutable. |
+
+@ai-directive: agent-platform-railway es REFERENCIA para prácticas de deploy seguras, NO una dependencia que se adopta completa. Cada pieza tomada se revalida al corregir SPEC_19/20/22. La licencia Apache-2.0 permite reusar los scripts/Dockerfile con atribución.
+
 ```mermaid
 sequenceDiagram
     participant DEV as ["Developer (browser)"]
@@ -87,7 +119,7 @@ sequenceDiagram
     SAAS-->>DEV: Renders chat + tool calls
 ```
 
-### 2.2 Qué cubre el Plan Free
+### 2.4 Qué cubre el Plan Free
 
 Pricing verificado el **2026-07-02 en agno.com/pricing — recheck antes de decisiones de producción**:
 
@@ -105,7 +137,7 @@ Planes superiores (referencia, **no** usados en MVP): **Pro ($150/mes)** añade 
 
 @ai-directive: For MVP, CENF internal/dev use, and any scenario where data privacy requires the SaaS to be only a panel (not a data store), the Free plan is sufficient. **"No data ever leaves your system"** — los datos viven en la DB local; el SaaS es solo el panel.
 
-### 2.3 Cuándo NO usar el SaaS Free
+### 2.5 Cuándo NO usar el SaaS Free
 
 Para **datos reales de clientes** (amBOTHS u otros), se prefiere la Fase 2 (agent-ui self-hosted) porque, aunque el SaaS no almacena datos, el tráfico de chat pasa por el navegador hacia un dominio de terceros. La Fase 2 elimina esa dependencia de red hacia os.agno.com.
 
@@ -143,6 +175,8 @@ agent-ui usa exactamente el stack que el plan iter1 proponía construir desde ce
 | Compatibilidad | Agno v2.x (`main` branch) | Match con AgentOS 2.6.18 |
 
 @ai-directive: When extending the fork, follow agent-ui's existing stack and patterns (Zustand stores, shadcn primitives, Tailwind tokens). Do not introduce a competing state library or UI kit.
+
+@ai-directive (versiones): la versión de cada dependencia **sigue al upstream de agent-ui**. Next.js 15 es la línea estable actual (no existe Next 16 al momento de escribir); cuando agent-ui suba de versión mayor, el fork puede actualizar en un merge upstream. No fijes versiones mayores por debajo del upstream; sí podés parchear versiones menores/patch por seguridad. React 18 es lo que agent-ui usa (React 19 puede romper dependencias de shadcn/Radix; esperar a que agent-ui migre).
 
 ### 3.3 Qué añade yaml-agno sobre el fork
 
