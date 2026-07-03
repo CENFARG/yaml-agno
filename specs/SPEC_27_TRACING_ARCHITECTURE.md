@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_27"
 Title: "Tracing Architecture"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Tracing", "#OpenTelemetry", "#Trace", "#Span", "#DatabaseSpanEx
 Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_24"]
 Group: "G8-Ops-Observabilidad"
 Read_Order: 23
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 - confirmed and documented the TracerProvider SSOT: agno.tracing.setup_tracing owns the GLOBAL TracerProvider (registered once at startup). SPEC_24's PrometheusOtelObservabilityManager adapter and SPEC_09's dev span helper attach processors to that provider; neither calls trace.set_tracer_provider(). Added explicit cross-ref so SPEC_24 aligns. Added SPEC_24 to Dependency_Hashes."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 3 - Deep adversarial review vs agno/tracing real source. setup_tracing SSOT, no set_tracer_provider delegation, and DatabaseSpanExporter -> db.upsert_trace/db.create_spans all re-verified against setup.py:23-29 and exporter.py:97,100,131,136. One fidelity fix: documented the db parameter's real Union[BaseDb, AsyncBaseDb, RemoteDb] type in section 2.1 (was simplified to BaseDb). No behavioral change."
 ---
 
 # SPEC_27_TRACING_ARCHITECTURE
@@ -76,13 +76,17 @@ flowchart LR
 
 ```python
 agno.tracing.setup_tracing(
-    db: BaseDb,
+    db: Union[BaseDb, AsyncBaseDb, RemoteDb],
     batch_processing: bool = False,
     max_queue_size: int = 2048,
     max_export_batch_size: int = 512,
     schedule_delay_millis: int = 5000,
 ) -> None
 ```
+
+> The real signature accepts a sync `BaseDb`, an `AsyncBaseDb`, or a `RemoteDb`.
+> yaml-agno resolves a `BaseDb` via SPEC_03's `DatabaseManager`; the broader union
+> is documented here for fidelity with `agno/tracing/setup.py`.
 
 Verified behavior:
 - Registers a custom OTel `SpanExporter` (`DatabaseSpanExporter`) backed by `db`.
