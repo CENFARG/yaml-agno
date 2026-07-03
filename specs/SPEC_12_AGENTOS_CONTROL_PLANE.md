@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_12"
 Title: "AgentOS Control Plane"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#AgentOS", "#FastAPI", "#ControlPlane", "#MCP", "#Interfaces", "
 Dependency_Hashes: ["SPEC_06", "SPEC_09", "SPEC_13"]
 Group: "G7-ControlPlane-API"
 Read_Order: 19
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 (Wave 3). Moved ResyncSettings definition ABOVE AgentOSConfig (NameError at import); added config: ConfigManager param to ResyncManager.__init__ (resync_now called self._config.reload -> AttributeError); fixed CircuitBreaker construction to SPEC_09 rate-based API (failure_threshold % + min_requests); rewrote sequenceDiagram Note to plain prose (embedded -> tokens)."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 3 (deep review vs agno v2.6.18). Reconciled the parameter table with the REAL agno.os.AgentOS.__init__ signature: added a2a_interface, mcp_config (MCPServerConfig, not just the enable bool), on_route_conflict, telemetry, registry, scheduler_base_url, internal_service_token, checkpoint, id/description/version; the table is now an explicit subset (not a hard 18-count claim) and flags which kwargs AgentOSFactory forwards vs which are native-only. Fixed AgentOSConfig.to_agno_kwargs to exclude None so unresolved refs do not override AgentOS defaults. Wave 3 fixes from iter2 verified intact (ResyncSettings ordering, injected ConfigManager, rate-based CircuitBreaker, plain-prose sequence Note)."
 ---
 
 # SPEC_12_AGENTOS_CONTROL_PLANE
@@ -60,9 +60,15 @@ flowchart LR
 
 ---
 
-## 2. AGENTOS CONSTRUCTOR - LOS 18 PARÁMETROS
+## 2. AGENTOS CONSTRUCTOR - PARÁMETROS
 
-### 2.1 Tabla Maestra de Parámetros
+> @ai-directive: The `agno.os.AgentOS.__init__` (verified against agno v2.6.18,
+> `libs/agno/agno/os/app.py`) exposes ~32 parameters. yaml-agno does NOT forward
+> all of them. The table below is the EXPLICIT SUBSET that the `AgentOSFactory`
+> resolves from YAML. Native-only parameters (auto-managed by AgentOS, not
+> surfaced in `agentos.yaml`) are listed separately in §2.1b.
+
+### 2.1 Tabla Maestra de Parámetros (subset forwarded by AgentOSFactory)
 
 Cada parámetro mapea a un campo del aggregate `AgentOSConfig`. La columna "YAML path" indica dónde vive en `agentos.yaml`.
 
@@ -81,11 +87,30 @@ Cada parámetro mapea a un campo del aggregate `AgentOSConfig`. La columna "YAML
 | 11 | `authorization` | `bool` | `False` | `agentos.authorization.enabled` | `AuthorizationAdapter` |
 | 12 | `authorization_config` | `AuthorizationConfig` | `None` | `agentos.authorization.config` | `AuthorizationAdapter` |
 | 13 | `enable_mcp_server` | `bool` | `False` | `agentos.mcp.enabled` | `MCPServerLifecycle` |
-| 14 | `cors_allowed_origins` | `List[str]` | `None` | `agentos.cors_allowed_origins` | `FastAPIAppBuilder` |
-| 15 | `auto_provision_dbs` | `bool` | `True` | `agentos.auto_provision_dbs` | `DatabaseManager` |
-| 16 | `run_hooks_in_background` | `bool` | `False` | `agentos.run_hooks_in_background` | `HookAdapter` (SPEC_09) |
-| 17 | `tracing` | `bool` | `False` | `agentos.tracing` | `ObservabilityManager` (SPEC_09) |
-| 18 | `scheduler` / `scheduler_poll_interval` | `bool` / `int` | `False` / - | `agentos.scheduler.*` | delegado a SPEC_13 |
+| 14 | `mcp_config` | `MCPServerConfig` | `None` | `agentos.mcp.config` | `MCPServerLifecycle` |
+| 15 | `a2a_interface` | `bool` | `False` | `agentos.a2a_interface` | `A2AInterfaceFactory` (SPEC_26) |
+| 16 | `cors_allowed_origins` | `List[str]` | `None` | `agentos.cors_allowed_origins` | `FastAPIAppBuilder` |
+| 17 | `auto_provision_dbs` | `bool` | `True` | `agentos.auto_provision_dbs` | `DatabaseManager` |
+| 18 | `run_hooks_in_background` | `bool` | `False` | `agentos.run_hooks_in_background` | `HookAdapter` (SPEC_09) |
+| 19 | `tracing` | `bool` | `False` | `agentos.tracing` | `ObservabilityManager` (SPEC_09) |
+| 20 | `scheduler` / `scheduler_poll_interval` | `bool` / `int` | `False` / 15 | `agentos.scheduler.*` | delegado a SPEC_13 |
+
+### 2.1b Native-only parameters (NOT forwarded from YAML)
+
+These `AgentOS.__init__` parameters are managed internally by AgentOS and are
+intentionally NOT surfaced in `agentos.yaml`:
+
+| Parámetro Agno | Default | Por qué no se expone |
+|----------------|---------|----------------------|
+| `id` | auto (`generate_id`/`uuid4`) | Derivado de `name`; no requiere override YAML |
+| `description` / `version` | `None` | Metadatos cosméticos; opcionales vía `agentos.description`/`agentos.version` si se desean (no modelados en MVP) |
+| `checkpoint` | `None` | Default OS-level; heredado por agentes (SPEC_02) |
+| `settings` | `AgnoAPISettings()` | Interno; cors/origins se controlan via `cors_allowed_origins` |
+| `on_route_conflict` | `"preserve_agentos"` | Política de seguridad; se deja el default salvo `base_app` custom |
+| `telemetry` | `True` | Se respeta el default Agno; no se modela |
+| `registry` | `None` | `AgentOS` crea su propio `Registry` interno |
+| `scheduler_base_url` | `http://127.0.0.1:7777` | Derivado del `serve.host:port` |
+| `internal_service_token` | auto (`secrets.token_urlsafe`) | Auto-generado; NEVER en YAML (es un secreto de servicio) |
 
 > Nota: `scheduler` y `scheduler_poll_interval` se tratan en SPEC_13. Aquí solo se documenta el passthrough desde `AgentOSConfig`.
 
@@ -115,6 +140,9 @@ class MCPServerSettings(BaseModel):
     instructions: Optional[str] = None
     tools_to_expose: list[str] = Field(default_factory=list)  # agent/tool ids
     port: Optional[int] = None
+    # mcp_config passthrough: when present, AgentOSFactory builds an
+    # agno.os.config.MCPServerConfig and forwards it as the `mcp_config` kwarg
+    # (NOT just enable_mcp_server). tools_to_expose maps to MCPServerConfig.tools.
 
 class SchedulerSettings(BaseModel):
     enabled: bool = False
@@ -149,6 +177,11 @@ class AgentOSConfig(BaseModel):
     lifespan: Optional[str] = None                          # factory ref
     authorization: AuthorizationSettings = Field(default_factory=AuthorizationSettings)
     mcp: MCPServerSettings = Field(default_factory=MCPServerSettings)
+    # A2A top-level constructor flag (bool). When True, AgentOS exposes ALL
+    # its agents/teams in an A2A server (agno.os.interfaces.a2a). Distinct from
+    # the per-set `interfaces[].type=a2a` declaration (SPEC_26), which publishes
+    # an explicit subset. Both can coexist; SPEC_26 owns the set-based path.
+    a2a_interface: bool = False
     cors_allowed_origins: Optional[list[str]] = None
     auto_provision_dbs: bool = True
     run_hooks_in_background: bool = False
@@ -167,11 +200,16 @@ class AgentOSConfig(BaseModel):
 
         Booleans and primitives are emitted directly; complex objects are
         injected by the AgentOSFactory AFTER resolution from registries.
+        ``exclude_none=True`` is REQUIRED: forwarding ``key=None`` would
+        override the AgentOS defaults (e.g. ``base_app=None`` clobbers the
+        internally created FastAPI app path). Native-only params (id,
+        internal_service_token, telemetry, registry, ...) are deliberately
+        omitted so AgentOS applies its own defaults.
 
         Returns:
             The kwargs dict for the AgentOS constructor.
         """
-        return model_dump(self, exclude_none=False, exclude_unset=False)
+        return model_dump(self, exclude_none=True, exclude_unset=False)
 ```
 
 ### 2.3 `name`
@@ -259,9 +297,21 @@ agentos:
 
 RBAC con JWT. Ver Sección 9. Integración con SPEC_19.
 
-### 2.13 `enable_mcp_server`
+### 2.13 `enable_mcp_server` / `mcp_config`
 
-Ver Sección 5 (MCP server mode).
+Ver Sección 5 (MCP server mode). `enable_mcp_server` es el bool de activación;
+`mcp_config` (`MCPServerConfig` de Agno) scopa los built-in tools y registra
+tools custom. El `MCPServerSettings.tools_to_expose` se traduce a
+`MCPServerConfig.tools` y se pasa como `mcp_config=` (NO solo el flag).
+
+### 2.13b `a2a_interface`
+
+Flag booleano top-level del constructor AgentOS. Cuando `True`, AgentOS monta
+el servidor A2A exponiendo TODOS sus agentes/teams. Esto es DISTINTO del
+patrón `agentos.interfaces[].type=a2a` (SPEC_26), que publica un subset
+explícito vía `A2A(agents=..., teams=...)`. Ambas rutas pueden coexistir;
+SPEC_26 es dueña del path set-based. yaml-agno expone este flag en
+`agentos.a2a_interface` para casos donde se quiere publicar todo sin enumerar.
 
 ### 2.14 `cors_allowed_origins`
 
@@ -893,7 +943,7 @@ GIVEN un documento "agentos.yaml" con name="research-os", 2 agents, 1 team, db=p
 AND authorization.enabled=false
 AND scheduler.enabled=false
 WHEN se ejecuta "yaml-agno serve --config agentos.yaml"
-THEN el AgentOSFactory construye un agno.os.AgentOS con los 18 parámetros resueltos
+THEN el AgentOSFactory construye un agno.os.AgentOS con el subset de parámetros resueltos (§2.1)
 AND get_app() devuelve una FastAPI app con los routers de agents, teams, workflows, sessions, knowledge, memory, metrics, evals, health
 AND el server escucha en 0.0.0.0:7777
 AND GET /health responde 200 con status="ok"
