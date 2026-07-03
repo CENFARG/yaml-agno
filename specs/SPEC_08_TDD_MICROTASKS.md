@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_08"
 Title: "TDD Microtasks - Master Catalog"
-Version: "0.2.0-iter7"
+Version: "0.2.0-iter8"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 7. S04-T05 updated: resolve_user_id now returns the composite {tenant_id}:{principal_id} (shared single resolver for HTTP + autonomous). S06-T05 updated: TenantContextMiddleware delegates to resolve_user_id instead of building the composite inline. No other catalog rows changed. Iter 6. Realigned the SPEC_06 catalog (section 2.6) to SPEC_06 iter4 inheritance reformulation: the build_app() composition was replaced by `class YamlAgentOS(AgentOS)` subclassing (override get_app() -> super().get_app() then register extensions). S06-T01..T08 now map to: YamlAgentOS subclass, config loader via core-cenf-py ConfigManager, readiness/liveness, RateLimitMiddleware, TenantContextMiddleware (composite user_id on native user_isolation, replacing the old TenantScopeMiddleware), AX discovery via native MCP server (enable_mcp_server — the parallel GET /ax/tools REST endpoint was dropped), wire-contract + backend-sanitization doc, and a contract test asserting no own routes + user_isolation always-on (NULL-bucket guard). File paths no longer use a gaps/ folder (SOTA src/api/ layout). All other owner sections unchanged from iter5."
+Revision_Note: "Iter 8 - Wave 6 hygiene: Q2 wording aligned to the SPEC_04 reformulation (port/adapter -> memory config builders). No task changes."
 ---
 
 # SPEC_08_TDD_MICROTASKS
@@ -213,7 +213,7 @@ Implications:
 **Which catalog groups can run in parallel?**
 
 Implications:
-- **Independent**: SPEC_02 schemas; SPEC_03 persistence models; SPEC_04 port/adapter.
+- **Independent**: SPEC_02 schemas; SPEC_03 persistence models; SPEC_04 memory config builders.
 - **Sequential**: SPEC_02 -> SPEC_01 factories -> SPEC_06 API; SPEC_03 -> SPEC_06 API.
 - **Trade-off**: speed vs dependency order.
 

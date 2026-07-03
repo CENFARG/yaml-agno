@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_24"
 Title: "Monitoring Stack - Prometheus, Grafana, Loki, Alertmanager y Tracing"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Prometheus", "#Grafana", "#Loki", "#Alertmanager", "#Tempo", "#OpenTelemetry", "#SRE", "#SLI", "#SLO", "#MonitoringAsCode", "#CloudRun", "#CloudMonitoring"]
 Dependency_Hashes: ["SPEC_09", "SPEC_21", "SPEC_27"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 - TracerProvider SSOT: the adapter NO LONGER calls trace.set_tracer_provider() globally. The global TracerProvider is owned by Agno's setup_tracing (SPEC_27); this adapter only adds a BatchSpanProcessor to the already-registered provider. Aligned record_metric()/increment_counter() arg names to the SPEC_09 ObservabilityManager Port (attributes=, not labels=). No Engram anywhere."
+Revision_Note: "Iter 3 - Wave 6 hygiene: added a one-line note at the first metric-table use clarifying tenant_id is telemetry-only (label/log field), NOT a column on agno_* tables (tenant scoping on persistence is the composite user_id). No other changes."
 ---
 
 # SPEC_24_MONITORING_STACK
@@ -310,6 +310,8 @@ tempo:
 Toda métrica es **emitida por SPEC_09** (`ObservabilityManager.record_metric()`). Aquí definimos su contrato de nombres, labels y consultas PromQL.
 
 #### 2.2.1 Métricas RED de Agent (Rate, Errors, Duration)
+
+> **Note**: `tenant_id` appears here ONLY as a telemetry label / log field. It is NOT a column on the `agno_*` database tables — tenant scoping on persistence is the composite `user_id` (`{tenant_id}:{principal_id}`, see SPEC_03/SPEC_06). Every `tenant_id` reference in the rest of this SPEC inherits this contract: telemetry-only.
 
 | Métrica (Prometheus) | Tipo | Labels | Descripción |
 |----------------------|------|--------|-------------|

@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_09"
 Title: "Observability and SRE - Metrics, Tracing and Resilience"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#OpenTelemetry", "#SRE", "#CircuitBreaker", "#Resilience"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 3 - realigned to core-cenf: removed local _categorize_error()/ErrorCategory enum (incl CRITICAL); retry/circuit classification now delegates to ErrorHandlingManager.classify() returning core-cenf ErrorClassification (TRANSIENT/PERMANENT/VALIDATION/AUTH/RATE_LIMIT). Removed should_retry usage (retry decision is SPEC_05 RetryPolicy). Replaced engram_save_total/engram_search_total metrics with Agno-native learning_decision_log_save_total/memory_add_total (reflect SPEC_04 LearningMachine/MemoryManager). Dropped the duplicate LoggerManager Protocol Port (core-cenf owns it); kept only the yaml-agno ContextAwareLogger wrapper. Renumbered sections sequentially. No Engram anywhere."
+Revision_Note: "Iter 4 - Wave 6 hygiene: upgraded CircuitBreaker and RetryConfig public-method docstrings to Google style (Args/Returns/Raises). ResilientExecutor was already Google-styled. No behavioral change."
 ---
 
 # SPEC_09_OBSERVABILITY_AND_SRE
@@ -372,7 +372,11 @@ class CircuitBreaker:
         self.half_open_calls = 0
     
     def record_success(self) -> None:
-        """Registra éxito"""
+        """Record a successful request and update the circuit state.
+
+        In HALF_OPEN, successive successes close the circuit once
+        ``half_open_max_calls`` is reached.
+        """
         self.total_requests += 1
         self.success_count += 1
         
@@ -385,7 +389,11 @@ class CircuitBreaker:
                 self.half_open_calls = 0
     
     def record_failure(self) -> None:
-        """Registra fallo"""
+        """Record a failed request and possibly trip the circuit.
+
+        In HALF_OPEN a single failure re-opens the circuit; in CLOSED the
+        failure-rate threshold (``_should_trip``) decides.
+        """
         self.total_requests += 1
         self.failure_count += 1
         self.last_failure_time = time.time()
@@ -396,7 +404,10 @@ class CircuitBreaker:
             self.state = CircuitState.OPEN
     
     def _should_trip(self) -> bool:
-        """Determina si debe abrir el circuito"""
+        """Return True if the failure rate warrants opening the circuit.
+
+        Returns False until ``min_requests`` have been observed.
+        """
         if self.total_requests < self.min_requests:
             return False
         
@@ -404,7 +415,12 @@ class CircuitBreaker:
         return failure_rate >= self.failure_threshold
     
     def allow_request(self) -> bool:
-        """Determina si permitir request"""
+        """Return whether a request should be admitted under the current state.
+
+        CLOSED admits all; OPEN admits none until ``recovery_timeout``
+        elapses, then transitions to HALF_OPEN; HALF_OPEN admits up to
+        ``half_open_max_calls`` probe requests.
+        """
         if self.state == CircuitState.CLOSED:
             return True
         
@@ -421,7 +437,19 @@ class CircuitBreaker:
         return False
     
     async def execute(self, func: Callable[..., Any], *args, **kwargs) -> Any:
-        """Ejecuta función con circuit breaker"""
+        """Run ``func`` through the circuit breaker.
+
+        Args:
+            func: async callable to execute.
+            *args, **kwargs: forwarded to ``func``.
+
+        Returns:
+            The result of ``func``.
+
+        Raises:
+            CircuitBreakerOpenError: if the circuit is OPEN and no probe
+                is allowed.
+        """
         if not self.allow_request():
             raise CircuitBreakerOpenError("Circuit breaker is OPEN")
         
@@ -475,7 +503,17 @@ class RetryConfig:
     
     @classmethod
     def calculate_delay(cls, attempt: int) -> float:
-        """Calcula delay con exponential backoff + jitter"""
+        """Compute the backoff delay for ``attempt`` (0-indexed).
+
+        Uses exponential backoff ``BASE_DELAY * 2**attempt`` capped at
+        ``MAX_DELAY``, with optional +/-50% jitter.
+
+        Args:
+            attempt: zero-indexed retry attempt number.
+
+        Returns:
+            Delay in seconds, clamped to ``>= 0``.
+        """
         # Exponential: 2^attempt
         delay = cls.BASE_DELAY * (2 ** attempt)
         
@@ -496,7 +534,18 @@ class RetryConfig:
         *args: Any,
         **kwargs: Any
     ) -> Any:
-        """Ejecuta función con retry"""
+        """Run ``func`` with retry up to ``MAX_RETRIES`` times.
+
+        Args:
+            func: async callable to execute.
+            *args, **kwargs: forwarded to ``func``.
+
+        Returns:
+            The result of ``func`` on the first successful attempt.
+
+        Raises:
+            The last exception encountered after all retries are exhausted.
+        """
         last_error = None
         
         for attempt in range(cls.MAX_RETRIES + 1):

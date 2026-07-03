@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_28"
 Title: "Reasoning Architecture - Declarative Step-based and Native Model Reasoning"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Reasoning", "#ChainOfThought", "#ReasoningSteps", "#NativeReasoning", "#ReasoningEffort", "#ReasoningConfig", "#Streaming", "#AgnoReasoning"]
 Dependency_Hashes: ["SPEC_14", "SPEC_02"]
-Last_Updated: "2026-06-17"
-Revision_Note: "MVP iteration - yaml-agno declares reasoning on top of Agno's ReasoningManager/ReasoningConfig. Critical correction: reasoning_effort is a MODEL-provider param (OpenAIResponses/OpenAIChat/DeepSeek/OpenRouter), NOT an Agent nor ReasoningConfig param; it MUST live under model: in YAML. ReasoningConfig and enums imported from Agno. Python code/docstrings in English (Google style). asyncio.TaskGroup for concurrent reasoning step probing. No reimplementation of Agno."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - Wave 6 hygiene: marked Q1/Q3 RESUELTA — reasoning_agent is exposed in MVP (name reference, mutually exclusive with reasoning_model); use_json_mode stays passthrough-only in MVP (not in the YAML block)."
 ---
 
 # SPEC_28_REASONING_ARCHITECTURE
@@ -653,9 +653,9 @@ async def test_probe_reasoning_models_concurrent():
 
 ## 12. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
 
-1. **Nested `reasoning_agent`**: Agno allows `reasoning_agent` (a nested Agent as reasoner). Should yaml-agno expose `reasoning_agent` as a name reference resolved from the agent registry in MVP, or defer it to post-MVP given the complexity (recursive agent graphs, lifecycle ownership)? Recommend defer.
+1. **[RESUELTA] Nested `reasoning_agent`**: Agno allows `reasoning_agent` (a nested Agent as reasoner). Should yaml-agno expose `reasoning_agent` as a name reference resolved from the agent registry in MVP, or defer it to post-MVP given the complexity (recursive agent graphs, lifecycle ownership)? Recommend defer. **Decisión adoptada**: EXPOSE in MVP as a name reference resolved from the agent registry; mutually exclusive with `reasoning_model` (`ReasoningConflictError`).
 2. **Anthropic budget_tokens**: Anthropic uses `budget_tokens` (not `reasoning_effort`) for extended thinking. Should yaml-agno expose `model.thinking_budget` analogously, owned by SPEC_14? Affects schema symmetry.
-3. **`use_json_mode` surface**: expose it in the YAML block in MVP, or keep passthrough-only? Exposing adds a knob most users will misconfigure.
+3. **[RESUELTA] `use_json_mode` surface**: expose it in the YAML block in MVP, or keep passthrough-only? Exposing adds a knob most users will misconfigure. **Decisión adoptada**: keep passthrough-only in MVP (NOT in the YAML block); takes the Agno default. Structured output at the model level is owned by SPEC_14.
 4. **Step ceiling default**: is `max_steps=10` (Agno default) the right MVP default, or should yaml-agno ship a lower default (e.g. 6) to bound cost on expensive reasoning models?
 5. **Reasoning + evals**: should reasoning steps feed SPEC_18 evals (reasoning-quality metrics) in MVP, or only be observable (SPEC_09)? Quality evals add scope.
 6. **Provider matrix maintenance**: the matrix in 5.1 will drift as Agno adds providers. Should yaml-agno auto-derive it from Agno's `is_*_reasoning_model` helpers at runtime (single source) instead of a static doc table?

@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_00"
 Title: "System Strategy - Vision, Principles and Strategic Constraints"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Strategy", "#Vision", "#Roadmap", "#Principles"]
 Dependency_Hashes: []
-Last_Updated: "2026-06-15"
-Revision_Note: "Iteración 1 - correcciones de revisión estratégica del usuario"
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - Wave 6 hygiene: corrected '5 modos' to '4 modos (coordinate/route/broadcast/tasks)' to match the real Agno Team modes."
 ---
 
 # SPEC_00_SYSTEM_STRATEGY
@@ -100,7 +100,7 @@ Cada primitiva se clasifica por **nivel de abstracción** en yaml-agno:
 | Primitiva | Nivel | Especificación |
 |-----------|-------|----------------|
 | Agent() constructor (45+ params) | ABSTRAER | SPEC_01, SPEC_02 |
-| Team() constructor (25+ params, 5 modos) | ABSTRAER | SPEC_01, SPEC_05 |
+| Team() constructor (25+ params, 4 modos (coordinate/route/broadcast/tasks)) | ABSTRAER | SPEC_01, SPEC_05 |
 | Workflow primitives (Step, Parallel, Condition, Router, Loop) | ABSTRAER | SPEC_01, SPEC_05 |
 | Database `db=` (SqliteDb/PostgresDb/InMemoryDb) | ABSTRAER | SPEC_03 |
 | Session storage (= db=) | ABSTRAER | SPEC_03 |
@@ -286,7 +286,7 @@ Casos internos de prueba (a definir orden/prioridad):
 | Semana | MVP | Sistema yaml-agno probado | Validación del sistema |
 |--------|-----|---------------------------|------------------------|
 | **1** | yaml-agno Core | Agent config + Templates (jerarquía heredable) + DI System | Crear 1 agent desde YAML sin código Python |
-| **2** | Teams + Workflow primitives | Team config (5 modos) + Workflow (6 primitivas) | 1 team se orquesta desde YAML |
+| **2** | Teams + Workflow primitives | Team config (4 modos (coordinate/route/broadcast/tasks)) + Workflow (6 primitivas) | 1 team se orquesta desde YAML |
 | **3** | Prompting + Context Engineering | cognitive_profile + deployment.mode + context flags + dependencies | 1 team con contexto inyectado dinámicamente |
 | **4** | Tools + Knowledge + MCP | Toolkits + Knowledge (vector DB + embedders) + MCP (3 transports) | 1 team usa tools + RAG + MCP server |
 | **5** | Models + Resilience + Multimodal | Model-as-string + fallback + cache + multimodal I/O | 1 team con fallback de modelos y entrada multimodal |

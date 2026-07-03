@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_25"
 Title: "Security Hardening - Pod Security, Network Policies, RBAC, Supply Chain y Compliance"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PodSecurityStandards", "#NetworkPolicies", "#RBAC", "#SupplyChain", "#Cosign", "#Kyverno", "#Falco", "#OWASP", "#GDPR", "#SOC2", "#ZeroTrust", "#CloudRun", "#IAM"]
 Dependency_Hashes: ["SPEC_19", "SPEC_21"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Wave-5 UID SSOT alignment: K8s manifests now use runAsUser/runAsGroup/fsGroup 65532 to match the SPEC_20 image USER directive (65532:65532). @ai-directive 65532 is the SSOT non-root UID across image (SPEC_20) and pod (SPEC_25)."
+Revision_Note: "Iter 4 - Wave 6 hygiene: removed the @ai-directive tag from a plain prose note (the Cloud Run vs K8s contextual paragraph); @ai-directive is now kept only on pseudo-code/instructions. No behavioral change."
 ---
 
 # SPEC_25_SECURITY_HARDENING
@@ -72,7 +72,7 @@ yaml-agno opera bajo **Zero Trust**: ningún pod/confianza en otro por defecto, 
 
 ### 1.1 Hardening dual: Cloud Run (PRIMARIO) vs Kubernetes (FUTURO)
 
-> @ai-directive Per SPEC_00 §7.3, **Cloud Run es el destino PRIMARIO**; Kubernetes es FUTURO. Los controles K8s-native de §2.1-§2.6 (**Pod Security Standards, NetworkPolicy, Kyverno, Falco eBPF, RBAC de Kubernetes**) **NO existen en Cloud Run** (no hay Prometheus Operator, no hay admission controllers customizables, no hay CNI con NetworkPolicy, no hay pods persistentes para Falco). Esta subsección define los **equivalentes de hardening en Cloud Run** como destino primario. Los §2.1-§2.6 permanecen válidos para el destino K8s futuro.
+> Per SPEC_00 §7.3, **Cloud Run es el destino PRIMARIO**; Kubernetes es FUTURO. Los controles K8s-native de §2.1-§2.6 (**Pod Security Standards, NetworkPolicy, Kyverno, Falco eBPF, RBAC de Kubernetes**) **NO existen en Cloud Run** (no hay Prometheus Operator, no hay admission controllers customizables, no hay CNI con NetworkPolicy, no hay pods persistentes para Falco). Esta subsección define los **equivalentes de hardening en Cloud Run** como destino primario. Los §2.1-§2.6 permanecen válidos para el destino K8s futuro.
 
 | Control Zero Trust | K8s (FUTURO, §2.1-§2.6) | **Cloud Run (PRIMARIO)** equivalente |
 |--------------------|--------------------------|--------------------------------------|

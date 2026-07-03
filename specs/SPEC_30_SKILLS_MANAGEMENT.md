@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_30"
 Title: "Skills Management - Downloadable Domain Expertise and Progressive Discovery"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Skills", "#LocalSkills", "#SkillLoader", "#SKILL_md", "#ProgressiveDiscovery", "#Delegation", "#FilesystemSkills"]
 Dependency_Hashes: ["SPEC_11", "SPEC_01"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - new SPEC (Skills). LocalSkills/SKILL.md filesystem."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - Wave 6 hygiene: documented that the hot-reload snippet reaches into the PRIVATE agent._skills attribute (Agno v2.6.18 has no public reload entrypoint); access is isolated behind the skills_reload.py lifecycle hook with a TODO for a future public API."
 ---
 
 # SPEC_30_SKILLS_MANAGEMENT
@@ -353,6 +353,12 @@ When the task matches a skill, the model calls `get_skill_instructions("brand-au
 `Skills.reload()` clears the internal dict and re-runs all loaders. yaml-agno exposes this via the AgentBuilder lifecycle (SPEC_01 resync path, SPEC_12 hot-reload) so that editing a SKILL.md bundle on disk is picked up without restarting the process:
 
 ```python
+# NOTE: this reaches into agent._skills, a PRIVATE Agno attribute.
+# Agno (v2.6.18) exposes no public reload entrypoint on Agent itself.
+# yaml-agno wraps this access behind the lifecycle hook in
+# yaml_agno/runtime/skills_reload.py (TASK_008) so the private-member
+# touch is isolated to ONE place.
+# TODO: replace with a public API if Agno adds Agent.reload_skills().
 if agent._skills is not None:
     agent._skills.reload()
 ```

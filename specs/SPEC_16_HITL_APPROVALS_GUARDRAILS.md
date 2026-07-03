@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_16"
 Title: "HITL, Approvals & Guardrails - Human Oversight, Input Validation and Safety Boundaries"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#HITL", "#Approvals", "#Guardrails", "#PII", "#Secrets", "#Hooks", "#Safety", "#AgnoPreHooks"]
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_09"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 3 - removed the EngramMemoryManager/LongTermMemoryPort adapter entirely; memory writes now route to the Agno LearningMachine/MemoryManager (SPEC_04 owns Agno-native memory, no Engram). PII/secret masking stays here as a guardrail that runs BEFORE content reaches Agno memory. Rewrote ApprovalManager.create_pending to emit Agno-schema keys (id, agent_id/team_id/workflow_id, approval_type, user_id) and dropped tenant_id from the persisted record (tenant scoping = composite user_id per A.1/A.11). Deleted TASK_010 (migrations/approvals.sql redefining the Agno table); replaced with a test asserting Agno provisions the approvals table and yaml-agno ships NO own approvals migration. Aligned run_status comment to lowercase RunStatus members."
+Revision_Note: "Iter 4 - Wave 6 hygiene: replaced fictitious model id 'gpt-5.2' with the real OpenAI model id 'gpt-4o' in the example Agent constructor. No other changes."
 ---
 
 # SPEC_16_HITL_APPROVALS_GUARDRAILS
@@ -535,7 +535,7 @@ from agno.guardrails import PIIDetectionGuardrail, PromptInjectionGuardrail, Ope
 
 agent = Agent(
     name="Protected Agent",
-    model=OpenAIResponses(id="gpt-5.2"),
+    model=OpenAIResponses(id="gpt-4o"),
     pre_hooks=[
         PIIDetectionGuardrail(),
         PromptInjectionGuardrail(),

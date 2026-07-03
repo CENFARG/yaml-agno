@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_15"
 Title: "Context Engineering & Compression"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#context-engineering", "#compression", "#dependencies", "#session-state", "#run-context", "#token-counting", "#pydantic-v2"]
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_08", "SPEC_14"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 - removed the 'Engram adapter' leak from the SPEC_04 component list (frontier table and owner table); SPEC_04 owns Agno-native memory only (LearningMachine/MemoryManager). Replaced the undefined MemoryLayer type in ContextEngineer with the concrete SPEC_04 Agno MemoryManager reference. Defined TokenCounter.count_part (referenced by count_messages but never defined). No other changes."
+Revision_Note: "Iter 3 - Wave 6 hygiene: marked Q8 RESUELTA — conversational history compression lives in SPEC_15 (ContextCompressor moved here from SPEC_04); SPEC_04 owns only the memory model."
 ---
 
 # SPEC_15_CONTEXT_ENGINEERING_AND_COMPRESSION
@@ -1442,7 +1442,7 @@ def test_old_import_emits_deprecation():
 5. **PII sanitization timing**: SPEC_16 corre como guardrail. ¿Antes o después del ContextEngineer? Si después, el contexto ya está completo para inspección. ¿Antes, para no loguear PII en traces?
 6. **TokenCounter sin tiktoken**: si tiktoken no está instalado, ¿fallback a estimación por chars/4? Riesgo de compresión prematura/tardía.
 7. **`num_history_runs` grande + sesión larga**: ¿se combina automáticamente con session summaries para evitar overflow, o es responsabilidad del usuario? Validador solo advierte.
-8. **Compresión de historial vs tool results**: este SPEC comprime tool results. La compresión del historial conversacional, ¿es SPEC_04 (modelo de memoria) o SPEC_15? Clarificar frontera.
+8. **[RESUELTA] Compresión de historial vs tool results**: este SPEC comprime tool results. La compresión del historial conversacional, ¿es SPEC_04 (modelo de memoria) o SPEC_15? Clarificar frontera. **Decisión adoptada** (sección de decisión de arquitectura): la operación de compresión (incluido `compress_history`) vive en SPEC_15 (`infra/context/compression.py`); SPEC_04 conserva solo el modelo de memoria (qué se persiste).
 9. **Dependencies mutables en team**: si dos miembros mutan la misma dependency callable, ¿hay race condition? ¿Se resuelve una sola vez por run y se cachea en RunContext?
 10. **`add_memories_to_context=false`**: recolecta sin inyectar. ¿La recolección es fire-and-forget (asyncio.TaskGroup sin await) o blocking? Impacta latencia de run.
 

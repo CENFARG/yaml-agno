@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_14"
 Title: "Model Resilience & Configuration"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#models", "#fallback", "#resilience", "#circuit-breaker", "#cache", "#providers", "#pydantic-v2", "#retry", "#reasoning"]
 Dependency_Hashes: ["SPEC_01", "SPEC_05", "SPEC_08", "SPEC_09"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 (Wave 3 dedup). Added FallbackConfig + fallback field to ModelExpandedSpec (build_fallback_chain was unreachable); added retry_jitter field (YAML was orphan); added @ai-directive scoping compute_delay/RetryPolicy to the fallback-probe path ONLY (decision A.7: model-level retry is Agno Model.*)."
+Revision_Note: "Iter 3 - Wave 6 hygiene: marked Q1/Q2/Q4 RESUELTA with the in-body adopted decisions (subset MVP; no own cache layer, Agno cache_response only; CircuitBreaker per model:alias)."
 ---
 
 # SPEC_14_MODEL_RESILIENCE_AND_CONFIG
@@ -1458,10 +1458,10 @@ async def test_probe_returns_status_per_model():
 
 ## 17. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
 
-1. **Cobertura de providers**: ¿MVP incluye los 26 providers del catálogo o solo un subset crítico (Anthropic, OpenAI Responses, Google, Ollama, Groq, OpenRouter)? Recomendaría subset en MVP, los demás detrás de feature flag.
-2. **Caching**: ¿yaml-agno implementa su propia capa de cache además de `cache_response` de Agno? Si sí, ¿qué backend (Redis, en-memoria)? Riesgo de inconsistencia.
+1. **[RESUELTA] Cobertura de providers**: ¿MVP incluye los 26 providers del catálogo o solo un subset crítico (Anthropic, OpenAI Responses, Google, Ollama, Groq, OpenRouter)? Recomendaría subset en MVP, los demás detrás de feature flag. **Decisión adoptada**: subset crítico en MVP; el resto detrás de feature flag.
+2. **[RESUELTA] Caching**: ¿yaml-agno implementa su propia capa de cache además de `cache_response` de Agno? Si sí, ¿qué backend (Redis, en-memoria)? Riesgo de inconsistencia. **Decisión adoptada** (§5): NO — yaml-agno usa únicamente el `cache_response` nativo de Agno; no añade capa de cache propia.
 3. **Fallback callback sync vs async**: Agno admite callbacks. ¿yaml-agno fuerza async siempre? Implicación: callbacks legacy sync necesitarán wrapper.
-4. **Circuit Breaker granularidad**: ¿un CB por `model:alias` o uno por `provider`? Por alias es más fino pero más estado. Por provider comparte ruido pero reduce cardinalidad.
+4. **[RESUELTA] Circuit Breaker granularidad**: ¿un CB por `model:alias` o uno por `provider`? Por alias es más fino pero más estado. Por provider comparte ruido pero reduce cardinalidad. **Decisión adoptada** (§9 `get_circuit_breaker(f"model:{spec.alias or spec.id}")`): un CircuitBreaker por `model:alias`.
 5. **Retries duales**: modelo + run. ¿Cuál es la política cuando ambos están set? ¿Model-level gana (más barato) o run-level (más robusto)? Validador debe decidir.
 6. **Provider registry extensible**: ¿permitir registro de providers custom vía plugin (entry points) en post-MVP? Afecta el contrato del factory.
 7. **Multimodal capability**: ¿la capability se declara estática en registry o se infiere de la response del provider en runtime (con cache)?

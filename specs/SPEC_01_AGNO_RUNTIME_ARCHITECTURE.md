@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_01"
 Title: "Agno Runtime Architecture"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Agno", "#Runtime", "#SessionManagement", "#WorkflowPrimitives"]
 Dependency_Hashes: ["SPEC_00"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 3 - dropped all 'Engram optional external adapter' framing; long-term memory is Agno native LearningMachine/MemoryManager only (no Engram anywhere). Removed user_id from SessionConfig/session YAML block; user_id is a RUNTIME value injected by TenantContextMiddleware (SPEC_06) as the composite '{tenant_id}:{principal_id}' resolved by resolve_user_id() (SPEC_04), never a YAML field. Documented the runtime injection. No other design changes."
+Revision_Note: "Iter 4 - Wave 6 hygiene: fixed mermaid edge label '|Agent:run:|' -> '|builds Agent|' (clearer semantic, the factory builds the Agent instance). No other changes."
 ---
 
 # SPEC_01_AGNO_RUNTIME_ARCHITECTURE
@@ -30,7 +30,7 @@ El runtime de yaml-agno se construye SOBRE Agno Framework, no reimplementa sus i
 ```mermaid
 graph TD
     CFG["YAML Config"] --> |Pydantic Validation| YAF["yaml-agno Factory"]
-    YAF --> |Agent:run:| AGI["Agno Agent Instance"]
+    YAF --> |builds Agent| AGI["Agno Agent Instance"]
     AGI --> |Session Management| SESS["Agent Session"]
     SESS --> |Tool Execution| FT["FunctionToolkit"]
     SESS --> |Knowledge Retrieval| KB["Knowledge Base"]
