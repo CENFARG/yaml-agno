@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_26"
 Title: "A2A (Agent-to-Agent) Interface"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#A2A", "#AgentOS", "#Interfaces", "#Interoperability", "#AgentCa
 Dependency_Hashes: ["SPEC_12"]
 Group: "G7-ControlPlane-API"
 Read_Order: 20
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - new SPEC (A2A interface). API verified vs agno/os/interfaces/a2a."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 2 (deep review vs agno v2.6.18). Verified A2A constructor and route paths against agno/os/interfaces/a2a/{a2a.py,router.py} — unchanged, accurate. Added the agent-card.json RBAC exemption contract (Wave audit ask): the well-known discovery endpoint is intentionally PUBLIC in Agno (no require_resource_access dependency) while :send/:stream remain RBAC-enforced via AgentOS. Documented the Agno tags default fallback ([\"A2A\"] when None). Cross-referenced the AgentOS top-level a2a_interface flag (SPEC_12 §2.13b) as an alternative to the set-based interfaces[].type=a2a path."
 ---
 
 # SPEC_26_A2A_INTERFACE
@@ -62,6 +62,7 @@ flowchart LR
 3. `A2A(...)` is instantiated exclusively inside `A2AInterfaceFactory`; never with literal kwargs elsewhere.
 4. Endpoint paths are owned by Agno; yaml-agno only forwards `prefix` and `tags` and does not override route handlers.
 5. A2A is one interface among many; its lifecycle is governed by the AgentOS lifespan (SPEC_12), not by a bespoke server.
+6. **Two ways to publish A2A** (both native AgentOS, both supported): (a) the set-based path documented here (`agentos.interfaces[].type=a2a` -> `A2A(agents=...)`), which publishes an explicit subset; (b) the AgentOS top-level `a2a_interface=True` flag (SPEC_12 §2.13b), which publishes ALL agents/teams. yaml-agno recommends (a) for least-privilege publishing; (b) is a convenience for trusted internal deployments.
 
 ---
 
@@ -85,7 +86,7 @@ Verified behavior:
 - Accepts local `Agent`/`Team`/`Workflow` objects, `RemoteAgent`/`RemoteTeam`/`RemoteWorkflow` proxies, or `AgentProtocol` implementations.
 - Requires at least one component across `agents | teams | workflows`; otherwise raises `ValueError`.
 - `prefix` defaults to `"/a2a"` and namespaces all mounted A2A routes.
-- `tags` are forwarded to OpenAPI route metadata for filtering/grouping.
+- `tags`: when `None`, Agno defaults to `["A2A"]` (verified, `a2a.py` line 34: `self.tags = tags or ["A2A"]`). When provided, the list is forwarded verbatim to OpenAPI route metadata.
 - Requires the extra dependency `pip install a2a-sdk` (imported lazily by Agno).
 
 ### 2.2 Protocol surface (A2A SDK standard — NOT MCP)
@@ -102,15 +103,41 @@ A2A uses the A2A SDK standard JSON-RPC protocol, not MCP. The relevant `a2a.type
 
 The `A2A` interface, once attached to AgentOS, mounts these route groups under `prefix`:
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/{prefix}/agents/{id}/.well-known/agent-card.json` | Serve the `AgentCard` for agent `id` |
-| `POST` | `/{prefix}/agents/{id}/v1/message:send` | Send a message to agent `id` (non-streaming) |
-| `POST` | `/{prefix}/agents/{id}/v1/message:stream` | Stream a message exchange with agent `id` |
-| (replica) | `/{prefix}/teams/{id}/...` | Team variants of the above |
-| (replica) | `/{prefix}/workflows/{id}/...` | Workflow variants of the above |
+| Method | Path | Purpose | RBAC (AgentOS) |
+|--------|------|---------|----------------|
+| `GET` | `/{prefix}/agents/{id}/.well-known/agent-card.json` | Serve the `AgentCard` for agent `id` | **EXEMPT** (public discovery, see §2.4) |
+| `POST` | `/{prefix}/agents/{id}/v1/message:send` | Send a message to agent `id` (non-streaming) | enforced (agent/team/workflow run scope) |
+| `POST` | `/{prefix}/agents/{id}/v1/message:stream` | Stream a message exchange with agent `id` | enforced (agent/team/workflow run scope) |
+| (replica) | `/{prefix}/teams/{id}/...` | Team variants of the above | enforced (except agent-card.json) |
+| (replica) | `/{prefix}/workflows/{id}/...` | Workflow variants of the above | enforced (except agent-card.json) |
 
 yaml-agno does not implement these handlers. It only ensures the underlying objects exist so Agno can mount them.
+
+### 2.4 agent-card.json RBAC exemption contract
+
+> @ai-directive (Wave audit ask): The `GET .../{id}/.well-known/agent-card.json`
+> endpoint is **intentionally PUBLIC** in Agno. Verified in
+> `agno/os/interfaces/a2a/router.py`: the `get_agent_card` / `get_team_card` /
+> `get_workflow_card` handlers are registered WITHOUT a
+> `Depends(require_resource_access(...))` dependency, whereas the `:send` and
+> `:stream` handlers carry resource-access guards.
+
+This is the A2A standard discovery contract: a runtime MUST be able to fetch a
+peer's `AgentCard` without authenticating, so it can decide whether and how to
+message that peer. The card advertises **capabilities** (streaming, skills),
+not user data — it carries no PII and no session content. Therefore:
+
+1. yaml-agno does NOT add an RBAC guard on `agent-card.json`.
+2. The card's `name`, `description`, and `skills` are derived from the
+   published component's metadata — architects must treat these as
+   **publishable, non-sensitive** attributes. Do not put secrets or PII in
+   agent/team/workflow `description` fields of A2A-published components.
+3. `:send` and `:stream` remain fully RBAC-enforced (run scope required).
+4. If a deployment needs discovery to be private (closed trust circle), the
+   mitigation is network-level (private network / mTLS gateway), NOT a
+   per-route RBAC override — that would diverge from the A2A standard and from
+   Agno's verified behavior. This is documented as a calibration question
+   (§12.6) rather than a yaml-agno feature.
 
 ---
 
@@ -670,3 +697,7 @@ Implication: Agno derives `AgentCapabilities.streaming` from the component. MVP 
 ### [Question 5] Health/readiness exposure of the A2A surface
 **Should `/health` (SPEC_12 Section 8.4) report the count of published A2A components, or stay agnostic of interfaces?**
 Implication: surfacing A2A counts aids ops but couples health to interface specifics. MVP keeps `/health` interface-agnostic; an optional `/a2a/.well-known/status` may be added later.
+
+### [Question 6] Private A2A discovery (closed trust circle)
+**The `agent-card.json` endpoint is PUBLIC by the A2A standard (§2.4). If a deployment needs discovery to be private, what is the supported mitigation?**
+Implication: a per-route RBAC override would diverge from the A2A standard and from Agno's verified behavior. The supported mitigation is network-level (private network, mTLS gateway, or IP allowlist at the edge), NOT a yaml-agno authz flag on the card endpoint. This question is recorded to prevent a future "just add authz to agent-card.json" request that would break interop.
