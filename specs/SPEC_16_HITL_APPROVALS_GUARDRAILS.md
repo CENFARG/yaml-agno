@@ -127,7 +127,7 @@ sequenceDiagram
     participant DB as DB (SPEC_03)
     participant H as Humano/Admin
 
-    U->>API: POST /agents/{name}/run
+    U->>API: POST /agents/{agent_id}/runs (AgentOS native, multipart)
     API->>AR: agent.run(input)
     AR->>AR: Ejecuta tool con requires_confirmation
     AR->>DB: Persiste active_requirements

@@ -24,7 +24,7 @@ Existe una frontera deliberada entre SPEC_06 y SPEC_19. Ambos tocan API, pero en
 | Dimensión | SPEC_06 (API and AX) | SPEC_19 (este documento) |
 |-----------|----------------------|--------------------------|
 | **Alcance** | Contratos REST genéricos de FastAPI + AX function calling | JWT/scopes/isolation + catálogo exhaustivo de endpoints AgentOS |
-| **Endpoints cubiertos** | `POST /agents/{name}/run`, health, readiness (6 endpoints) | Catálogo completo: agents, teams, workflows, sessions, memory, knowledge, metrics, evals, approvals, schedules, registry, components, a2a, agui, slack, whatsapp, traces, health |
+| **Endpoints cubiertos** | Thin layer sobre AgentOS (YamlAgentOS subclass; readiness/liveness, rate-limit, tenant middleware) — los `/run`, `/sessions`, config son nativos de AgentOS | Catálogo completo: agents, teams, workflows, sessions, memory, knowledge, metrics, evals, approvals, schedules, registry, components, a2a, agui, slack, whatsapp, traces, health |
 | **Rate Limiting** | Sí (definido aquí, §1.4) | Referencia SPEC_06 §4 RateLimitMiddleware (NO duplica) |
 | **Auth middleware** | No | Sí (JWTMiddleware, BasicAuth, ScopeEnforcer, RBACManager) |
 | **Health checks** | Liveness/readiness (aquí referencia) | Extiende con endpoints del AgentOS API surface |

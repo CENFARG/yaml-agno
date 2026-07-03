@@ -159,7 +159,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 | E2E-T01 | Agent lifecycle (create YAML -> validate -> `AgentFactory.create()` -> run) | `tests/integration/e2e/test_agent_lifecycle.py` | SPEC_02 + SPEC_01 + SPEC_03 |
 | E2E-T02 | Team lifecycle (validate -> `TeamFactory.create()` -> run) | `tests/integration/e2e/test_team_lifecycle.py` | SPEC_02 + SPEC_01 + SPEC_05 |
 | E2E-T03 | Workflow lifecycle (declare -> `WorkflowFactory` -> execute via Agno) | `tests/integration/e2e/test_workflow_lifecycle.py` | SPEC_02 + SPEC_01 + SPEC_05 |
-| E2E-T04 | API run flow (`POST /agents/{name}/run` end-to-end) | `tests/integration/api/test_agent_endpoints.py` | SPEC_06 + SPEC_01 + SPEC_03 |
+| E2E-T04 | Native AgentOS run flow (multipart `POST /agents/{agent_id}/runs` end-to-end via `YamlAgentOS`) | `tests/integration/api/test_agent_endpoints.py` | SPEC_06 + SPEC_01 + SPEC_03 |
 | E2E-T05 | Long-term recall on start (port-backed, default Agno adapter) | `tests/integration/memory/test_recall_on_start.py` | SPEC_04 (S04-T04) |
 
 > @ai-directive (removed E2E tasks): the previous iteration listed E2E tasks for "memory compression" and "workflow error recovery" as standalone lifecycle tests. Compression E2E is owned by SPEC_15; workflow retry E2E is covered by S05-T05/T06 unit tests plus an optional integration test in SPEC_05. They are NOT standalone E2E tasks here to avoid duplicating owners.
