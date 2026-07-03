@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_02"
 Title: "Domain Model - YAML Configuration Schemas (Pydantic V2)"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#PydanticV2", "#YAMLSchema", "#ConfigModel", "#DIReference"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
 Group: "G2-Runtime-Core"
 Read_Order: 3
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 - added opaque delegated slots to AgentConfig for all Agno features (reasoning/skills/human_review/culture/persistence) following the existing dict[str, Any] | None pattern, plus human_review slot on StepConfig. Resolves the extra=forbid vs claimed-fields contradiction for SPEC_28/29/30/31/32."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 3 - deep adversarial review against Agno v2.6.18. Clarified that StepConfig fields (execute/finally_/condition/if_true/if_false/expression/cases/function) are yaml-agno YAML abstractions translated by the WorkflowFactory, NOT native Agno params (Agno Condition uses evaluator/steps/else_steps; Router uses selector/choices; Step has no execute/finally). Strengthened validate_type_specific_fields to cover all step types. Fixed DIReference docstring example (removed non-existent provider/keys attributes). Tightened model validator to reject empty provider/id segments."
 ---
 
 # SPEC_02_DOMAIN_MODEL
@@ -159,7 +159,10 @@ class AgentConfig(BaseModel):
         Raises:
             ValueError: If the reference is not 'provider/id'.
         """
-        if "/" not in v or len(v.split("/", 1)) != 2:
+        if "/" not in v:
+            raise ValueError(f"Invalid model format: {v}. Expected 'provider/id'.")
+        provider, _, model_id = v.partition("/")
+        if not provider or not model_id:
             raise ValueError(f"Invalid model format: {v}. Expected 'provider/id'.")
         return v
 ```
@@ -266,6 +269,31 @@ class TeamConfig(BaseModel):
 
 **Responsabilidad**: Validar la configuración de un workflow (la raíz `workflow:` del YAML), incluyendo las primitivas de Agno.
 
+> **@ai-directive (StepConfig es una abstracción YAML, NO un mapeo 1:1 a Agno)**:
+> Agno modela los componentes de workflow como clases separadas: `Step`, `Condition`,
+> `Router`, `Loop`, `Parallel`, `Steps` (cada uno con su propio constructor en
+> `agno/workflow/`). yaml-agno los unifica en un **único `StepConfig`** discriminado
+> por el campo `type` (valor del enum `agno.workflow.types.StepType`). El
+> `WorkflowFactory` (SPEC_01 §4) traduce cada `StepConfig` al componente Agno correcto:
+>
+> | Campo StepConfig (yaml-agno)   | Componente Agno y campo nativo                              |
+> | ------------------------------- | ---------------------------------------------------------- |
+> | `type`                          | `StepType` enum (importado, no redefinido)                  |
+> | `agent`/`team`/`workflow`       | `Step(agent=...)` / `Step(team=...)` / `Step(workflow=...)` |
+> | `function`                      | `Step(executor=...)` — Agno llama `executor`, yaml-agno `function` |
+> | `steps`                         | `Parallel(*steps)` / `Steps(steps=...)` / `Condition(steps=...)` |
+> | `condition`                     | `Condition(evaluator=...)` — str CEL o callable             |
+> | `if_true`/`if_false`            | ramas `steps`/`else_steps` de `Condition` (yaml-agno nombra el paso destino; el factory resuelve el paso Agno) |
+> | `expression`                    | `Router(selector=...)` — str CEL                            |
+> | `cases`                         | `Router(choices=...)` + mapeo valor→paso                    |
+> | `max_iterations`/`end_condition`| `Loop(max_iterations=...)` / `Loop(end_condition=...)`      |
+> | `human_review`                  | `HumanReview(...)` de Agno (slot opaco, validado por SPEC_29) |
+> | `execute`/`finally_`            | **propios de yaml-agno** (control de flujo del factory); NO existen en Agno |
+>
+> Esta tabla es normativa: si un campo StepConfig no aparece aquí como nativo de
+> Agno, es una abstracción que el `WorkflowFactory` debe traducir. Verificar siempre
+> contra el constructor Agno correspondiente antes de agregar campos nuevos.
+
 ```python
 # yaml-agno/src/models/config/workflow_config.py
 """Workflow configuration schema (YAML root: workflow). Single source of truth for
@@ -275,8 +303,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # @ai-directive: StepType is Agno's enum (agno/workflow/types.py). IMPORTED, never
-# redefined. Its values are capitalized ("Step", "Parallel", "Condition", "Router",
-# "Loop", "Function", "Workflow", "Steps"). The YAML must use those values.
+# redefined. Its values are capitalized ("Function", "Step", "Steps", "Loop",
+# "Parallel", "Condition", "Router", "Workflow"). The YAML must use those values.
 from agno.workflow.types import StepType
 
 
@@ -284,8 +312,18 @@ class StepConfig(BaseModel):
     """Schema for one step entry in a workflow YAML.
 
     The YAML ``type`` value must match an ``agno.workflow.types.StepType`` member.
-    Step-specific fields (``steps``, ``condition``, ``cases``, ``end_condition``)
-    are validated against the step type.
+    Step-specific fields are validated against the step type.
+
+    Note:
+        - This schema is a yaml-agno abstraction that UNIFIES the distinct Agno
+          workflow components (Step, Condition, Router, Loop, Parallel, Steps)
+          into one shape discriminated by ``type``. The WorkflowFactory (SPEC_01
+          §4) translates each StepConfig into the corresponding Agno component;
+          the field-name mapping is normative (see the @ai-directive table above
+          this code block). Fields not native to Agno (e.g. ``execute``,
+          ``finally_``, ``function``, ``condition``, ``if_true``, ``if_false``,
+          ``expression``, ``cases``) are yaml-agno YAML syntax translated by the
+          factory and MUST NOT be assumed to exist on Agno constructors.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -294,15 +332,19 @@ class StepConfig(BaseModel):
     type: StepType = Field(default=StepType.STEP, description="Agno StepType (capitalized value).")
     description: str | None = None
 
-    # Executor reference (used by Step/Steps/workflow-function executors)
+    # Executor reference (used by Step/Steps/workflow-function executors).
+    # @ai-directive: Agno's Step calls this `executor`; yaml-agno surfaces it as
+    # `function` in YAML and the WorkflowFactory maps it to Step(executor=...).
     agent: str | None = Field(None, description="Referenced AgentConfig name (executor).")
     team: str | None = Field(None, description="Referenced TeamConfig name (executor).")
-    function: str | None = Field(None, description="Callable reference (function executor).")
+    function: str | None = Field(None, description="Callable reference (maps to Agno Step executor).")
     workflow: str | None = Field(None, description="Nested workflow name (workflow executor).")
 
-    # Execution control
-    execute: bool = Field(default=True, description="Enable/disable the step.")
-    finally_: bool = Field(default=False, alias="finally", description="Run always (cleanup).")
+    # Execution control — yaml-agno own syntax (NOT Agno native). The
+    # WorkflowFactory honors `execute=False` to skip and `finally_=True` to mark
+    # a cleanup step; Agno has no equivalent fields on Step.
+    execute: bool = Field(default=True, description="Enable/disable the step (yaml-agno own).")
+    finally_: bool = Field(default=False, alias="finally", description="Run always as cleanup (yaml-agno own).")
 
     # Human-in-the-loop review gate for this step (SPEC_29 workflow HITL).
     # @ai-directive: opaque dict; the owner SPEC (29) validates its internals.
@@ -310,15 +352,16 @@ class StepConfig(BaseModel):
     # human approval before/after the step runs.
     human_review: dict[str, Any] | None = Field(None, description="Per-step human-review gate config. See SPEC_29.")
 
-    # Type-specific fields
-    steps: list[dict[str, Any]] = Field(default_factory=list, description="Nested steps (Parallel/Steps).")
-    condition: str | None = Field(None, description="CEL or callable expression (Condition).")
-    if_true: str | None = Field(None, description="Step id when condition is true.")
-    if_false: str | None = Field(None, description="Step id when condition is false.")
-    expression: str | None = Field(None, description="CEL expression (Router).")
-    cases: dict[str, str] = Field(default_factory=dict, description="value -> step id (Router).")
-    end_condition: str | None = Field(None, description="Loop end condition.")
-    max_iterations: int | None = Field(None, ge=1, description="Loop max iterations.")
+    # Type-specific fields (yaml-agno abstraction; the WorkflowFactory maps each
+    # to the corresponding Agno component field — see the @ai-directive table).
+    steps: list[dict[str, Any]] = Field(default_factory=list, description="Nested steps (Parallel/Steps/Condition).")
+    condition: str | None = Field(None, description="CEL or callable expression (maps to Agno Condition.evaluator).")
+    if_true: str | None = Field(None, description="Step id when condition is true (Agno Condition steps branch).")
+    if_false: str | None = Field(None, description="Step id when condition is false (Agno Condition else_steps branch).")
+    expression: str | None = Field(None, description="CEL expression (maps to Agno Router.selector).")
+    cases: dict[str, str] = Field(default_factory=dict, description="value -> step id (maps to Agno Router.choices).")
+    end_condition: str | None = Field(None, description="Loop end condition (maps to Agno Loop.end_condition).")
+    max_iterations: int | None = Field(None, ge=1, description="Loop max iterations (maps to Agno Loop.max_iterations).")
 
     @model_validator(mode="after")
     def validate_type_specific_fields(self) -> "StepConfig":
@@ -328,10 +371,24 @@ class StepConfig(BaseModel):
             The validated step (self).
 
         Raises:
-            ValueError: If nested steps are set on a non-Parallel/Steps type, etc.
+            ValueError: If a type-specific field is set on an incompatible type
+                (e.g. nested steps on a non-Parallel/Steps/Condition type,
+                router fields on a Loop, loop fields on a Router, etc.).
         """
-        if self.steps and self.type not in (StepType.PARALLEL, StepType.STEPS):
-            raise ValueError("Nested steps only allowed for Parallel/Steps types.")
+        t = self.type
+        # Nested steps apply to Parallel, Steps and Condition (Condition wraps
+        # steps/else_steps in Agno).
+        if self.steps and t not in (StepType.PARALLEL, StepType.STEPS, StepType.CONDITION):
+            raise ValueError("Nested steps only allowed for Parallel/Steps/Condition types.")
+        # Condition-only fields.
+        if any(v is not None for v in (self.condition, self.if_true, self.if_false)) and t != StepType.CONDITION:
+            raise ValueError("condition/if_true/if_false only allowed for Condition type.")
+        # Router-only fields.
+        if (self.expression is not None or self.cases) and t != StepType.ROUTER:
+            raise ValueError("expression/cases only allowed for Router type.")
+        # Loop-only fields.
+        if (self.end_condition is not None or self.max_iterations is not None) and t != StepType.LOOP:
+            raise ValueError("end_condition/max_iterations only allowed for Loop type.")
         return self
 
 
@@ -407,10 +464,10 @@ class DIReference(BaseModel):
 
     Example:
         >>> ref = DIReference(template="Hello ${user_db.name}")
-        >>> ref.provider
-        'user_db'
-        >>> ref.keys
-        ['name']
+        >>> ref.tokens
+        [('user_db', 'name')]
+        >>> ref.resolve({"user_db.name": "Alice"})
+        'Hello Alice'
     """
 
     model_config = ConfigDict(frozen=True)
@@ -720,6 +777,10 @@ AND ref.resolve({"user_db.name": "Alice"}) equals "Hello Alice"
 ### [Decision 5] DIReference como unico value object (frozen=True)
 
 **Justificacion**: la sintaxis `${provider.key}` no existe en Agno (es propia de yaml-agno), por lo que se modela con validacion propia e inmutable (`frozen=True`). Los demas value objects (`ModelId`, `SessionKey`) se eliminan porque duplican conceptos que Agno ya maneja como strings.
+
+### [Decision 6] StepConfig unifica los componentes de workflow de Agno
+
+**Justificacion**: Agno modela los componentes de workflow como clases separadas con constructores propios (`Step`, `Condition`, `Router`, `Loop`, `Parallel`, `Steps` en `agno/workflow/`). yaml-agno los unifica en un unico `StepConfig` discriminado por `type` para ofrecer una sintaxis YAML mas simple. El `WorkflowFactory` (SPEC_01 §4) traduce cada `StepConfig` al componente Agno correcto. Los campos de `StepConfig` que no existen en Agno (`execute`, `finally_`, `condition`, `if_true`, `if_false`, `expression`, `cases`) son **abstracciones de yaml-agno** y se documentan como tales en la tabla @ai-directive de la seccion 1.5. Esto evita la trampa de asumir que mapean 1:1 con constructores Agno.
 
 ---
 
