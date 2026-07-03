@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_30"
 Title: "Skills Management - Downloadable Domain Expertise and Progressive Discovery"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Skills", "#LocalSkills", "#SkillLoader", "#SKILL_md", "#Progres
 Dependency_Hashes: ["SPEC_11", "SPEC_01"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 14
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 - Wave 6 hygiene: documented that the hot-reload snippet reaches into the PRIVATE agent._skills attribute (Agno v2.6.18 has no public reload entrypoint); access is isolated behind the skills_reload.py lifecycle hook with a TODO for a future public API."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 3 - deep adversarial review vs Agno v2.6.18: CRITICAL fix — the iter2 claim that hot-reload reaches into a PRIVATE agent._skills was WRONG; Agent stores skills on the PUBLIC agent.skills attribute (agent.py:432,588: self.skills = skills). The reload hook now calls agent.skills.reload() directly with no private-member access and no TODO needed. Confirmed delegation is correct: agno/skills/{skill,agent_skills}.py, loaders/local.py, validator.py, errors.py all match the documented API (Skill dataclass fields, Skills methods incl. reload/get_system_prompt_snippet/get_tools, LocalSkills(path, validate), validate_skill_directory, SkillValidationError, safe_join_relative_path + PathSecurityError, duplicate-name warn+overwrite). Aligned get_skill_script args notation to Optional[List[str]] = None."
 ---
 
 # SPEC_30_SKILLS_MANAGEMENT
@@ -113,7 +113,7 @@ On construction, `Skills` immediately iterates loaders and loads all skills into
 
 1. `get_skill_instructions(skill_name)` — load the full SKILL.md instructions + metadata.
 2. `get_skill_reference(skill_name, reference_path)` — load a reference document.
-3. `get_skill_script(skill_name, script_path, execute=False, args=None, timeout=30)` — read or execute a script.
+3. `get_skill_script(skill_name, script_path, execute=False, args: Optional[List[str]] = None, timeout=30)` — read or execute a script (signature mirrors `agno/skills/agent_skills.py:273`).
 
 All three tools return JSON strings (error payloads include `available_skills` / `available_references` / `available_scripts` for self-correction).
 
@@ -139,7 +139,8 @@ Behavior:
 Agent(skills: Optional[Skills] = None)
 ```
 
-When an `Agent` receives a `Skills` instance, Agno:
+Constructor param `skills` (agent.py:432) is stored on the **public** `self.skills`
+attribute (agent.py:588) — NOT a private `_skills`. When an `Agent` receives a `Skills` instance, Agno:
 - Appends `skills.get_system_prompt_snippet()` to the agent's system prompt (the XML metadata index).
 - Adds `skills.get_tools()` (the three access tools) to the agent's tool set.
 
@@ -355,14 +356,13 @@ When the task matches a skill, the model calls `get_skill_instructions("brand-au
 `Skills.reload()` clears the internal dict and re-runs all loaders. yaml-agno exposes this via the AgentBuilder lifecycle (SPEC_01 resync path, SPEC_12 hot-reload) so that editing a SKILL.md bundle on disk is picked up without restarting the process:
 
 ```python
-# NOTE: this reaches into agent._skills, a PRIVATE Agno attribute.
-# Agno (v2.6.18) exposes no public reload entrypoint on Agent itself.
-# yaml-agno wraps this access behind the lifecycle hook in
-# yaml_agno/runtime/skills_reload.py (TASK_008) so the private-member
-# touch is isolated to ONE place.
-# TODO: replace with a public API if Agno adds Agent.reload_skills().
-if agent._skills is not None:
-    agent._skills.reload()
+# Agno v2.6.18 stores skills on the PUBLIC agent.skills attribute
+# (agno/agent/agent.py:432 constructor param, :588 self.skills = skills).
+# Skills.reload() is a public method (agno/skills/agent_skills.py:54).
+# yaml-agno wraps this in the lifecycle hook yaml_agno/runtime/skills_reload.py
+# (TASK_008) so callers do not import Agno internals directly.
+if agent.skills is not None:
+    agent.skills.reload()
 ```
 
 ---
@@ -548,7 +548,7 @@ def test_skills_config_forbids_unknown_keys():
 #### TASK_005: AgentBuilder integration (SPEC_01 wiring)
 - **File**: `yaml-agno/src/yaml_agno/runtime/agent_builder.py` (extend)
 - **Test**: `tests/unit/skills/test_agent_wiring.py`
-- **RED**: an `AgentConfig` with a populated `skills` block produces an `Agent` whose `agent._skills` is the built `Skills` and whose system prompt contains `<skills_system>`.
+- **RED**: an `AgentConfig` with a populated `skills` block produces an `Agent` whose `agent.skills` (PUBLIC Agno attribute, agent.py:588) is the built `Skills` and whose system prompt contains `<skills_system>`.
 - **GREEN**: call `SkillsConfigFactory().build(config.skills)`, pass to `Agent(skills=...)`.
 - **Commit**: `feat(skills): wire Skills into AgentBuilder`
 
