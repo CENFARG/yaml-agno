@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_32"
 Title: "Registry & Components - Code-Defined Runtime Catalog vs Versioned Persistent Catalog"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Registry", "#Components", "#RehydrateFunction", "#Workflows", "
 Dependency_Hashes: ["SPEC_12", "SPEC_02"]
 Group: "G6-Orquestacion"
 Read_Order: 17
-Last_Updated: "2026-07-02"
-Revision_Note: "iter2 (Wave 4): _no_dual_catalog can't be a Pydantic model_validator (registry_entry_ids is sibling state from the agentos doc, unreachable from the agent model) — moved to a CompositionRoot post-load validator validate_no_dual_catalog(agents, registry_entry_ids) invoked after both docs are loaded; confirmed the SPEC_02 persistence slot cross-ref is consistent (SPEC_02 iter2 added persistence as an opaque dict slot, SPEC_32 owns the typed ComponentPersistenceConfig); fixed glued-backtick markdown (**RED`:/GREEN`:/Commit`:/Test`: -> **RED**:/etc) across the TDD section."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter3 (deep adversarial review vs Agno v2.6.18 source). All Registry/Components API claims (Registry dataclass fields, add_* dedupe, _entrypoint_lookup cached_property, rehydrate_function, get_all_component_ids, /registry GET-only, /components CRUD + set-current rollback) CONFIRMED against agno/registry/registry.py and agno/os/routers/. Fix: TDD TASK_002 and Scenario 10 were stale — they referenced the old `_no_dual_catalog` Pydantic model_validator name and claimed a pydantic `ValidationError`, but iter2 (Wave 4) MOVED the check to a CompositionRoot post-load function `validate_no_dual_catalog` that raises plain `ValueError` after both docs are loaded. Aligned TASK_002, its RED/GREEN, its commit message, and Scenario 10's GIVEN/THEN to the CompositionRoot reality (ValueError, post-load, two-doc scope). No Agno API claims changed."
 ---
 
 # SPEC_32_REGISTRY_AND_COMPONENTS
@@ -634,8 +634,9 @@ AND only whitelisted table-name overrides from the caller are applied
 #### Scenario 10: Dual-catalog validation rejects both
 ```gherkin
 GIVEN an agent listed in agentos.registry.entries kind=agent ref=router_agent AND the same agent with persistence.persist=true
-WHEN config validation runs
-THEN ValidationError is raised referencing the dual-catalog rule
+WHEN the CompositionRoot runs validate_no_dual_catalog AFTER both the agent doc and the agentos registry doc are loaded
+THEN ValueError is raised (NOT a pydantic ValidationError — the check needs sibling state from two documents)
+AND the message references the dual-catalog rule (SPEC_32 §5.6)
 AND no Registry or Component is created
 ```
 
@@ -681,12 +682,12 @@ def test_registry_forbids_inline_body():
 - **GREEN**: implement `RegistryConfig`, `RegistryEntry` with `extra="forbid"` and the `kind` Literal.
 - **Commit**: `feat(registry): add RegistryConfig and RegistryEntry schemas`
 
-#### TASK_002: ComponentPersistenceConfig + dual-catalog validator
-- **File**: `yaml-agno/src/yaml_agno/registry/schema.py`
-- **Test**: `tests/unit/registry/test_persistence_schema.py`
-- **RED**: an agent both registry-listed and `persist=true` raises ValidationError.
-- **GREEN**: implement `ComponentPersistenceConfig` + `_no_dual_catalog` validator.
-- **Commit**: `feat(registry): add ComponentPersistenceConfig with dual-catalog guard`
+#### TASK_002: ComponentPersistenceConfig + CompositionRoot dual-catalog validator
+- **File**: `yaml-agno/src/yaml_agno/registry/schema.py` (ComponentPersistenceConfig) and `yaml-agno/src/yaml_agno/registry/composition_root.py` (`validate_no_dual_catalog`)
+- **Test**: `tests/unit/registry/test_no_dual_catalog.py`
+- **RED**: after BOTH docs are loaded, an agent whose id/name is in `registry_entry_ids` (kind=agent entries) AND has `persistence.persist=true` raises `ValueError` from `validate_no_dual_catalog(agents, registry_entry_ids)`. Note: this is NOT a pydantic `ValidationError` — `registry_entry_ids` is sibling state from the `agentos:` document, unreachable from any single agent model_validator, so the check is a post-load CompositionRoot function (see §5.6).
+- **GREEN**: implement `ComponentPersistenceConfig` (schema) + `validate_no_dual_catalog(agents, registry_entry_ids)` (CompositionRoot) raising `ValueError` naming the offending agent.
+- **Commit**: `feat(registry): add ComponentPersistenceConfig + CompositionRoot dual-catalog guard`
 
 #### TASK_003: RegistryPopulator resolves refs and registers
 - **File**: `yaml-agno/src/yaml_agno/registry/populator.py`
