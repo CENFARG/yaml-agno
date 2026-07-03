@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_29"
 Title: "Workflow-level HITL - HumanReview, Step Pauses and Executor Bubbling"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#WorkflowHITL", "#HumanReview", "#StepRequirement", "#PauseKind", "#OnReject", "#OnTimeout", "#OnError", "#IterationReview", "#AgnoWorkflowTypes"]
+Context_Tags: ["#WorkflowHITL", "#HumanReview", "#StepRequirement", "#PauseKind", "#OnReject", "#OnTimeout", "#OnError", "#PauseExpiry", "#IterationReview", "#AgnoWorkflowTypes"]
 Dependency_Hashes: ["SPEC_05", "SPEC_16"]
-Last_Updated: "2026-06-17"
-Revision_Note: "MVP iteration - yaml-agno declares workflow-level HITL (HumanReview per Step/Loop/Router) on top of Agno's agno.workflow.types primitives (HumanReview, StepRequirement, ErrorRequirement, PauseKind, OnReject/OnTimeout/OnError). Clear frontier with SPEC_16: SPEC_16 = tool/agent-run HITL (RunRequirement); SPEC_29 = whole-workflow HITL (HumanReview). Parallel steps do NOT support HITL. Callable requires_output_review is non-serializable -> only bool allowed in YAML. Python code/docstrings in English (Google style). asyncio.TaskGroup for concurrent pause resolution. No reimplementation of Agno."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter2 - Resolved Q3 and Q8. Q3: on_reject='else' now fail-fast validated (OnRejectElseRequiresRouterError) on non-Router steps, since 'else' routes to an else branch only Router owns. Q8: added pause_expiry (configurable duration, default 24h) that ARCHIVES unresolved pauses for cost control; parsed from a duration string (e.g. '24h'); on-resume archive check is MVP, periodic sweep is post-MVP (SPEC_13). pause_expiry is a yaml-agno orchestrator concern (Agno has no native pause archiving), distinct from HumanReview.timeout+OnTimeout which AUTO-RESOLVES. Archived pauses record to SPEC_09 traces."
 ---
 
 # SPEC_29_WORKFLOW_HITL
@@ -218,11 +218,12 @@ workflow:
         requires_user_input: false
         requires_output_review: true
         output_review_message: "Review the draft output; edit or reject."
-        on_reject: "retry"          # skip | cancel | else | retry
+        on_reject: "retry"          # skip | cancel | else (Router only) | retry
         on_error: "pause"           # fail | skip | pause
         max_retries: 3
         timeout: 3600               # seconds; null = no timeout
         on_timeout: "cancel"        # cancel | skip | approve
+        pause_expiry: "24h"         # duration string; archives unresolved pause
 
     - name: "refine_loop"
       type: "Loop"
@@ -252,6 +253,7 @@ workflow:
 | `max_retries` | `HumanReview.max_retries` | int, default 3 |
 | `timeout` | `HumanReview.timeout` | float seconds, nullable |
 | `on_timeout` | `HumanReview.on_timeout` | string -> OnTimeout |
+| `pause_expiry` | yaml-agno orchestrator field (NOT Agno) | duration string ("24h", "30m", "7d") -> seconds; default "24h". Archives unresolved pauses for cost control. Distinct from `timeout`+`on_timeout` (auto-resolution). |
 
 ### 4.3 Validation rules (yaml-agno)
 
@@ -262,6 +264,12 @@ workflow:
 5. Unknown enum string for `on_reject`/`on_error`/`on_timeout` -> `UnknownHumanReviewEnumError` listing valid values.
 6. `max_retries < 0` -> `HumanReviewBoundsError`.
 7. `timeout < 0` -> `HumanReviewBoundsError`.
+8. `on_reject: "else"` on a non-`Router` step -> `OnRejectElseRequiresRouterError` (hard). See section 6.2.
+9. `pause_expiry` as a non-parseable duration string -> `PauseExpiryParseError` (hard). See section 6.3.
+
+> @ai-directive: `on_reject='else'` is ONLY valid on Router steps (it routes to an else branch). Non-Router steps with `on_reject='else'` fail fast at config load with `OnRejectElseRequiresRouterError`. "else" is meaningful ONLY because a Router owns an else branch; a Step/Loop/Function/Steps has no branch to route to, so "else" would silently no-op or mislead — fail fast instead.
+
+> @ai-directive: `pause_expiry` is a yaml-agno ORCHESTRATOR concern (NOT Agno native). Agno has `HumanReview.timeout` + `OnTimeout` which AUTO-RESOLVE a pause; `pause_expiry` is DIFFERENT — it ARCHIVES an unresolved pause (marks the workflow failed/cancelled with reason "pause_expired") for COST CONTROL when a human never responds. Do not confuse the two: timeout = "auto-decide", pause_expiry = "give up and archive". `pause_expiry` records the archival event to SPEC_09 traces (no new table). MVP enforces it via an on-resume check; a periodic background sweep is post-MVP (SPEC_13 scheduler territory).
 
 ---
 
@@ -289,8 +297,12 @@ graph TD
     Q2 -->|no| NEXT["Advance to next Step"]
     STEP_PAUSE --> RES1["Human: confirm/reject/edit"]
     EXEC_PAUSE --> RES2["SPEC_16 resolves RunRequirement"]
-    RES1 --> NEXT
-    RES2 --> NEXT
+    RES1 --> RESUME1{"Resume attempt; pause > pause_expiry?"}
+    RESUME1 -->|no| NEXT["Advance to next Step"]
+    RESUME1 -->|yes| ARCHIVE["Archive: reason=pause_expired\nrecord to SPEC_09 traces"]
+    RES2 --> RESUME2{"Resume attempt; pause > pause_expiry?"}
+    RESUME2 -->|no| NEXT
+    RESUME2 -->|yes| ARCHIVE
 ```
 
 ---
@@ -336,9 +348,23 @@ class HumanReviewBoundsError(ValueError):
     """Raised when max_retries/timeout are negative."""
 
 
+class OnRejectElseRequiresRouterError(ValueError):
+    """Raised when on_reject='else' is set on a non-Router step.
+
+    OnReject.else_ routes to an else branch, which only a Router owns.
+    A Step/Steps/Loop/Function/Workflow has no else branch, so 'else'
+    would silently no-op or mislead. Fail fast at config load instead.
+    """
+
+
+class PauseExpiryParseError(ValueError):
+    """Raised when pause_expiry is not a parseable duration string."""
+
+
 _STEPTYPES_WITHOUT_HITL = {"Parallel"}
 _STEPTYPES_USER_INPUT = {"Step", "Steps", "Router", "Workflow"}
 _STEPTYPES_ITERATION = {"Loop"}
+_STEPTYPES_ROUTER = {"Router"}
 
 
 class HumanReviewFactory:
@@ -375,7 +401,15 @@ class HumanReviewFactory:
         Raises:
             ParallelHitlNotSupportedError, UserInputOnLoopError,
             IterationReviewOnNonLoopError, OutputReviewMustBeBoolError,
-            UnknownHumanReviewEnumError, HumanReviewBoundsError.
+            UnknownHumanReviewEnumError, HumanReviewBoundsError,
+            OnRejectElseRequiresRouterError, PauseExpiryParseError.
+
+        Note:
+            `pause_expiry` is NOT an Agno `HumanReview` field. It is a
+            yaml-agno orchestrator concern (cost-control archival of
+            unresolved pauses). The factory parses it and the caller
+            stores it alongside the built `HumanReview` for the
+            orchestrator's on-resume archive check (see section 6.3).
         """
         if not block:
             return None
@@ -385,6 +419,17 @@ class HumanReviewFactory:
         on_reject = self._map_enum(block.get("on_reject", "skip"), OnReject)
         on_error = self._map_enum(block.get("on_error", "skip"), OnError)
         on_timeout = self._map_enum(block.get("on_timeout", "cancel"), OnTimeout)
+
+        # Q3: on_reject='else' is ONLY valid on Router (routes to an else branch).
+        if on_reject == OnReject.else_ and step_type not in _STEPTYPES_ROUTER:
+            raise OnRejectElseRequiresRouterError(
+                f"on_reject='else' routes to an else branch, which only a Router "
+                f"owns. StepType '{step_type}' has no else branch. Use "
+                "'skip', 'cancel', or 'retry' instead."
+            )
+
+        # Q8: pause_expiry is a yaml-agno orchestrator field (NOT Agno).
+        pause_expiry = parse_pause_expiry(block.get("pause_expiry", "24h"))
 
         max_retries = int(block.get("max_retries", 3))
         timeout = block.get("timeout", None)
@@ -444,6 +489,46 @@ class HumanReviewFactory:
                 f"Valid values: {sorted(valid)}."
             )
         return enum_cls(value)
+
+
+# --- pause_expiry duration parser (yaml-agno orchestrator concern) -----------
+
+import re as _re
+
+_PAUSE_EXPIRY_RE = _re.compile(r"^(?P<amount>\d+(?:\.\d+)?)\s*(?P<unit>s|m|h|d)$")
+_PAUSE_EXPIRY_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def parse_pause_expiry(raw: object) -> float:
+    """Parse a pause_expiry duration string into seconds.
+
+    Accepts strings like "24h", "30m", "7d", "90s" (case-insensitive,
+    optional whitespace). Returns seconds as a float.
+
+    Args:
+        raw: the YAML pause_expiry value (string, or already a number).
+
+    Returns:
+        The duration in seconds.
+
+    Raises:
+        PauseExpiryParseError: when the value is not a parseable duration.
+    """
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if not isinstance(raw, str):
+        raise PauseExpiryParseError(
+            f"pause_expiry must be a duration string (e.g. '24h'), got {raw!r}."
+        )
+    match = _PAUSE_EXPIRY_RE.match(raw.strip().lower())
+    if not match:
+        raise PauseExpiryParseError(
+            f"pause_expiry '{raw}' is not a valid duration. "
+            "Use the form '<N><unit>' where unit is s/m/h/d (e.g. '24h', '30m')."
+        )
+    amount = float(match.group("amount"))
+    unit = match.group("unit")
+    return amount * _PAUSE_EXPIRY_UNITS[unit]
 ```
 
 ### 6.1 Wiring to StepConfig (SPEC_02/05)
@@ -454,6 +539,45 @@ The `StepConfig` schema carries an optional `human_review` sub-mapping. The work
 hreview = hr_factory.build(step_cfg.human_review, step_type=step_cfg.type, tenant_id=tenant_id)
 # Pass to Agno's Step/StepConfig constructor (Agno-owned API).
 ```
+
+### 6.2 on_reject="else" requires a Router step (Q3 resolution)
+
+> @ai-directive: `OnReject.else_` ("else") routes to an else branch. Only a `Router` step owns branches, so "else" is meaningful ONLY on Router. Declaring `on_reject: "else"` on a Step/Steps/Loop/Function/Workflow is a HARD validation error at config-load time (`OnRejectElseRequiresRouterError`). The alternative ("silently no-op" or "let Agno handle it") would hide a misconfiguration from the operator; fail fast with a clear message instead.
+
+The validator lives in `HumanReviewFactory.build()`, after enum mapping and before construction:
+
+```python
+if on_reject == OnReject.else_ and step_type not in _STEPTYPES_ROUTER:
+    raise OnRejectElseRequiresRouterError(
+        f"on_reject='else' routes to an else branch, which only a Router "
+        f"owns. StepType '{step_type}' has no else branch. Use "
+        "'skip', 'cancel', or 'retry' instead."
+    )
+```
+
+Error class: `OnRejectElseRequiresRouterError(ValueError)`, defined alongside `UnknownHumanReviewEnumError`.
+
+### 6.3 pause_expiry — configurable pause archiving (Q8 resolution)
+
+> @ai-directive: `pause_expiry` is a yaml-agno ORCHESTRATOR concern. Agno has NO native pause archiving — it has `HumanReview.timeout` + `OnTimeout` which AUTO-RESOLVE (skip/cancel/approve). `pause_expiry` is DIFFERENT: when a pause is older than `pause_expiry` and still unresolved, yaml-agno ARCHIVES it — marks the workflow as failed/cancelled with reason `"pause_expired"` and records the event to SPEC_09 traces (no new table). Purpose: cost control (an unresolved pause should not persist forever). It does NOT reimplement Agno's pause/resume runtime — yaml-agno declares the expiry and ARCHIVES; Agno executes pause/resume natively.
+
+**Configuration**: `pause_expiry` is a duration string in the `human_review:` block (default `"24h"`). Parsed by `parse_pause_expiry` into seconds. Accepted units: `s`, `m`, `h`, `d` (e.g. `"30m"`, `"24h"`, `"7d"`). Already-numeric values are treated as seconds.
+
+**Enforcement (MVP)**: an **on-resume check**. When a resume is attempted on a paused Step, the orchestrator checks the pause age against `pause_expiry`; if expired, it archives (does NOT resume) and records `pause_expired` to SPEC_09 traces.
+
+```python
+# yaml-agno orchestrator (NOT Agno runtime) - resume guard
+def attempt_resume(pause, now: float, pause_expiry_s: float) -> ResumeResult:
+    age = now - pause.created_at
+    if age > pause_expiry_s:
+        archive_pause(pause, reason="pause_expired")  # records to SPEC_09 traces
+        return ResumeResult(archived=True, resumed=False)
+    return ResumeResult(archived=False, resumed=True)
+```
+
+**Enforcement (post-MVP, optional)**: a periodic background sweep that archives expired pauses without waiting for a resume attempt. This is SPEC_13 (scheduler) territory and is explicitly post-MVP. The MVP on-resume check bounds the cost risk; the sweep is an optimization.
+
+> @ai-directive: `pause_expiry` archival records to SPEC_09 traces only. It does NOT invent a new persistence table and does NOT write to the SPEC_16 `approvals` table (that table is Agno-owned for resolved approvals; archival is an orchestrator lifecycle event, not an approval record).
 
 ---
 
@@ -625,6 +749,64 @@ THEN the resulting HumanReview equals the original
 AND no field is lost
 ```
 
+### 9.9 on_reject="else" requires a Router step (Q3)
+
+#### Scenario 13: on_reject="else" on a Step is rejected
+```gherkin
+GIVEN a YAML workflow step with type="Step" and human_review.on_reject="else"
+WHEN the HumanReviewFactory builds the block at config load
+THEN it raises OnRejectElseRequiresRouterError
+AND the error explains that "else" routes to an else branch only a Router owns
+AND the error lists skip/cancel/retry as valid alternatives
+```
+
+#### Scenario 14: on_reject="else" on a Router is accepted
+```gherkin
+GIVEN a YAML workflow step with type="Router" and human_review.on_reject="else"
+WHEN the HumanReviewFactory builds the block
+THEN it builds successfully with on_reject == OnReject.else_
+AND no error is raised
+```
+
+### 9.10 pause_expiry archival (Q8)
+
+#### Scenario 15: pause_expiry parses duration strings to seconds
+```gherkin
+GIVEN a YAML human_review with pause_expiry="24h"
+WHEN the factory parses the block
+THEN parse_pause_expiry returns 86400.0 seconds
+AND pause_expiry="30m" returns 1800.0
+AND pause_expiry="7d" returns 604800.0
+```
+
+#### Scenario 16: invalid pause_expiry is rejected
+```gherkin
+GIVEN a YAML human_review with pause_expiry="24hours" (invalid unit)
+WHEN the factory parses the block
+THEN it raises PauseExpiryParseError
+AND the error documents the accepted form "<N><unit>" with units s/m/h/d
+```
+
+#### Scenario 17: pause older than pause_expiry is archived on resume
+```gherkin
+GIVEN a workflow Step paused via HumanReview with pause_expiry="24h"
+AND the pause is unresolved for 25 hours
+WHEN a resume is attempted
+THEN the workflow is NOT resumed
+AND it is archived as pause_expired
+AND the archival event is recorded to SPEC_09 traces
+AND the workflow is marked failed/cancelled with reason "pause_expired"
+```
+
+#### Scenario 18: pause within pause_expiry resumes normally
+```gherkin
+GIVEN a workflow Step paused via HumanReview with pause_expiry="24h"
+AND the pause is unresolved for 1 hour
+WHEN a resume is attempted
+THEN the workflow resumes normally
+AND no archival event is recorded
+```
+
 ---
 
 ## 10. TDD MICRO-TASK EXECUTION PROTOCOL
@@ -707,6 +889,73 @@ async def test_probe_pauses_concurrent():
 - **GREEN**: implement `probe_workflow_pauses` with `asyncio.TaskGroup` (NOT gather).
 - **Commit**: `feat(workflow-hitl): concurrent pause-state probe via TaskGroup`
 
+### TASK_008: on_reject="else" requires Router (Q3)
+- **File**: `src/yaml_agno/infra/workflow_hitl/factory.py`
+- **Test**: `test_on_reject_else_on_non_router_rejected`, `test_on_reject_else_on_router_accepted`
+- **RED**:
+```python
+import pytest
+from yaml_agno.infra.workflow_hitl.factory import (
+    HumanReviewFactory, OnRejectElseRequiresRouterError,
+)
+from agno.workflow.types import OnReject
+
+def test_on_reject_else_on_non_router_rejected():
+    factory = HumanReviewFactory(deps=FakeDeps())
+    with pytest.raises(OnRejectElseRequiresRouterError):
+        factory.build(
+            {"requires_confirmation": True, "on_reject": "else"},
+            step_type="Step", tenant_id="t1",
+        )
+
+def test_on_reject_else_on_router_accepted():
+    factory = HumanReviewFactory(deps=FakeDeps())
+    hr = factory.build(
+        {"requires_confirmation": True, "on_reject": "else"},
+        step_type="Router", tenant_id="t1",
+    )
+    assert hr.on_reject == OnReject.else_
+```
+- **GREEN**: add `_STEPTYPES_ROUTER = {"Router"}` and the `OnReject.else_` guard in `build()` after enum mapping; define `OnRejectElseRequiresRouterError`.
+- **Commit**: `feat(workflow-hitl): reject on_reject='else' on non-Router steps`
+
+### TASK_009: pause_expiry parsing + on-resume archive check (Q8)
+- **File**: `src/yaml_agno/infra/workflow_hitl/factory.py` (parser), `src/yaml_agno/infra/workflow_hitl/orchestrator.py` (resume guard)
+- **Test**: `test_parse_pause_expiry_durations`, `test_parse_pause_expiry_invalid`, `test_resume_archives_expired_pause`, `test_resume_within_expiry_resumes`
+- **RED**:
+```python
+import pytest
+from yaml_agno.infra.workflow_hitl.factory import (
+    parse_pause_expiry, PauseExpiryParseError,
+)
+
+def test_parse_pause_expiry_durations():
+    assert parse_pause_expiry("24h") == 86400.0
+    assert parse_pause_expiry("30m") == 1800.0
+    assert parse_pause_expiry("7d") == 604800.0
+    assert parse_pause_expiry("90s") == 90.0
+    assert parse_pause_expiry(120) == 120.0  # numeric -> seconds
+
+def test_parse_pause_expiry_invalid():
+    for bad in ["24hours", "", "abc", "h", "-5m"]:
+        with pytest.raises(PauseExpiryParseError):
+            parse_pause_expiry(bad)
+
+def test_resume_archives_expired_pause():
+    # pause 25h old, expiry 24h -> archive, do not resume
+    pause = FakePause(created_at=now() - 25 * 3600)
+    result = attempt_resume(pause, now=now(), pause_expiry_s=24 * 3600)
+    assert result.archived is True and result.resumed is False
+    # archival recorded to SPEC_09 traces (mock the trace recorder)
+
+def test_resume_within_expiry_resumes():
+    pause = FakePause(created_at=now() - 1 * 3600)
+    result = attempt_resume(pause, now=now(), pause_expiry_s=24 * 3600)
+    assert result.archived is False and result.resumed is True
+```
+- **GREEN**: implement `parse_pause_expiry` with the regex units table (s/m/h/d) + `PauseExpiryParseError`; implement `attempt_resume` orchestrator guard that calls `archive_pause(reason="pause_expired")` recording to SPEC_09 traces when `now - created_at > pause_expiry_s`.
+- **Commit**: `feat(workflow-hitl): parse pause_expiry duration + archive expired pauses on resume`
+
 ---
 
 ## 11. SUPUESTOS (ASSUMPTIONS)
@@ -719,6 +968,8 @@ async def test_probe_pauses_concurrent():
 6. **Multi-tenant**: `tenant_id` passed by Core Infra, never embedded in `HumanReview` (Agno-owned, tenant-agnostic).
 7. **Lazy resolution**: messages and schemas resolved lazily via DependencyManager.
 8. **Two retry axes**: SPEC_05 executor retry vs `HumanReview.max_retries`/`on_reject="retry"` review-loop retry are distinct; neither subsumes the other.
+9. **ON_REJECT ELSE => ROUTER**: `on_reject="else"` is valid ONLY on Router steps (it routes to an else branch). Non-Router steps fail fast at config load with `OnRejectElseRequiresRouterError`. Fail-fast prevents silent no-ops.
+10. **PAUSE_EXPIRY = ARCHIVE (not auto-resolve)**: `pause_expiry` is a yaml-agno orchestrator concern (Agno has no native pause archiving). It ARCHIVES unresolved pauses for cost control, distinct from `HumanReview.timeout`+`OnTimeout` (which AUTO-RESOLVE). MVP enforces via an on-resume check; a periodic sweep is post-MVP (SPEC_13). Archival records to SPEC_09 traces (no new table).
 
 ---
 
@@ -726,12 +977,12 @@ async def test_probe_pauses_concurrent():
 
 1. **Workflow SLA / timeout**: should yaml-agno support a workflow-LEVEL timeout (distinct from per-Step `HumanReview.timeout`) that cancels the whole workflow if total pause time exceeds an SLA? Recommend post-MVP; affects orchestrator state machine.
 2. **Batch review**: should multiple pending `StepRequirement`s be resolvable in a single batch call (approve-all), or strictly one-by-one? Batch improves UX for publication pipelines but weakens the gatekeeper intent.
-3. **`on_reject="else"` on non-Router**: Agno's `OnReject.else_` is meaningful only for Router branches. Should yaml-agno reject it on non-Router steps, or let Agno handle it? Recommend yaml-agno validates it (fails fast at config load).
+3. **RESUELTA** **`on_reject="else"` on non-Router**: yaml-agno validates it. `on_reject="else"` on a non-Router step fails fast at config load with `OnRejectElseRequiresRouterError`. Implemented in `HumanReviewFactory.build()` (see section 6.2, TASK_008, Scenarios 13-14). "else" routes to an else branch only a Router owns; non-Router steps have no branch to route to.
 4. **Review persistence**: should resolved `StepRequirement` decisions be persisted to the SPEC_16 `approvals` table for audit, or only to SPEC_09 traces? Audit persistence adds a write path per pause.
 5. **Dynamic review via hook integration**: is the SPEC_16-hook escape hatch for dynamic `requires_output_review` enough in MVP, or do users need a YAML-described condition (e.g. Jinja expression)? YAML conditions add an eval surface (security).
 6. **Nested Workflow pause propagation**: when a Step is itself a nested `Workflow` with its own pauses, should pauses propagate up as STEP or nest as EXECUTOR? Affects consumer resolution logic.
 7. **`user_input_schema` validation**: should yaml-agno validate the `user_input_schema` is a valid JSON schema at config load, or defer to Agno? Early validation improves DX.
-8. **Pause expiry vs timeout**: `HumanReview.timeout` + `OnTimeout` cover auto-resolution. Should yaml-agno add a separate `pause_expiry` that ARCHIVES an unresolved pause after N days (cost control)? Operational concern.
+8. **RESUELTA** **Pause expiry vs timeout**: yaml-agno adds `pause_expiry` — a configurable duration (default "24h") that ARCHIVES an unresolved pause after N time for cost control. It is a yaml-agno orchestrator concern (Agno has no native pause archiving), distinct from `HumanReview.timeout`+`OnTimeout` (auto-resolve). MVP enforces via an on-resume archive check; periodic sweep is post-MVP (SPEC_13). Archival records to SPEC_09 traces. Implemented in `parse_pause_expiry` + `attempt_resume` (see section 6.3, TASK_009, Scenarios 15-18).
 
 ---
 
@@ -742,6 +993,7 @@ async def test_probe_pauses_concurrent():
 - SPEC_05 (Workflows & Teams): step coordination, executor-level retry, error recovery.
 - SPEC_16 (HITL, Approvals & Guardrails): tool/agent-run HITL, `RunRequirement`, `RunStatus.paused`, `approvals` table, the `PauseKind.EXECUTOR` resolution owner.
 - SPEC_06 (API & AX): pause/resume API surface for workflow HITL.
-- SPEC_09 (Observability & SRE): pause traces/metrics.
+- SPEC_09 (Observability & SRE): pause traces/metrics; `pause_expiry` archival records here.
+- SPEC_13 (Scheduler): periodic background sweep for expired pauses (post-MVP `pause_expiry` enforcement).
 - SPEC_28 (Reasoning): agent reasoning inside a Step executor (indirect via bubble).
 - SPEC_08 (TDD Microtasks): test conventions.
