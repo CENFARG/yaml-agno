@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_14"
 Title: "Model Resilience & Configuration"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,13 +9,13 @@ Context_Tags: ["#models", "#fallback", "#resilience", "#circuit-breaker", "#cach
 Dependency_Hashes: ["SPEC_01", "SPEC_05", "SPEC_08", "SPEC_09"]
 Group: "G2-Runtime-Core"
 Read_Order: 4
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 3 - Wave 6 hygiene: marked Q1/Q2/Q4 RESUELTA with the in-body adopted decisions (subset MVP; no own cache layer, Agno cache_response only; CircuitBreaker per model:alias)."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 4 - Deep adversarial review vs Agno v2.6.18: fixed 8 incorrect provider class mappings (deepseek DeepSeekChat->DeepSeek, xai XAI->xAI, vercel Vercel->V0, vllm vLLM->VLLM, bedrock BedrockModel->AwsBedrock; module paths llama_cpp/lmstudio; vertex GeminiVertex INVENTED -> vertexai.Claude). Fixed MISTRANT->MISTRAL typo. Corrected retry_delay/delay_between_retries forwarding (Agno has NO retry_delay field; NO wait_on_rate_limit field). Fixed _compose_kwargs to pass delay_between_retries. Rewired CircuitBreaker ownership SPEC_05 -> SPEC_09 (RetryPolicy stays SPEC_05). Converted ProviderFactory to lazy importlib loading (no eager 30+ provider imports). Replaced invented gpt-5.2 ids with gpt-4o."
 ---
 
 # SPEC_14_MODEL_RESILIENCE_AND_CONFIG
 
-> **Propósito**: Define cómo yaml-agno abstrae TODO el catálogo de modelos de Agno SDK (30+ providers), su configuración paramétrica, caching, fallback inteligente con routing de errores, retries con backoff, y modelos de razonamiento a una capa YAML-first con validación Pydantic V2 y resiliencia operacional integrada con el Circuit Breaker de SPEC_05.
+> **Propósito**: Define cómo yaml-agno abstrae TODO el catálogo de modelos de Agno SDK (30+ providers), su configuración paramétrica, caching, fallback inteligente con routing de errores, retries con backoff, y modelos de razonamiento a una capa YAML-first con validación Pydantic V2 y resiliencia operacional integrada con el Circuit Breaker de SPEC_09 y el `RetryPolicy` de SPEC_05.
 
 ---
 
@@ -35,8 +35,8 @@ Revision_Note: "Iter 3 - Wave 6 hygiene: marked Q1/Q2/Q4 RESUELTA with the in-bo
 ### 1.2 Qué NO cubre (frontera con otros SPECs)
 | Tema | Dueño | Referencia cruzada |
 |------|-------|--------------------|
-| Circuit Breaker operativo (estados, half-open, métricas) | SPEC_05 | Se REUTILIZA, no se duplica |
-| Retry/backoff a nivel executor / workflow step | SPEC_05 | Nivel orchestrator, distinto al modelo |
+| Circuit Breaker operativo (estados, half-open, métricas) | SPEC_09 | Se REUTILIZA, no se duplica |
+| Retry/backoff a nivel executor / workflow step | SPEC_05 | Nivel orchestrator, distinto al modelo (`RetryPolicy`) |
 | Dependencies / context building / CompressionManager | SPEC_15 | Operación de contexto |
 | Multimodal input parsing (image/audio/video bytes) | SPEC_17 | Este SPEC solo mapea el flag de capacidad |
 | ConfigManager / SecretManager (API keys) | SPEC_23 | Resuelve credenciales |
@@ -46,7 +46,7 @@ Revision_Note: "Iter 3 - Wave 6 hygiene: marked Q1/Q2/Q4 RESUELTA with the in-bo
 - **YAML-First**: todo config en YAML, nunca en código.
 - **Clean Architecture**: `ModelPort` (domain) + `AgnoModelAdapter` (infra). La fábrica es el puerto.
 - **Pydantic V2 boundary**: validación con union discriminada en el parser YAML.
-- **No duplicar resiliencia**: el Circuit Breaker vive en SPEC_05. Aquí se referencia y se enchufa.
+- **No duplicar resiliencia**: el Circuit Breaker vive en SPEC_09 y el `RetryPolicy` en SPEC_05. Aquí se referencian y se enchufan.
 - **asyncio.TaskGroup**: nunca `asyncio.gather` para llamadas de modelo paralelas (ej. fallback probing).
 
 ---
@@ -103,28 +103,28 @@ graph TD
 | Native | `openai_chat` | `agno.models.openai.OpenAIChat` | `OPENAI_API_KEY` | yes | yes | yes | no |
 | Native | `openai_responses` | `agno.models.openai.OpenAIResponses` | `OPENAI_API_KEY` | yes | yes | yes | no |
 | Native | `google` | `agno.models.google.Gemini` | `GOOGLE_API_KEY` | yes | yes | yes | no |
-| Native | `mistral` | `agno.models.mistral.MistralChat` | `MISTRANT_API_KEY` | partial | yes | yes | no |
-| Native | `deepseek` | `agno.models.deepseek.DeepSeekChat` | `DEEPSEEK_API_KEY` | no | yes | yes | no |
+| Native | `mistral` | `agno.models.mistral.MistralChat` | `MISTRAL_API_KEY` | partial | yes | yes | no |
+| Native | `deepseek` | `agno.models.deepseek.DeepSeek` | `DEEPSEEK_API_KEY` | no | yes | yes | no |
 | Native | `cohere` | `agno.models.cohere.Cohere` | `COHERE_API_KEY` | no | yes | partial | no |
 | Native | `perplexity` | `agno.models.perplexity.Perplexity` | `PERPLEXITY_API_KEY` | no | no | no | no |
-| Native | `xai` | `agno.models.xai.XAI` | `XAI_API_KEY` | yes | yes | yes | no |
+| Native | `xai` | `agno.models.xai.xAI` | `XAI_API_KEY` | yes | yes | yes | no |
 | Native | `meta` | `agno.models.meta.Llama` | `META_API_KEY` | partial | yes | yes | no |
 | Native | `dashscope` | `agno.models.dashscope.DashScope` | `DASHSCOPE_API_KEY` | partial | yes | yes | no |
-| Native | `vercel` | `agno.models.vercel.Vercel` | `VERCEL_API_KEY` | partial | yes | yes | no |
+| Native | `vercel` | `agno.models.vercel.V0` | `VERCEL_API_KEY` | partial | yes | yes | no |
 | Local | `ollama` | `agno.models.ollama.Ollama` | (none) | partial | yes | yes | yes |
-| Local | `llamacpp` | `agno.models.llamacpp.LlamaCpp` | (none) | no | partial | partial | yes |
-| Local | `lm_studio` | `agno.models.lm_studio.LMStudio` | (none) | no | yes | yes | yes |
-| Local | `vllm` | `agno.models.vllm.vLLM` | (none) | partial | yes | yes | yes |
-| Cloud | `bedrock` | `agno.models.aws.BedrockModel` | `AWS_ACCESS_KEY_ID` + secret | yes | yes | yes | no |
+| Local | `llamacpp` | `agno.models.llama_cpp.LlamaCpp` | (none) | no | partial | partial | yes |
+| Local | `lm_studio` | `agno.models.lmstudio.LMStudio` | (none) | no | yes | yes | yes |
+| Local | `vllm` | `agno.models.vllm.VLLM` | (none) | partial | yes | yes | yes |
+| Cloud | `bedrock` | `agno.models.aws.AwsBedrock` | `AWS_ACCESS_KEY_ID` + secret | yes | yes | yes | no |
 | Cloud | `azure` | `agno.models.azure.AzureOpenAI` | `AZURE_OPENAI_API_KEY` | yes | yes | yes | no |
-| Cloud | `vertex` | `agno.models.vertex.GeminiVertex` | `GCP service account JSON` | yes | yes | yes | no |
+| Cloud | `vertex` | `agno.models.vertexai.Claude` (Vertex AI hostea Anthropic Claude; Gemini-on-Vertex se usa vía `agno.models.google.Gemini`) | `GCP service account JSON` | yes | yes | yes | no |
 | Gateway | `openrouter` | `agno.models.openrouter.OpenRouter` | `OPENROUTER_API_KEY` | yes | yes | yes | no |
 | Gateway | `together` | `agno.models.together.Together` | `TOGETHER_API_KEY` | partial | yes | yes | no |
 | Gateway | `groq` | `agno.models.groq.Groq` | `GROQ_API_KEY` | no | yes | yes | no |
 | Gateway | `fireworks` | `agno.models.fireworks.Fireworks` | `FIREWORKS_API_KEY` | partial | yes | yes | no |
 | Gateway | `langdb` | `agno.models.langdb.LangDB` | `LANGDB_API_KEY` | yes | yes | yes | no |
 | Gateway | `nebius` | `agno.models.nebius.Nebius` | `NEBIUS_API_KEY` | partial | yes | yes | no |
-| Gateway | `mistral_gateway` | (alias mistral via gateway) | `MISTRANT_API_KEY` | partial | yes | yes | no |
+| Gateway | `mistral_gateway` | (alias mistral via gateway) | `MISTRAL_API_KEY` | partial | yes | yes | no |
 
 > **Nota**: La columna "API key env var" es la convención default de yaml-agno. Override vía `SecretManager` (SPEC_23). Los providers locales NO requieren API key.
 
@@ -244,17 +244,21 @@ class ModelExpandedSpec(BaseModel):
     # Caching (section 5)
     cache_response: bool = False
 
-    # Model-level retry (section 7). NOTE: these forward to Agno Model.* fields
-    # (retries / retry_delay / exponential_backoff / wait_on_rate_limit) — they
-    # are NOT consumed by compute_delay/RetryPolicy (that path is fallback-probe
-    # only; see section 7.3 @ai-directive).
+    # Model-level retry (section 7). @ai-directive: only `retries` and
+    # `exponential_backoff` are forwarded verbatim to Agno `Model.*`. `retry_delay`
+    # is the yaml-agno user-facing name and is forwarded to Agno as
+    # `delay_between_retries` (Agno has NO `retry_delay` field). `wait_on_rate_limit`
+    # and `retry_jitter` are yaml-agno-only knobs (no Agno equivalent) consumed by
+    # the fallback-probe path and the Retry-After handling. These fields are NOT
+    # consumed by compute_delay/RetryPolicy (that path is fallback-probe only;
+    # see section 7.3 @ai-directive).
     retries: int = Field(default=0, ge=0, le=10)
     retry_delay: float = Field(default=1.0, ge=0.0)
     exponential_backoff: bool = True
     wait_on_rate_limit: bool = False
     # Jitter applied to the model-level retry delay (fraction in [0.0, 1.0]).
-    # Forwarded to Agno Model.* when the provider SDK accepts it; otherwise
-    # applied by the fallback-probe path. Default 0.2 matches section 7.4.
+    # yaml-agno-only (Agno has no retry_jitter field); applied by the
+    # fallback-probe path. Default 0.2 matches section 7.4.
     retry_jitter: float = Field(default=0.2, ge=0.0, le=1.0)
 
     # Fallback chain (section 6). Without this field, build_fallback_chain()
@@ -342,7 +346,7 @@ models:
 
   fallback_a:
     provider: openai_responses
-    id: gpt-5.2
+    id: gpt-4o
     alias: fb-openai
     temperature: 0.7
     max_tokens: 4096
@@ -378,7 +382,7 @@ Mensajes con timestamps dinámicos (`add_datetime_to_context`, SPEC_15) **rompen
 ```yaml
 model:
   provider: openai_responses
-  id: gpt-5.2
+  id: gpt-4o
   cache_response: true       # bool, default false
 ```
 
@@ -403,7 +407,7 @@ model:
   fallback:
     # Lista ordenada de modelos de respaldo
     fallback_models:
-      - "openai_responses:gpt-5.2"           # referencia por string
+      - "openai_responses:gpt-4o"           # referencia por string
       - alias: fb-openai                      # referencia por alias declarado arriba
       - provider: google
         id: gemini-2.5-pro
@@ -483,9 +487,9 @@ async def on_model_fallback(
 
 yaml-agno resuelve `fallback_callback` desde un registro de callables cargado al boot (mismo mecanismo que tools, SPEC_11). Si el callback lanza, se loguea (WARNING) y se procede con el fallback.
 
-### 6.6 Integración con Circuit Breaker (SPEC_05)
+### 6.6 Integración con Circuit Breaker (SPEC_09)
 
-**No se duplica.** El Circuit Breaker de SPEC_05 es el único dueño del estado del circuito. yaml-agno lo consulta antes de cada intento:
+**No se duplica.** El Circuit Breaker de SPEC_09 es el único dueño del estado del circuito. yaml-agno lo consulta antes de cada intento:
 
 ```python
 from yaml_agno.infra.resilience import get_circuit_breaker
@@ -506,7 +510,7 @@ async def call_with_fallback(spec: ModelExpandedSpec, prompt, ctx):
     raise FallbackExhaustedError(spec.alias)
 ```
 
-Estados del Circuit Breaker (definidos en SPEC_05):
+Estados del Circuit Breaker (definidos en SPEC_09):
 - `CLOSED`: normal, permite requests.
 - `OPEN`: bloquea, espera cooldown.
 - `HALF_OPEN`: permite un probe request.
@@ -544,7 +548,9 @@ model:
   wait_on_rate_limit: true      # respeta Retry-After del provider
 ```
 
-> Fuente Agno: `OpenAIResponses(id="gpt-5.2", retries=2, retry_delay=1, exponential_backoff=True)`.
+> Fuente Agno: `OpenAIResponses(id="gpt-4o", retries=2, delay_between_retries=1, exponential_backoff=True)`.
+> Agno `Model` base fields: `retries`, `delay_between_retries`, `exponential_backoff` (NO `retry_delay`,
+> NO `wait_on_rate_limit` — those are yaml-agno user-facing names; see section 7.2 mapping).
 > También soportado a nivel Agent/Team: `retries=3, delay_between_retries=1, exponential_backoff=True`.
 
 ### 7.3 Cálculo de delay
@@ -737,30 +743,66 @@ graph LR
 ### 11.2 ProviderFactory
 
 ```python
-from agno.models.anthropic import Claude
-from agno.models.openai import OpenAIChat, OpenAIResponses
-# ... imports por familia
+import importlib
+from typing import Any
 
+# Lazy mapping: provider_id -> (module_path, class_name). Classes are imported
+# on first use via importlib, NOT at module top-level — this avoids forcing 30+
+# provider SDK dependencies when yaml-agno only uses one. Eager top-level imports
+# of every provider would make `import yaml_agno` pull Anthropic, OpenAI, Google,
+# AWS, etc. all at once.
 class ProviderFactory:
     """
     Puerto de dominio (ModelPort) implementado como adapter sobre Agno SDK.
     Única responsabilidad: traducir ModelExpandedSpec -> instancia de modelo Agno.
     """
 
-    _MAPPING = {
-        "anthropic": Claude,
-        "openai_chat": OpenAIChat,
-        "openai_responses": OpenAIResponses,
+    _MAPPING: dict[str, tuple[str, str]] = {
+        "anthropic": ("agno.models.anthropic", "Claude"),
+        "openai_chat": ("agno.models.openai", "OpenAIChat"),
+        "openai_responses": ("agno.models.openai", "OpenAIResponses"),
+        "google": ("agno.models.google", "Gemini"),
+        "mistral": ("agno.models.mistral", "MistralChat"),
+        "deepseek": ("agno.models.deepseek", "DeepSeek"),
+        "cohere": ("agno.models.cohere", "Cohere"),
+        "perplexity": ("agno.models.perplexity", "Perplexity"),
+        "xai": ("agno.models.xai", "xAI"),
+        "meta": ("agno.models.meta", "Llama"),
+        "dashscope": ("agno.models.dashscope", "DashScope"),
+        "vercel": ("agno.models.vercel", "V0"),
+        "ollama": ("agno.models.ollama", "Ollama"),
+        "llamacpp": ("agno.models.llama_cpp", "LlamaCpp"),
+        "lm_studio": ("agno.models.lmstudio", "LMStudio"),
+        "vllm": ("agno.models.vllm", "VLLM"),
+        "bedrock": ("agno.models.aws", "AwsBedrock"),
+        "azure": ("agno.models.azure", "AzureOpenAI"),
+        "vertex": ("agno.models.vertexai", "Claude"),
+        "openrouter": ("agno.models.openrouter", "OpenRouter"),
+        "together": ("agno.models.together", "Together"),
+        "groq": ("agno.models.groq", "Groq"),
+        "fireworks": ("agno.models.fireworks", "Fireworks"),
+        "langdb": ("agno.models.langdb", "LangDB"),
+        "nebius": ("agno.models.nebius", "Nebius"),
         # ... tabla 2.2
     }
+    _resolved: dict[str, type] = {}   # cache of already-imported classes
 
     def __init__(self, secret_manager: "SecretManager"):
         self._secrets = secret_manager
 
+    def _resolve_class(self, provider: str) -> type:
+        if provider in self._resolved:
+            return self._resolved[provider]
+        if provider not in self._MAPPING:
+            raise UnknownProviderError(provider)
+        module_path, class_name = self._MAPPING[provider]
+        module = importlib.import_module(module_path)
+        cls = getattr(module, class_name)
+        self._resolved[provider] = cls
+        return cls
+
     def build(self, spec: ModelExpandedSpec) -> "AgnoModel":
-        cls = self._MAPPING.get(spec.provider)
-        if cls is None:
-            raise UnknownProviderError(spec.provider)
+        cls = self._resolve_class(spec.provider)
 
         kwargs = self._compose_kwargs(spec)
         try:
@@ -777,9 +819,12 @@ class ProviderFactory:
         if spec.seed is not None: kwargs["seed"] = spec.seed
         kwargs["cache_response"] = spec.cache_response
         kwargs["retries"] = spec.retries
-        kwargs["retry_delay"] = spec.retry_delay
+        # yaml-agno `retry_delay` forwards to Agno `delay_between_retries`
+        # (Agno Model has NO `retry_delay` field). `wait_on_rate_limit` and
+        # `retry_jitter` are yaml-agno-only (no Agno equivalent) and are NOT
+        # passed to the Agno constructor.
+        kwargs["delay_between_retries"] = spec.retry_delay
         kwargs["exponential_backoff"] = spec.exponential_backoff
-        kwargs["wait_on_rate_limit"] = spec.wait_on_rate_limit
         if spec.reasoning_effort: kwargs["reasoning_effort"] = spec.reasoning_effort
         if spec.thinking is not None: kwargs["thinking"] = spec.thinking
         if spec.base_url: kwargs["base_url"] = spec.base_url
@@ -928,7 +973,7 @@ AND alias is None
 
 #### Scenario 2: String con alias se resuelve
 ```gherkin
-GIVEN un YAML con `model: "openai_responses:gpt-5.2:fb-openai"`
+GIVEN un YAML con `model: "openai_responses:gpt-4o:fb-openai"`
 WHEN se procesa
 THEN el spec tiene alias == "fb-openai"
 AND puede ser referenciado en fallback_models por "alias: fb-openai"
@@ -974,7 +1019,7 @@ THEN el validador emite WARNING "cache_response with dynamic context (datetime) 
 #### Scenario 7: Fallback on rate limit
 ```gherkin
 GIVEN un modelo primary anthropic con fallback on_rate_limit=route_fallback
-AND fallback_models=["openai_responses:gpt-5.2"]
+AND fallback_models=["openai_responses:gpt-4o"]
 WHEN el provider Anthropic devuelve RateLimitError (429)
 THEN yaml-agno invoca el fallback_callback (si existe)
 AND enruta al modelo OpenAI Responses
@@ -1102,7 +1147,7 @@ def test_valid_provider_id():
     assert s.raw == "anthropic:claude-sonnet-4-5"
 
 def test_with_alias():
-    s = ModelStringSpec(raw="openai_responses:gpt-5.2:fb")
+    s = ModelStringSpec(raw="openai_responses:gpt-4o:fb")
     assert s.raw.count(":") == 2
 
 @pytest.mark.parametrize("bad", ["no_colon", "a:b:c:d", ":id", "acme:x"])
@@ -1233,7 +1278,7 @@ from yaml_agno.domain.models.fallback import FallbackConfig, FallbackConfigValid
 
 def test_valid_fallback_config():
     fc = FallbackConfig(
-        fallback_models=["openai_responses:gpt-5.2"],
+        fallback_models=["openai_responses:gpt-4o"],
         on_rate_limit="route_fallback",
         on_context_overflow="route_fallback",
         on_error="retry_then_fallback",
@@ -1276,7 +1321,7 @@ def test_chain_resolves_aliases():
 - **GREEN**: Implementar `build_fallback_chain` (sección 12.2) con resolución lazy de refs.
 - **Commit**: `feat(models): add fallback chain builder with alias resolution`
 
-### TASK_009: Circuit Breaker integration (DEPENDE DE SPEC_05)
+### TASK_009: Circuit Breaker integration (DEPENDE DE SPEC_09)
 - **File**: `src/yaml_agno/infra/models/resilience.py`
 - **Test**: `tests/infra/models/test_resilience.py::test_call_with_fallback_skips_open_circuit`
 - **RED**:
@@ -1301,8 +1346,8 @@ async def test_routes_on_rate_limit():
     # primary 429, fallback OK
     ...
 ```
-- **GREEN**: Implementar `call_with_fallback` integrando `get_circuit_breaker` de SPEC_05 (sección 6.6). Usar `asyncio.TaskGroup` si hay probing.
-- **Commit**: `feat(models): integrate fallback routing with Circuit Breaker (SPEC_05)`
+- **GREEN**: Implementar `call_with_fallback` integrando `get_circuit_breaker` de SPEC_09 (sección 6.6). Usar `asyncio.TaskGroup` si hay probing.
+- **Commit**: `feat(models): integrate fallback routing with Circuit Breaker (SPEC_09)`
 
 ### TASK_010: compute_delay y RetryPolicy (fallback-probe path ONLY)
 - **File**: `src/yaml_agno/infra/models/retry.py`
@@ -1477,9 +1522,9 @@ async def test_probe_returns_status_per_model():
 
 - Agno docs: `models/model-as-string` (v2.2.6+), `models/cache-response`, `models/compatibility`.
 - SPEC_01 (Agno Runtime Architecture): ModelPort, ciclo de vida.
-- SPEC_05 (Workflows & Teams): Circuit Breaker, retry a nivel executor.
+- SPEC_05 (Workflows & Teams): retry a nivel executor (`RetryPolicy`).
 - SPEC_08 (TDD Microtasks): convenciones de test.
-- SPEC_09 (Observability & SRE): trazas de modelo, métricas de fallback.
+- SPEC_09 (Observability & SRE): Circuit Breaker, trazas de modelo, métricas de fallback.
 - SPEC_15 (Context Engineering): interacción con cache key.
 - SPEC_17 (Multimodal I/O): parsing real de contenido multimodal.
 - SPEC_23 (Config & Secrets): SecretManager para API keys.
