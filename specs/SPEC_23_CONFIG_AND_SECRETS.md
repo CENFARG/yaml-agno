@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_23"
 Title: "Config & Secrets Management - ConfigManager, Zero-Trust SecretManager, Feature Flags and Hot-Reload"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#ConfigManager", "#SecretManager", "#ZeroTrust", "#FeatureFlags"
 Dependency_Hashes: ["SPEC_03", "SPEC_00", "SPEC_02"]
 Group: "G8-Ops-Observabilidad"
 Read_Order: 25
-Last_Updated: "2026-06-17"
-Revision_Note: "Wave-5 alignment: Env enum SSOT resolved to dev|staging|prod (§2.2 pattern + §2.3 get_env() contract aligned; local is treated as dev and documented, test removed from the Env pattern). actor/updated_by columns now specified as composite user_id form {tenant}:{principal} per SPEC_04 A.1. Fixed BDD §2.7 wording: get_secret is async, await get_secret()."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter4 - Deep adversarial review vs core-cenf-py real source. Fixed multiple API drifts that would have broken wiring: (1) ConfigManager.get_* param name is default_value, not default (config/ports.py:49-94); added directive. (2) rotate_secret is also async — corrected the 'get_secret is the ONLY async accessor' claim (secrets/ports.py:72). (3) Three adapter constructor mismatches fixed against real ctors: PydanticConfigAdapter(env_prefix, config_path) not (settings, env); EncryptedSecretAdapter(config, secret_storage_path) not no-arg; MemoryFeatureFlagAdapter() + set_flag() not flags=. (4) Removed orphan test.yaml from §2.1 dir tree and Mermaid 'dev/test' label — both contradicted the dev|staging|prod enum SSOT. (5) Documented the deliberate narrowing of core's Env literal (local|dev|staging|prod -> dev|staging|prod) as a project decision, not drift. Env enum consistency, actor/updated_by composite directive, BDD await get_secret(), and os.environ prohibition all re-verified clean."
 ---
 
 # SPEC_23_CONFIG_AND_SECRETS
@@ -63,8 +63,8 @@ flowchart LR
   PYD -->|error| RAISE[ValidationError → fail-fast]
 
   SM[core SecretManager] -->|Zero-Trust| ADP{core adapter}
-  ADP -->|prod| ENC[EncryptedSecretAdapter]
-  ADP -->|dev/test| MEM[InMemorySecretAdapter]
+  ADP -->|prod/staging| ENC[EncryptedSecretAdapter]
+  ADP -->|dev| MEM[InMemorySecretAdapter]
 
   FF[core FeatureFlagManager] -->|seeded from| FFLAG[(yamlagno.feature_flags)]
   SM -.access trail.-> AUD[(yamlagno.secret_audit append-only)]
@@ -91,8 +91,7 @@ flowchart LR
 config/
   defaults.yaml          # defaults compartidos (menor precedencia)
   environments/
-    dev.yaml
-    test.yaml
+    dev.yaml             # local development also maps here (local==dev)
     staging.yaml
     prod.yaml
   tenants/
@@ -124,7 +123,14 @@ flags:
 
 ### 2.2 Pydantic V2 Settings Schema (validación estricta)
 
-@ai-directive: the Env enum SSOT is `dev|staging|prod`. There is no `local` and no `test` value; local development uses `env=dev` (document `local==dev`), and tests select adapters via `InMemorySecretAdapter` rather than a dedicated `test` env value.
+@ai-directive: the Env enum SSOT for yaml-agno is `dev|staging|prod`. There is no `local` and no `test` value; local development uses `env=dev` (document `local==dev`), and tests select adapters via `InMemorySecretAdapter` rather than a dedicated `test` env value.
+
+> **Note on core divergence**: the core-cenf `Env` literal is wider
+> (`Literal["local", "dev", "staging", "prod"]`, `config/ports.py`). yaml-agno
+> INTENTIONALLY narrows it to `dev|staging|prod` via the Pydantic pattern below;
+> a core value of `"local"` must be mapped to `"dev"` at the yaml-agno boundary
+> (the wiring layer normalizes before validation). This is a deliberate project
+> decision (Wave 5), not a drift from core-cenf.
 
 ```python
 # yaml_agno/infra/config/schemas.py
@@ -186,19 +192,25 @@ yaml-agno does NOT define `ConfigPort` or `ConfigManager`. It imports the core P
 # yaml_agno/infra/config/bootstrap.py
 from core_infrastructure import (
     ConfigManager,            # Protocol — consumed, never redefined
-    PydanticConfigAdapter,    # loads YamlAgnoSettings (YAML + env vars)
+    PydanticConfigAdapter,    # loads settings (YAML + env vars)
     InMemoryConfigAdapter,    # test double
 )
 
 def build_config_manager(env: str) -> ConfigManager:
     """Wire yaml-agno settings into the core ConfigManager Protocol.
 
-    The core PydanticConfigAdapter materializes YamlAgnoSettings (YAML files
-    under config/ + YA_ env vars), so precedence (Env > Files > Defaults) and
+    The core PydanticConfigAdapter materializes settings (YAML files under
+    config/ + YA_ env vars), so precedence (Env > Files > Defaults) and
     Pydantic V2 validation live entirely in core-cenf. yaml-agno only supplies
-    the settings model and the environment name.
+    the env prefix and config path.
+
+    Real core constructor: PydanticConfigAdapter(env_prefix="YA_",
+    config_path=..., error_handler=None) — NOT (settings=..., env=...).
     """
-    adapter = PydanticConfigAdapter(settings=YamlAgnoSettings, env=env)
+    adapter = PydanticConfigAdapter(
+        env_prefix="YA_",
+        config_path=_resolve_config_path(env),
+    )
     return adapter  # type: ConfigManager  (Protocol, runtime-checkable)
 ```
 
@@ -207,13 +219,18 @@ def build_config_manager(env: str) -> ConfigManager:
 | Method | Signature | yaml-agno usage |
 |--------|-----------|-----------------|
 | `get_env()` | `-> Env` (`"dev"\|"staging"\|"prod"`) | branch on environment |
-| `get_string(key, default=None)` | dot-notation, e.g. `"database.dsn"` | read DSN, endpoints |
-| `get_number(key, default=None)` | `-> float` | timeouts, pool sizes |
-| `get_boolean(key, default=None)` | `-> bool` | toggles |
-| `get_json(key, default=None)` | deserialized object | nested blobs |
+| `get_string(key, default_value=None)` | dot-notation, e.g. `"database.dsn"` | read DSN, endpoints |
+| `get_number(key, default_value=None)` | `-> float` | timeouts, pool sizes |
+| `get_boolean(key, default_value=None)` | `-> bool` | toggles |
+| `get_json(key, default_value=None)` | deserialized object | nested blobs |
 | `get_section(namespace)` | `-> dict[str, Any]` | whole section |
 | `reload()` | `async` (guarded by `asyncio.Lock`) | hot-reload without restart |
 | `get_json_schema()` | `-> dict` | AX / agent discovery |
+
+> **@ai-directive (real param name)**: the core Protocol names the fallback
+> parameter `default_value`, NOT `default` (`core_infrastructure/config/ports.py`).
+> yaml-agno code MUST call `config.get_string("database.dsn", default_value=...)`,
+> or pass it positionally; using `default=` will raise `TypeError`.
 
 @ai-directive: all `get_*` are **synchronous** in the core Protocol (only `reload()` is async). yaml-agno code MUST call them synchronously; do not `await config.get_string(...)`. Validation against `YamlAgnoSettings` happens inside the core adapter, so yaml-agno never re-implements precedence or Pydantic validation.
 
@@ -228,10 +245,30 @@ from core_infrastructure import (
     EncryptedSecretAdapter,    # prod: encrypted file/Vault-backed store
     InMemorySecretAdapter,     # test double
 )
+from core_infrastructure.secrets.models import SecretConfig
 
-def build_secret_manager(env: str) -> SecretManager:
-    """Wire the core SecretManager. yaml-agno never touches secret values."""
-    adapter = EncryptedSecretAdapter() if env == "prod" else InMemorySecretAdapter()
+def build_secret_manager(env: str, config) -> SecretManager:
+    """Wire the core SecretManager. yaml-agno never touches secret values.
+
+    Real core constructors:
+      EncryptedSecretAdapter(config: SecretConfig, secret_storage_path: str,
+                             error_handler=None) — SecretConfig carries the
+                             Fernet key (fernet_key field, models.py:149); the
+                             storage_path is a SEPARATE ctor arg, resolved here
+                             from yaml-agno config.
+      InMemorySecretAdapter(config: SecretConfig | None = None) — dict-backed.
+    """
+    if env == "prod":
+        # SecretConfig() defaults are fine; the Fernet key is injected via env
+        # or a bootstrap secret per core-cenf security guidance.
+        secret_config = SecretConfig()
+        storage_path = config.get_string("secrets.storage_path", default_value=None)
+        adapter = EncryptedSecretAdapter(
+            config=secret_config,
+            secret_storage_path=storage_path,
+        )
+    else:
+        adapter = InMemorySecretAdapter()
     return adapter  # type: SecretManager  (Protocol, runtime-checkable)
 ```
 
@@ -244,7 +281,7 @@ def build_secret_manager(env: str) -> SecretManager:
 | `rotate_secret(key, new_value)` | `async` | rotation (§2.9) |
 | `get_json_schema()` | `-> dict` | AX |
 
-@ai-directive: `get_secret()` is the ONLY async accessor. Cache TTL, masking, and fail-safe behavior are owned by core-cenf — yaml-agno does not re-implement the cache tuple or the miss/not-found logic. The core raises `ValidationError` (missing key) / `PermanentError` (backend unreachable); yaml-agno lets these propagate or wraps them via the core `ErrorHandlingManager`.
+@ai-directive: `get_secret()` and `rotate_secret()` are the async accessors; `invalidate_cache()` and `get_json_schema()` are sync (`core_infrastructure/secrets/ports.py`). Cache TTL, masking, and fail-safe behavior are owned by core-cenf — yaml-agno does not re-implement the cache tuple or the miss/not-found logic. The core raises `ValidationError` (missing key) / `PermanentError` (backend unreachable); yaml-agno lets these propagate or wraps them via the core `ErrorHandlingManager`.
 
 **Anti-patrones prohibidos** (checked por SAST Bandit/Semgrep, SPEC_22 §2.2):
 ```python
@@ -274,13 +311,21 @@ yaml-agno does NOT define `FlagPort` or `FlagManager`. The core provides `Featur
 from core_infrastructure import (
     FeatureFlagManager,           # Protocol — consumed, never redefined
     MemoryFeatureFlagAdapter,     # dev / tests
+    FeatureFlag,                  # flag definition (set_flag accepts this)
     FlagContext,                  # evaluation context (tenant_id, environment, attributes)
 )
 
-def build_flag_manager(env: str, flags: list) -> FeatureFlagManager:
+def build_flag_manager(env: str, flags: list[FeatureFlag]) -> FeatureFlagManager:
     """Wire the core FeatureFlagManager. Flag definitions may be seeded from
-    the yamlagno.feature_flags table (§5) into the memory adapter at boot."""
-    adapter = MemoryFeatureFlagAdapter(flags=flags)
+    the yamlagno.feature_flags table (§5) into the memory adapter at boot.
+
+    Real core constructor: MemoryFeatureFlagAdapter(config: FlagConfig | None).
+    It does NOT accept a ``flags=`` list — flags are added one-by-one via
+    ``adapter.set_flag(flag)`` after construction.
+    """
+    adapter = MemoryFeatureFlagAdapter()
+    for flag in flags:
+        adapter.set_flag(flag)
     return adapter  # type: FeatureFlagManager
 ```
 
