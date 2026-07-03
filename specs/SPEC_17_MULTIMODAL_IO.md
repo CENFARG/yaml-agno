@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_17"
 Title: "Multimodal I/O - Images, Audio, Video and Files Processing and Generation"
-Version: "0.2.0-iter4"
+Version: "0.2.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,9 @@ Context_Tags: ["#Multimodal", "#Media", "#Images", "#Audio", "#Video", "#Files",
 Dependency_Hashes: ["SPEC_02", "SPEC_11"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 13
-Last_Updated: "2026-07-02"
-Revision_Note: "iter4 (Wave 4 contract fixes): run_multimodal_agent signature now passes input_text/run_id/tenant_id explicitly and reads send_media_to_model/store_media from MediaConfig (no AgentRunRequest DTO references remain); process_inputs call now passes run_id in the correct position matching the (media_type, inputs, tenant_id, run_id, session_id, storage_backend) signature; S3Adapter resolves AWS credentials explicitly via SecretManager at bootstrap (no ambient credential chain, aligns §13.3); removed dead _YamlagnoBase.metadata_schema attribute (kept __table_args__ schema); MediaType Literal defined once in models.py and imported in config.py."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter5 (deep adversarial review vs Agno v2.6.18): CRITICAL fix — ToolResult field is `audios` (plural), not `audio` (agno/tools/function.py:1352); CRITICAL fix — send_media_to_model/store_media are Agent CONSTRUCTOR params (agent.py:218-220,423,450), NOT run()/arun() params, so they MUST be set on the Agent via MultimodalAgentBuilder.apply_to_agent (already exists) and removed from the agent.arun() call in run_multimodal_agent; fixed broken frontmatter (missing closing ---); documented the real extra fields on agno.media Image/Audio/Video/File (mime_type, format, detail, duration, width/height, etc.) and that yaml-agno populates a documented subset. Wave 4 fixes retained (no AgentRunRequest, process_inputs arg order, SecretManager S3 creds, MediaType SSOT)."
+---
 
 # SPEC_17_MULTIMODAL_IO
 
@@ -65,14 +66,17 @@ graph TB
 
 ### 1.2 Clases de Media de Agno
 
-yaml-agno envuelve las clases nativas de Agno sin reinventarlas:
+yaml-agno envuelve las clases nativas de Agno sin reinventarlas. Las clases reales
+(`agno/media.py`) tienen MÁS campos de los que yaml-agno expone en su mapeo; la tabla
+lista el subset que `MediaConverter` popula desde `MediaInput`. Los campos extra reales
+quedan como `None` o su default de Agno.
 
-| Clase Agno | Parámetros | Uso típico |
-|------------|-----------|------------|
-| `Image` | `url`, `filepath`, `content` (bytes), `id`, `original_prompt` | Análisis de imágenes, generación con DALL-E |
-| `Audio` | `url`, `filepath`, `content`, `format` | Transcripción, sentiment, generación de speech |
-| `Video` | `url`, `filepath`, `content` | Análisis de video (Gemini), captions, shorts |
-| `File` | `url`, `filepath`, `content` | Documentos PDF, DOCX, etc. |
+| Clase Agno | Subset que yaml-agno popula | Campos reales extra (no populados) | Uso típico |
+|------------|------------------------------|------------------------------------|------------|
+| `Image` | `url`, `filepath`, `content` (bytes), `id`, `original_prompt` | `format`, `mime_type`, `detail`, `revised_prompt`, `alt_text` | Análisis de imágenes, generación con DALL-E |
+| `Audio` | `url`, `filepath`, `content`, `format`, `id` | `mime_type`, `duration`, `sample_rate`, `channels`, `transcript`, `expires_at` | Transcripción, sentiment, generación de speech |
+| `Video` | `url`, `filepath`, `content`, `id` | `format`, `mime_type`, `duration`, `width`, `height`, `fps`, `eta`, `original_prompt`, `revised_prompt` | Análisis de video (Gemini), captions, shorts |
+| `File` | `url`, `filepath`, `content`, `id` | `mime_type`, `file_type`, `filename`, `size`, `external`, `format`, `name`, `citations` | Documentos PDF, DOCX, etc. |
 
 ```python
 from agno.media import Image, Audio, Video, File
@@ -83,7 +87,7 @@ from agno.media import Image, Audio, Video, File
 1. **No reinventar Agno**: Usar `Image`/`Audio`/`Video`/`File` directamente. yaml-agno añade metadata y storage, no wrappers redundantes.
 2. **Media como artifact con metadata**: Toda media persistida tiene un `MediaArtifact` (media_id, type, mime, url, size, dimensions). El `MediaStorage` es el registro de artifacts.
 3. **`send_media_to_model` vs `store_media`**: dos modos ortogonales. `send_media_to_model` controla si la media va al LLM. `store_media` controla si se persiste para uso futuro (cross-run). Se pueden combinar.
-4. **`ToolResult` para media de tools**: una tool que produce media retorna `ToolResult(images=[...])` / `ToolResult(videos=[...])` / `ToolResult(audio=[...])`. No devuelve URLs sueltas.
+4. **`ToolResult` para media de tools**: una tool que produce media retorna `ToolResult(images=[...])` / `ToolResult(videos=[...])` / `ToolResult(audios=[...])`. No devuelve URLs sueltas. **OJO**: en `ToolResult` el campo de audio es `audios` (plural), igual que `images`/`videos`/`files` (todos plurales). En cambio `Agent.run(audio=...)` recibe `audio` (singular). Ver §4.2 y `agno/tools/function.py:1352`.
 5. **Injection automática**: las tools pueden declarar `images: Optional[Sequence[Image]]` y Agno inyecta la media disponible al run automáticamente (joint media access).
 6. **FileStorage como Core Infra**: el storage de media es un manager (FileStorageManager) con adapters S3/LocalFS/GCS. No se acopla el dominio a un proveedor.
 
@@ -274,7 +278,9 @@ def generate_image(prompt: str) -> ToolResult:
 | `content` | `str` | Texto descriptivo del resultado (va al LLM como texto) |
 | `images` | `list[Image]` | Imágenes generadas/referenciadas |
 | `videos` | `list[Video]` | Videos generados/referenciados |
-| `audio` | `list[Audio]` | Audio generado/referenciado |
+| `audios` | `list[Audio]` | Audio generado/referenciado (**plural**, no `audio`) |
+| `files` | `list[File]` | Archivos generados/referenciados |
+| `metadata` | `dict \| None` | Metadata opcional (campo real de ToolResult en Agno) |
 
 ### 4.3 ToolResult para Audio y Video
 
@@ -287,7 +293,7 @@ def generate_speech(text: str) -> ToolResult:
         url="https://cdn.example.com/speech.wav",
         format="wav",
     )
-    return ToolResult(content="Speech generated.", audio=[audio_artifact])
+    return ToolResult(content="Speech generated.", audios=[audio_artifact])
 
 @tool
 def generate_short_video(prompt: str) -> ToolResult:
@@ -1160,9 +1166,15 @@ async def run_multimodal_agent(
 ):
     """Run an agent with multimodal inputs (no request DTO).
 
+    Precondition: ``agent`` MUST already have ``send_media_to_model`` and
+    ``store_media`` set via ``MultimodalAgentBuilder.apply_to_agent`` (§12.1).
+    In Agno v2.6.18 these are Agent CONSTRUCTOR params (agent.py:218-220,423,450),
+    NOT run()/arun() params, so they cannot be passed in this helper's arun() call.
+    The ``config`` arg is kept for the storage backend and future per-run overrides.
+
     Args:
-        agent: the Agno Agent instance to run.
-        config: MediaConfig carrying send_media_to_model / store_media / storage.
+        agent: the Agno Agent instance (already configured with media flags by the builder).
+        config: MediaConfig carrying storage backend (media flags read at build time).
         images: image MediaInputs (may be empty).
         audio: audio MediaInputs (may be empty).
         videos: video MediaInputs (may be empty).
@@ -1209,16 +1221,18 @@ async def run_multimodal_agent(
     agno_videos = [a.to_agno_video() for a in artifacts_by_type.get("video", [])]
     agno_files = [a.to_agno_file() for a in artifacts_by_type.get("file", [])]
 
-    # 3. Ejecutar. send_media_to_model / store_media come from MediaConfig
-    #    (NOT a request DTO — there is no AgentRunRequest; SPEC_06 iter3).
+    # 3. Ejecutar. NOTE: send_media_to_model / store_media are NOT run() params
+    #    in Agno — they are Agent CONSTRUCTOR params (agent.py:218-220,423,450).
+    #    They MUST already be set on the agent via MultimodalAgentBuilder.apply_to_agent
+    #    (see §12.1) before this helper is called. Here we only pass the media
+    #    inputs and scoping ids that run()/arun() actually accept.
+    #    No AgentRunRequest DTO (SPEC_06 iter3 removed it).
     response = await agent.arun(
         input=input_text,
         images=agno_images or None,
         audio=agno_audio or None,
         videos=agno_videos or None,
         files=agno_files or None,
-        send_media_to_model=config.send_media_to_model,
-        store_media=config.store_media,
         user_id=user_id,
         session_id=session_id,
     )
@@ -1742,8 +1756,8 @@ AND a new signed URL can be generated from storage_key
   ```python
   def test_generate_speech_returns_audio():
       r = generate_speech.fn("hello")
-      assert len(r.audio) == 1
-      assert r.audio[0].format == "wav"
+      assert len(r.audios) == 1   # ToolResult field is `audios` (plural)
+      assert r.audios[0].format == "wav"
 
   def test_generate_short_returns_video():
       r = generate_short_video.fn("prompt")
