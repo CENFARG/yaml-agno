@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_10"
 Title: "Knowledge & RAG Architecture - Vector DBs, Embedders, Chunkers and Retrieval"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Knowledge", "#RAG", "#VectorDb", "#Embedder", "#Chunker", "#Age
 Dependency_Hashes: ["SPEC_02", "SPEC_03"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 6
-Last_Updated: "2026-07-02"
-Revision_Note: "iter2 (Wave 4 contract fixes): defined ContentsDbConfig (db_url, table_name, schema) — KnowledgeConfig.contents_db referenced it but no schema existed; clarified knowledge_contents is a yamlagno.* config-store table (schema yamlagno, tenant_id NOT NULL, explicit WHERE) NOT a reuse of agno_* runtime tables (A.9/A.11 cross-tenant leak guard); documented the CustomChunkerConfig extra=allow exception (custom flows pass ctor kwargs as siblings, collected into init_args by the loader; built-in variants stay extra=forbid)."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 3 - Deep adversarial review vs Agno v2.6.18: fixed 12 incorrect VectorDb class names (Weaviate not WeaviateDb, Milvus not MilvusDb, RedisDB not RedisDb, CouchbaseSearch not CouchbaseDb, Cassandra not CassandraDb, UpstashVectorDb not UpstashDb, SingleStore not SingleStoreDb, Clickhouse not ClickHouseDb, LlamaIndexVectorDb not LlamaIndexVectorStore) and 3 module paths (mongodb not mongo, langchaindb not langchain, upstashdb not upstash). Removed INVENTED azure_cosmos/AzureCosmosMongoDb backend (no such module in Agno). Fixed PgVector params: hybrid_search_ratio -> vector_score_weight (real Agno param); removed invented hybrid_search_config. Fixed Knowledge constructor: reader/chunker/embedder/reranker are NOT Knowledge params (they live in vector_db/readers); search() is the real method (search_knowledge is the agent tool name). Fixed embedder class names (HuggingfaceCustomEmbedder, VLLMEmbedder, LangDBEmbedder, FastEmbedEmbedder) and OpenAIEmbedder default id (text-embedding-3-small, not ada-002); added OpenAILikeEmbedder (18 total, not 17). Fixed chunker CSVRowChunking -> RowChunking. Fixed readers: PDFPasswordReader is a PDFReader(password=) param (not a class); YoutubeReader -> YouTubeReader; LLMSReader -> LLMsTxtReader; added DocxReader, ExcelReader, S3Reader, TavilyReader, TextReader, PDFImageReader."
 ---
 
 # SPEC_10_KNOWLEDGE_AND_RAG
@@ -44,17 +44,24 @@ from agno.knowledge.knowledge import Knowledge
 from agno.vectordb.pgvector import PgVector, SearchType
 
 knowledge = Knowledge(
-    vector_db=PgVector(table_name="docs", db_url=db_url, search_type=SearchType.hybrid),
-    contents_db=None,          # opcional: PostgresDb para tracking de contenido
+    vector_db=PgVector(
+        table_name="docs", db_url=db_url, search_type=SearchType.hybrid,
+        # embedder y reranker se configuran DENTRO del vector_db, no en Knowledge
+    ),
+    contents_db=None,          # opcional: BaseDb/AsyncBaseDb para tracking de contenido
     name="docs_kb",
     description="KB de producto",
-    reader=None,               # reader por defecto segun extension
-    chunker=None,              # chunker por defecto
-    embedder=None,             # hereda del vector_db o OpenAIEmbedder default
-    reranker=None,             # opcional
     max_results=5,
 )
 ```
+
+> **Frontera de responsabilidades**: `Knowledge` NO acepta `reader`, `chunker`,
+> `embedder` ni `reranker` como params directos. El `embedder` y el `reranker`
+> viven en el `vector_db` (e.g. `PgVector(embedder=..., reranker=...)`); los
+> `reader` se pasan por llamada a `insert(content, reader=...)` o via el dict
+> `readers`; el chunker se configura dentro de cada reader/vector_db. El método
+> público de búsqueda es `search(query, ...)` / async `asearch` (NO
+> `search_knowledge`; ese es el nombre del tool generado para el agent).
 
 ### 1.2 Capas y responsabilidades
 
@@ -79,6 +86,16 @@ from pydantic import BaseModel, Field
 type KnowledgeId = str  # nombre logico de la KB
 
 class KnowledgeConfig(BaseModel):
+    """yaml-agno aggregate config for the `knowledge:` block.
+
+    Note on the Agno boundary: `reader`, `chunker`, `embedder`, and `reranker`
+    are YAML-agno conveniences. They are NOT forwarded to the `Knowledge(...)`
+    constructor (which does not accept them). The KnowledgeFactory injects
+    `embedder`/`reranker` into the `vector_db`, resolves `reader` per insert
+    call, and wires `chunker` into the reader/vector_db. `search_knowledge`
+    is an Agent-level flag (forwarded to `Agent(search_knowledge=...)`),
+    not a Knowledge method.
+    """
     model_config = {"extra": "forbid"}
     name: str = Field(..., max_length=120)
     description: str | None = Field(default=None, max_length=500)
@@ -126,7 +143,6 @@ type VectorDbConfig = Annotated[
     | MilvusConfig
     | ChromaConfig
     | MongoConfig
-    | AzureCosmosConfig
     | RedisConfig
     | CouchbaseConfig
     | CassandraConfig
@@ -149,22 +165,27 @@ type VectorDbConfig = Annotated[
 | `pgvector` | `agno.vectordb.pgvector.PgVector` | si (`SearchType.hybrid`) | si | db_url | Default recomendado produccion |
 | `pinecone` | `agno.vectordb.pineconedb.PineconeDb` | si (`use_hybrid_search`) | si | api_key | Usar v5.4.2 (no v6.x) |
 | `qdrant` | `agno.vectordb.qdrant.Qdrant` | si | si | api_key | Local o cloud |
-| `weaviate` | `agno.vectordb.weaviate.WeaviateDb` | si | si | api_key/cloud | Modulos |
-| `milvus` | `agno.vectordb.milvus.MilvusDb` | si | si | uri/token | Escala |
+| `weaviate` | `agno.vectordb.weaviate.Weaviate` | si | si | api_key/cloud | Modulos |
+| `milvus` | `agno.vectordb.milvus.Milvus` | si | si | uri/token | Escala |
 | `chroma` | `agno.vectordb.chroma.ChromaDb` | no | si | settings | Local / Chroma Cloud |
 | `mongo` | `agno.vectordb.mongodb.MongoDb` | si | si | uri | Atlas vector search |
-| `azure_cosmos` | `agno.vectordb.azure_cosmos_mongodb.AzureCosmosMongoDb` | no | si | uri | MongoDB vCore |
-| `redis` | `agno.vectordb.redis.RedisDb` | si | si | host/port/password | In-memory |
-| `couchbase` | `agno.vectordb.couchbase.CouchbaseDb` | no | si | connection_string | NoSQL |
-| `cassandra` | `agno.vectordb.cassandra.CassandraDb` | no | si | keyspace/contact_points | Distribuido |
+| `redis` | `agno.vectordb.redis.RedisDB` | si | si | host/port/password | In-memory (alias `RedisVectorDb`) |
+| `couchbase` | `agno.vectordb.couchbase.CouchbaseSearch` | no | si | connection_string | NoSQL (vector search) |
+| `cassandra` | `agno.vectordb.cassandra.Cassandra` | no | si | keyspace/contact_points | Distribuido |
 | `surrealdb` | `agno.vectordb.surrealdb.SurrealDb` | si | si | url/ns/db | Multi-modelo |
 | `lancedb` | `agno.vectordb.lancedb.LanceDb` | si (`SearchType.hybrid`) | si | uri (local) | Local serverless, dev |
-| `upstash` | `agno.vectordb.upstash.UpstashDb` | no | si | url/token | Serverless redis |
-| `singlestore` | `agno.vectordb.singlestore.SingleStoreDb` | si | si | db_url | Real-time analytics |
-| `clickhouse` | `agno.vectordb.clickhouse.ClickHouseDb` | si | si | host/port/username | Analytical |
+| `upstash` | `agno.vectordb.upstashdb.UpstashVectorDb` | no | si | url/token | Serverless redis |
+| `singlestore` | `agno.vectordb.singlestore.SingleStore` | si | si | db_url | Real-time analytics |
+| `clickhouse` | `agno.vectordb.clickhouse.Clickhouse` | si | si | host/port/username | Analytical |
 | `lightrag` | `agno.vectordb.lightrag.LightRag` | si | si | api_key | Graph-based RAG + reranker |
-| `langchain` | `agno.vectordb.langchain.LangChainVectorDb` | segun provider | si | wrapper | Cualquier vector store LC |
-| `llamaindex` | `agno.vectordb.llamaindex.LlamaIndexVectorStore` | segun provider | si | wrapper | Cualquier VS de LI |
+| `langchain` | `agno.vectordb.langchaindb.LangChainVectorDb` | segun provider | si | wrapper | Cualquier vector store LC |
+| `llamaindex` | `agno.vectordb.llamaindex.LlamaIndexVectorDb` | segun provider | si | wrapper | Cualquier VS de LI |
+
+> **Nota sobre backends removidos**: `azure_cosmos`/`AzureCosmosMongoDb` figuraba en
+> iteraciones previas pero NO existe como backend en Agno v2.6.18 (no hay módulo
+> `agno.vectordb.azure_cosmos_mongodb`). Removido. Para Cosmos DB vCore, usar el
+> wrapper `type: mongo` con un URI de Cosmos o `type: langchain` con el vectorstore
+> de LangChain correspondiente.
 
 ### 2.3 Schemas YAML por backend
 
@@ -182,14 +203,11 @@ knowledge:
     db_url: "${PGVECTOR_DB_URL}"      # inyectado por SecretManager
     schema_: "ai"                      # 'schema' es palabra reservada
     search_type: hybrid                # vector | keyword | hybrid
-    hybrid_search_ratio: 0.5           # peso vector vs keyword
+    vector_score_weight: 0.5           # peso vector vs keyword (Agno PgVector param)
     embedder:
       type: openai
       id: "text-embedding-3-large"
       dimensions: 3072
-    hybrid_search_config:              # opcional: configuracion avanzada
-      function: ts_vector
-      rank_fusion_algorithm: rsr
 ```
 
 Modelo:
@@ -202,10 +220,11 @@ class PgVectorConfig(BaseModel):
     db_url: SecretStr
     schema_: str = Field(default="ai", alias="schema")
     search_type: Literal["vector", "keyword", "hybrid"] = "vector"
-    hybrid_search_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Agno PgVector uses `vector_score_weight` (NOT hybrid_search_ratio) for the
+    # vector-vs-keyword blend weight in hybrid search.
+    vector_score_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     embedder: EmbedderConfig | None = None
     reranker: RerankerConfig | None = None
-    hybrid_search_config: dict[str, Any] | None = None
 ```
 
 #### 2.3.2 Pinecone
@@ -308,19 +327,7 @@ vector_db:
     type: openai
 ```
 
-#### 2.3.8 Azure Cosmos (MongoDB vCore)
-
-```yaml
-vector_db:
-  type: azure_cosmos
-  collection_name: "docs"
-  database: "knowledge"
-  url: "${AZURE_COSMOS_URL}"
-  key: "${AZURE_COSMOS_KEY}"
-  index_name: "vector_index"
-```
-
-#### 2.3.9 Redis
+#### 2.3.8 Redis
 
 ```yaml
 vector_db:
@@ -333,7 +340,7 @@ vector_db:
   search_type: hybrid
 ```
 
-#### 2.3.10 Couchbase
+#### 2.3.9 Couchbase
 
 ```yaml
 vector_db:
@@ -346,7 +353,7 @@ vector_db:
   password: "${COUCHBASE_PASS}"
 ```
 
-#### 2.3.11 Cassandra
+#### 2.3.10 Cassandra
 
 ```yaml
 vector_db:
@@ -358,7 +365,7 @@ vector_db:
   password: "${CASS_PASS}"
 ```
 
-#### 2.3.12 SurrealDB
+#### 2.3.11 SurrealDB
 
 ```yaml
 vector_db:
@@ -371,7 +378,7 @@ vector_db:
   password: "${SURREAL_PASS}"
 ```
 
-#### 2.3.13 LanceDB (local, dev)
+#### 2.3.12 LanceDB (local, dev)
 
 ```yaml
 vector_db:
@@ -387,7 +394,7 @@ vector_db:
     model: "rerank-v3.5"
 ```
 
-#### 2.3.14 Upstash (serverless)
+#### 2.3.13 Upstash (serverless)
 
 ```yaml
 vector_db:
@@ -398,7 +405,7 @@ vector_db:
   dimension: 1536
 ```
 
-#### 2.3.15 SingleStore
+#### 2.3.14 SingleStore
 
 ```yaml
 vector_db:
@@ -408,7 +415,7 @@ vector_db:
   search_type: hybrid
 ```
 
-#### 2.3.16 ClickHouse
+#### 2.3.15 ClickHouse
 
 ```yaml
 vector_db:
@@ -421,7 +428,7 @@ vector_db:
   search_type: hybrid
 ```
 
-#### 2.3.17 LightRAG (graph-based RAG + reranker)
+#### 2.3.16 LightRAG (graph-based RAG + reranker)
 
 ```yaml
 vector_db:
@@ -433,7 +440,7 @@ vector_db:
     type: infinity
 ```
 
-#### 2.3.18 LangChain wrapper
+#### 2.3.17 LangChain wrapper
 
 ```yaml
 vector_db:
@@ -445,7 +452,7 @@ vector_db:
     type: openai
 ```
 
-#### 2.3.19 LlamaIndex wrapper
+#### 2.3.18 LlamaIndex wrapper
 
 ```yaml
 vector_db:
@@ -464,12 +471,12 @@ vector_db:
 
 ```python
 type EmbedderConfig = Annotated[
-    OpenAIEmbedderConfig | CohereEmbedderConfig | GeminiEmbedderConfig
-    | MistralEmbedderConfig | VoyageEmbedderConfig | TogetherEmbedderConfig
-    | FireworksEmbedderConfig | HuggingFaceEmbedderConfig | SentenceTransformersEmbedderConfig
-    | OllamaEmbedderConfig | VllmEmbedderConfig | AwsBedrockEmbedderConfig
-    | AzureOpenAIEmbedderConfig | JinaEmbedderConfig | LangDbEmbedderConfig
-    | NebiusEmbedderConfig | QdrantFastEmbedEmbedderConfig,
+    OpenAIEmbedderConfig | OpenAILikeEmbedderConfig | CohereEmbedderConfig
+    | GeminiEmbedderConfig | MistralEmbedderConfig | VoyageEmbedderConfig
+    | TogetherEmbedderConfig | FireworksEmbedderConfig | HuggingfaceCustomEmbedderConfig
+    | SentenceTransformersEmbedderConfig | OllamaEmbedderConfig | VllmEmbedderConfig
+    | AwsBedrockEmbedderConfig | AzureOpenAIEmbedderConfig | JinaEmbedderConfig
+    | LangDbEmbedderConfig | NebiusEmbedderConfig | FastEmbedEmbedderConfig,
     Field(discriminator="type"),
 ]
 ```
@@ -478,23 +485,30 @@ type EmbedderConfig = Annotated[
 
 | `type` | Clase Agno | Default id | Default dims | Batch | Auth |
 |--------|-----------|-----------|--------------|-------|------|
-| `openai` | `OpenAIEmbedder` | `text-embedding-ada-002` | 1536 | si | api_key |
+| `openai` | `OpenAIEmbedder` | `text-embedding-3-small` | 1536 | si | api_key |
+| `openai_like` | `OpenAILikeEmbedder` | - | - | si | api_key/base_url |
 | `cohere` | `CohereEmbedder` | - | - | si | api_key |
 | `gemini` | `GeminiEmbedder` | - | - | si | api_key |
 | `mistral` | `MistralEmbedder` | - | - | si | api_key |
 | `voyageai` | `VoyageAIEmbedder` | - | - | si | api_key |
 | `together` | `TogetherEmbedder` | - | - | si | api_key |
 | `fireworks` | `FireworksEmbedder` | - | - | si | api_key |
-| `huggingface` | `HuggingFaceEmbedder` | - | - | si | api_key |
+| `huggingface` | `HuggingfaceCustomEmbedder` | - | - | si | api_key |
 | `sentence_transformers` | `SentenceTransformerEmbedder` | - | - | no | local |
 | `ollama` | `OllamaEmbedder` | - | - | si | host |
-| `vllm` | `VllmEmbedder` | - | - | si | host |
+| `vllm` | `VLLMEmbedder` | - | - | si | host |
 | `aws_bedrock` | `AwsBedrockEmbedder` | - | - | si | aws creds |
 | `azure_openai` | `AzureOpenAIEmbedder` | - | - | si | api_key/endpoint |
 | `jina` | `JinaEmbedder` | - | - | si | api_key |
-| `langdb` | `LangDbEmbedder` | - | - | si | api_key |
+| `langdb` | `LangDBEmbedder` | - | - | si | api_key |
 | `nebius` | `NebiusEmbedder` | - | - | si | api_key |
-| `qdrant_fastembed` | `QdrantFastEmbedEmbedder` | - | - | no | local |
+| `fastembed` | `FastEmbedEmbedder` | - | - | no | local |
+
+> **Nota**: agno v2.6.18 expone 18 embedders (no 17). `OpenAILikeEmbedder` y
+> `FastEmbedEmbedder` (antes referido como `QdrantFastEmbedEmbedder`) son los
+> ajustes de nombre; `OpenAIEmbedder.id` defaultea a `text-embedding-3-small`
+> (no `text-embedding-ada-002`); las dimensiones se infieren en runtime
+> (3072 para `text-embedding-3-large`, 1536 en caso contrario).
 
 ### 3.3 Schema OpenAI (default)
 
@@ -502,8 +516,8 @@ type EmbedderConfig = Annotated[
 class OpenAIEmbedderConfig(BaseModel):
     model_config = {"extra": "forbid"}
     type: Literal["openai"]
-    id: str = "text-embedding-ada-002"
-    dimensions: int = 1536
+    id: str = "text-embedding-3-small"
+    dimensions: int | None = None   # runtime: 3072 for -3-large, else 1536
     encoding_format: Literal["float", "base64"] = "float"
     user: str | None = None
     api_key: SecretStr | None = None
@@ -562,7 +576,7 @@ type ChunkerConfig = Annotated[
 | `recursive` | `RecursiveChunking` | Texto largo jerarquico |
 | `semantic` | `SemanticChunking` | Agrupa por significado (embeddings) |
 | `markdown` | `MarkdownChunking` | Docs `.md` por headers |
-| `csv_row` | `CSVRowChunking` | Un chunk = una fila CSV |
+| `csv_row` | `RowChunking` | Un chunk = una fila CSV |
 | `code` | `CodeChunking` | Source code por funciones/clases |
 | `agentic` | `AgenticChunking` | LLM decide los cortes |
 | `custom` | subclass | Chunker propio del usuario |
@@ -776,21 +790,28 @@ knowledge:
 | Extension / fuente | Reader | Async |
 |--------------------|--------|-------|
 | `.pdf` | PDFReader | si |
-| `.pdf` (password) | PDFPasswordReader | si |
-| `.docx` | (docling) | si |
+| `.pdf` (password) | PDFReader(password=...) | si |
+| `.docx` | DocxReader / DoclingReader | si |
+| `.xlsx` | ExcelReader | si |
 | `.csv` | CSVReader | si |
 | `.json` | JSONReader | si |
-| `.md` | MarkdownReader | si |
+| `.md` / `.txt` | MarkdownReader / TextReader | si |
 | `.pptx` | PPTXReader | si |
 | URL sitio | WebsiteReader | si |
 | arxiv | ArxivReader | si |
 | wikipedia | WikipediaReader | si |
-| youtube | YoutubeReader | si |
-| llms.txt | LLMSReader | - |
-| web search | WebSearchReader | si |
+| youtube | YouTubeReader | si |
+| llms.txt | LLMsTxtReader | - |
+| web search | WebSearchReader / TavilyReader | si |
 | firecrawl | FirecrawlReader | si |
 | docling | DoclingReader | - |
 | field-labeled csv | FieldLabeledCSVReader | - |
+| S3 | S3Reader | si |
+| PDF con imágenes | PDFImageReader | si |
+
+> **Nota**: el soporte de PDF con password NO es una clase separada — es el
+> argumento `password=` del `PDFReader` (BasePDFReader). Agno v2.6.18 expone
+> ~20 readers; la lista cubre los más usados.
 
 ```yaml
 reader:
@@ -886,7 +907,7 @@ class PgVectorAdapter:
             db_url=config.db_url.get_secret_value(),
             schema=config.schema_,
             search_type=search_type,
-            hybrid_search_ratio=config.hybrid_search_ratio,
+            vector_score_weight=config.vector_score_weight,
             embedder=embedder,
             reranker=reranker,
         )
