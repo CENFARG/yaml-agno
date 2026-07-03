@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Strategy", "#Vision", "#Roadmap", "#Principles"]
 Dependency_Hashes: []
+Group: "G1-Fundaciones"
+Read_Order: 1
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 2 - Wave 6 hygiene: corrected '5 modos' to '4 modos (coordinate/route/broadcast/tasks)' to match the real Agno Team modes."
 ---

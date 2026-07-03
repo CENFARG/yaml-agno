@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#context-engineering", "#compression", "#dependencies", "#session-state", "#run-context", "#token-counting", "#pydantic-v2"]
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_08", "SPEC_14"]
+Group: "G3-Capacidades-Agente"
+Read_Order: 7
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 3 - Wave 6 hygiene: marked Q8 RESUELTA — conversational history compression lives in SPEC_15 (ContextCompressor moved here from SPEC_04); SPEC_04 owns only the memory model."
 ---

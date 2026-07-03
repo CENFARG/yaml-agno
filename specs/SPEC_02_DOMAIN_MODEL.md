@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PydanticV2", "#YAMLSchema", "#ConfigModel", "#DIReference"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
+Group: "G2-Runtime-Core"
+Read_Order: 3
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 2 - added opaque delegated slots to AgentConfig for all Agno features (reasoning/skills/human_review/culture/persistence) following the existing dict[str, Any] | None pattern, plus human_review slot on StepConfig. Resolves the extra=forbid vs claimed-fields contradiction for SPEC_28/29/30/31/32."
 ---

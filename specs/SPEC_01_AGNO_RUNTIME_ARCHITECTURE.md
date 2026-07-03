@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Agno", "#Runtime", "#SessionManagement", "#WorkflowPrimitives"]
 Dependency_Hashes: ["SPEC_00"]
+Group: "G2-Runtime-Core"
+Read_Order: 2
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 4 - Wave 6 hygiene: fixed mermaid edge label '|Agent:run:|' -> '|builds Agent|' (clearer semantic, the factory builds the Agent instance). No other changes."
 ---

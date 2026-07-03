@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#models", "#fallback", "#resilience", "#circuit-breaker", "#cache", "#providers", "#pydantic-v2", "#retry", "#reasoning"]
 Dependency_Hashes: ["SPEC_01", "SPEC_05", "SPEC_08", "SPEC_09"]
+Group: "G2-Runtime-Core"
+Read_Order: 4
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 3 - Wave 6 hygiene: marked Q1/Q2/Q4 RESUELTA with the in-body adopted decisions (subset MVP; no own cache layer, Agno cache_response only; CircuitBreaker per model:alias)."
 ---

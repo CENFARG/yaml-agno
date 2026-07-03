@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Knowledge", "#RAG", "#VectorDb", "#Embedder", "#Chunker", "#AgenticRAG", "#HybridSearch", "#Reranking", "#Filters", "#PydanticV2"]
 Dependency_Hashes: ["SPEC_02", "SPEC_03"]
+Group: "G3-Capacidades-Agente"
+Read_Order: 6
 Last_Updated: "2026-07-02"
 Revision_Note: "iter2 (Wave 4 contract fixes): defined ContentsDbConfig (db_url, table_name, schema) — KnowledgeConfig.contents_db referenced it but no schema existed; clarified knowledge_contents is a yamlagno.* config-store table (schema yamlagno, tenant_id NOT NULL, explicit WHERE) NOT a reuse of agno_* runtime tables (A.9/A.11 cross-tenant leak guard); documented the CustomChunkerConfig extra=allow exception (custom flows pass ctor kwargs as siblings, collected into init_args by the loader; built-in variants stay extra=forbid)."
 ---

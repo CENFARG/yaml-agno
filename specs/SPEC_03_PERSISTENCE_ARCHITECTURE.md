@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PostgreSQL", "#SQLAlchemy", "#core-cenf", "#MultiTenant", "#ConfigStore"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
+Group: "G2-Runtime-Core"
+Read_Order: 4
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 4 (Wave 4) - added §7.4 DbRegistry (src/persistence/registry.py): the owner of the runtime db_ref resolver consumed by SPEC_31 (CultureManager) and SPEC_32 (RegistryPopulator). Defines the Protocol (get(db_ref) -> agno.db.Db, get_vector_db(db_ref) -> agno.vectordb.VectorDb) plus an InMemoryDbRegistry default; missing refs fail fast with ValueError naming the ref. Instances are built once at bootstrap from the core-cenf DSN/secret contract."
 ---

@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Tools", "#MCP", "#MCPTools", "#MultiMCPTools", "#Toolkits", "#ToolDecorator", "#ToolRegistry", "#Hooks", "#Caching", "#PydanticV2"]
 Dependency_Hashes: ["SPEC_01", "SPEC_02"]
+Group: "G3-Capacidades-Agente"
+Read_Order: 5
 Last_Updated: "2026-07-02"
 Revision_Note: "iter2 (Wave 4 contract fixes): added McpMultiToolConfig (kind: mcp_multi, servers: list[McpToolConfig]) as the 5th variant of the ToolConfig union — the mcp_multi YAML and TASK_008 now have a matching schema; updated the taxonomy table to 5 variants; clarified CustomToolLoader.load returns the raw callable and the ToolFactory applies @tool(**config flags) (Scenario 2); defined is_module_allowed + import whitelist (yaml_agno.security, ConfigManager key security.import_whitelist, fail closed) in SPEC_11 since no other SPEC owns it — satisfies backend-sanitization rule 10."
 ---
