@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#FastAPI", "#AgentOS", "#Inheritance", "#REST", "#AX", "#MCP", "#MultiTenant", "#Middleware"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04"]
+Group: "G7-ControlPlane-API"
+Read_Order: 18
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared resolve_user_id() (SPEC_04) to build the composite user_id instead of constructing f'{tenant_id}:{raw_user_id}' inline. resolve_user_id is the single source of truth for the composite format (same resolver for HTTP and autonomous runs). No other behavior change. Iter 4 (inheritance reformulation). Replaces parallel AgentOS composition with YamlAgentOS(AgentOS) subclass pattern: yaml-agno now INHERITS AgentOS and overrides get_app() to register extensions via app.include_router()/app.add_middleware() after super().get_app(). Adds composite user_id multi-tenancy (tenant_id:raw_user_id) layered on AgentOS native user_isolation (AuthorizationConfig). Resolves 10 corrections: inherit-not-compose; composite user_id + user_isolation always-on (NULL-bucket footgun documented via FODA); no gaps/ folder (SOTA src/api/ layout); readiness probe decoupled from optional external adapters; config loading consumes core-cenf-py ConfigManager; backend sanitization/validation mandatory directive; AX discovery via native MCP server (enable_mcp_server) instead of parallel REST endpoint; reinforce AgentOS coding patterns."
 ---

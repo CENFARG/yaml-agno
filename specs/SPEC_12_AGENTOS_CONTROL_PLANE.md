@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#AgentOS", "#FastAPI", "#ControlPlane", "#MCP", "#Interfaces", "#AGUI", "#Slack", "#A2A", "#Resync", "#RBAC"]
 Dependency_Hashes: ["SPEC_06", "SPEC_09", "SPEC_13"]
+Group: "G7-ControlPlane-API"
+Read_Order: 19
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 2 (Wave 3). Moved ResyncSettings definition ABOVE AgentOSConfig (NameError at import); added config: ConfigManager param to ResyncManager.__init__ (resync_now called self._config.reload -> AttributeError); fixed CircuitBreaker construction to SPEC_09 rate-based API (failure_threshold % + min_requests); rewrote sequenceDiagram Note to plain prose (embedded -> tokens)."
 ---

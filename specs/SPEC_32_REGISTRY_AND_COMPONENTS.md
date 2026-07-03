@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Registry", "#Components", "#RehydrateFunction", "#Workflows", "#VersionedConfig", "#Rollback", "#ControlPlane", "#Delegation"]
 Dependency_Hashes: ["SPEC_12", "SPEC_02"]
+Group: "G6-Orquestacion"
+Read_Order: 17
 Last_Updated: "2026-07-02"
 Revision_Note: "iter2 (Wave 4): _no_dual_catalog can't be a Pydantic model_validator (registry_entry_ids is sibling state from the agentos doc, unreachable from the agent model) — moved to a CompositionRoot post-load validator validate_no_dual_catalog(agents, registry_entry_ids) invoked after both docs are loaded; confirmed the SPEC_02 persistence slot cross-ref is consistent (SPEC_02 iter2 added persistence as an opaque dict slot, SPEC_32 owns the typed ComponentPersistenceConfig); fixed glued-backtick markdown (**RED`:/GREEN`:/Commit`:/Test`: -> **RED**:/etc) across the TDD section."
 ---

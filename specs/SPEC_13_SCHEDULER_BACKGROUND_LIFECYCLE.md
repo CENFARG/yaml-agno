@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Scheduler", "#Cron", "#Background", "#RunLifecycle", "#RunStatus", "#Resume", "#Cancel", "#SSE", "#TaskGroup"]
 Dependency_Hashes: ["SPEC_01", "SPEC_03", "SPEC_05"]
+Group: "G6-Orquestacion"
+Read_Order: 16
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 3 (Wave 3 dedup). ScheduleExecutor.run now DELEGATES retry to SPEC_05 RetryPolicy (single retry abstraction: backoff+jitter+classify); removed ad-hoc bare asyncio.sleep loop. Fixed orphan /evals/run endpoint example. Marked Q1-Q5 RESOLVED (adopted decisions). Added SPEC_05 to Dependency_Hashes."
 ---

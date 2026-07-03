@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#A2A", "#AgentOS", "#Interfaces", "#Interoperability", "#AgentCard", "#A2ASDK", "#ControlPlane"]
 Dependency_Hashes: ["SPEC_12"]
+Group: "G7-ControlPlane-API"
+Read_Order: 20
 Last_Updated: "2026-06-17"
 Revision_Note: "Iteration 1 - new SPEC (A2A interface). API verified vs agno/os/interfaces/a2a."
 ---

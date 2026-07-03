@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Tracing", "#OpenTelemetry", "#Trace", "#Span", "#DatabaseSpanExporter", "#OpenInference", "#Observability", "#DB"]
 Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_24"]
+Group: "G8-Ops-Observabilidad"
+Read_Order: 23
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 2 - confirmed and documented the TracerProvider SSOT: agno.tracing.setup_tracing owns the GLOBAL TracerProvider (registered once at startup). SPEC_24's PrometheusOtelObservabilityManager adapter and SPEC_09's dev span helper attach processors to that provider; neither calls trace.set_tracer_provider(). Added explicit cross-ref so SPEC_24 aligns. Added SPEC_24 to Dependency_Hashes."
 ---

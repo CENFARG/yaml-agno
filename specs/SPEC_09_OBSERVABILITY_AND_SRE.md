@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#OpenTelemetry", "#SRE", "#CircuitBreaker", "#Resilience"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
+Group: "G8-Ops-Observabilidad"
+Read_Order: 22
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 4 - Wave 6 hygiene: upgraded CircuitBreaker and RetryConfig public-method docstrings to Google style (Args/Returns/Raises). ResilientExecutor was already Google-styled. No behavioral change."
 ---

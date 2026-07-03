@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#JWT", "#RBAC", "#Scopes", "#PerUserIsolation", "#BasicAuth", "#CORS", "#SecurityHeaders", "#AgentOS", "#API"]
 Dependency_Hashes: ["SPEC_06", "SPEC_03", "SPEC_01"]
+Group: "G7-ControlPlane-API"
+Read_Order: 21
 Last_Updated: "2026-07-02"
 Revision_Note: "iter3 (collateral): updated SPEC_06 cross-references after SPEC_06 iter4 switched to an inheritance layer (class YamlAgentOS(AgentOS)). RateLimitMiddleware now §4.2, readiness/liveness §4.1, mounted via the subclass get_app() (§1-2). Per-user isolation is now NATIVE AgentOS user_isolation enabled by yaml-agno TenantContextMiddleware (composite user_id, §3); RBAC remains owned by yaml-agno. iter1/iter2 stand otherwise: JWTMiddleware imported from agno.os.middleware.jwt (configured, not reimplemented); CORS/SecurityHeaders merged over AgentOS defaults; tenant_id is Core Infra responsibility."
 ---
