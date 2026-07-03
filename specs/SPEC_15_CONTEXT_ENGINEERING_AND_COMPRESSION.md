@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_15"
 Title: "Context Engineering & Compression"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#context-engineering", "#compression", "#dependencies", "#sessio
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_08", "SPEC_14"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 7
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 3 - Wave 6 hygiene: marked Q8 RESUELTA — conversational history compression lives in SPEC_15 (ContextCompressor moved here from SPEC_04); SPEC_04 owns only the memory model."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 4 - deep adversarial review vs Agno v2.6.18: renamed flag add_instruction_tags -> use_instruction_tags to match the real Agno Agent param (agent.py:246); clarified that TokenCounter/count_part is a yaml-agno OWN layer (Agno has no compression/token-counting module — token counting in Agno happens via Model.count_tokens); documented that CompressionManager params mirror agno/compression/manager.py exactly (compress_tool_results default True in Agno); added a note that add_member_tools_to_context is Team-only (matches Agno team.py:177). Q8 remains RESUELTA (history compression = SPEC_15)."
 ---
 
 # SPEC_15_CONTEXT_ENGINEERING_AND_COMPRESSION
@@ -76,10 +76,10 @@ yaml-agno expone TODOS los flags de context engineering de Agno. Cada uno contro
 | `add_memories_to_context` | bool | true | Agent | Añade memories (long-term). `false` = recolecta sin inyectar. |
 | `add_session_state_to_context` | bool | false | Agent, Team | Añade el `session_state` al contexto. |
 | `add_dependencies_to_context` | bool | false | Agent, Team | Añade todas las dependencies al user message. |
-| `add_member_tools_to_context` | bool | true | Team | Añade las tools de los miembros al contexto del team. |
+| `add_member_tools_to_context` | bool | true | **Team only** | Añade las tools de los miembros al contexto del team. **Solo Team** (Agno `team/team.py:177`); ignorado / error si se declara en Agent standalone. |
 | `add_knowledge_to_context` | bool | false | Agent, Team | Añade referencias RAG (knowledge base). |
-| `add_instruction_tags` | bool | true | Agent, Team | Envuelve instructions en tags `<instructions>`. |
 | `enable_agentic_knowledge_filters` | bool | false | Agent, Team | El agente infiere los knowledge filters del query. |
+| `use_instruction_tags` | bool | false | Agent, Team | Envuelve instructions en tags `<instructions>`. (Nombre real en Agno: `use_instruction_tags`, NO `add_instruction_tags`.) |
 
 ### 2.2 YAML schema (agent level)
 
@@ -100,7 +100,7 @@ agent:
     add_dependencies_to_context: true
     add_knowledge_to_context: true
     enable_agentic_knowledge_filters: true
-    add_instruction_tags: false      # instructions as-is, sin XML tags
+    use_instruction_tags: false      # instructions as-is, sin XML tags (Agno: use_instruction_tags)
     additional_context: |
       The user prefers concise answers in Spanish (Rioplatense).
 ```
@@ -448,7 +448,13 @@ SPEC_04 conserva el `ContextCompressor` SOLO como referencia en el modelo de mem
 | `compress_token_limit` | int \| None | none | Tokens antes de disparar (token-based). |
 | `compress_tool_call_instructions` | str | default prompt | Prompt custom para el modelo de compresión. |
 
-> Fuente Agno: `CompressionManager(model=..., compress_tool_results_limit=2, compress_tool_call_instructions="...")`.
+> Fuente Agno: `agno/compression/manager.py` define `CompressionManager` como dataclass con la
+> MISMA firma que consume este SPEC: `model`, `compress_tool_results` (default **True** en Agno),
+> `compress_tool_results_limit` (default **None** en Agno), `compress_token_limit` (default None),
+> `compress_tool_call_instructions` (default None), más un `stats: Dict` interno.
+> yaml-agno lo envuelve en `CompressionSpec` (§10.2) con `enabled: bool = False` como opt-in
+> explícito (más conservador que el default True de Agno). El "default 3 si enabled" es un default
+> PROPIO de yaml-agno cuando el usuario habilita compresión sin fijar límites; NO es un default de Agno.
 
 ### 7.3 CompressionManager YAML
 
@@ -583,7 +589,12 @@ Return a structured summary that lets the agent continue its task effectively.
 
 ### 8.1 TokenCounter
 
-> Fuente Agno: `compression/token-counting`. El conteo incluye messages, tool definitions y output schemas.
+> **Capa PROPIA de yaml-agno** (NO existe un módulo `compression/token-counting` en Agno).
+> En Agno v2.6.18 el conteo de tokens se hace vía `Model.count_tokens(messages, tools, response_format)`
+> (ver `agno/compression/manager.py`, que delega al modelo). yaml-agno introduce `TokenCounter` como
+> capa de estimación independiente porque necesita contar partes multimodales (image/audio payloads)
+> que `Model.count_tokens` no expone de forma granular. El conteo incluye messages, tool definitions y
+> output schemas, igual que el path nativo de Agno.
 
 ```python
 class TokenCounter:
@@ -697,7 +708,7 @@ graph TD
     S8 --> S9[9. add_member_tools_to_context: tools de miembros team]
     S9 --> S10[10. add_dependencies_to_context: dependencies resueltas]
     S10 --> S11[11. additional_context: string libre]
-    S11 --> S12[12. instructions con add_instruction_tags]
+    S11 --> S12[12. instructions con use_instruction_tags]
     S12 --> S13[13. add_history_to_context: mensajes de num_history_runs]
     S13 --> S14[14. user input + dependencies substitute templates]
     S14 --> Build[build_context hook si existe]
@@ -814,8 +825,8 @@ class ContextEngineeringSpec(BaseModel):
     add_knowledge_to_context: bool = False
     enable_agentic_knowledge_filters: bool = False
 
-    # Instructions
-    add_instruction_tags: bool = True
+    # Instructions (Agno real name: use_instruction_tags, NOT add_instruction_tags)
+    use_instruction_tags: bool = False
     additional_context: str | None = None
     system_message: str | None = None
     build_context: str | None = None
@@ -1452,7 +1463,7 @@ def test_old_import_emits_deprecation():
 
 ## 15. REFERENCIAS
 
-- Agno docs: `dependencies/overview`, `compression/overview`, `compression/token-counting`, `state/overview`, parámetros `add_*_to_context` en Agent/Team reference.
+- Agno source (v2.6.18): `agno/agent/agent.py` (flags `add_*_to_context`, `use_instruction_tags`, `dependencies`, `additional_context`, `system_message`, `build_context`), `agno/team/team.py` (`add_member_tools_to_context`), `agno/run/base.py` (`RunContext`), `agno/compression/manager.py` (`CompressionManager` dataclass), `agno/utils/safe_formatter.py` (template substitution `SafeFormatter`), `agno/utils/callables.py` (callable resolution). El conteo nativo de tokens en Agno es `Model.count_tokens(messages, tools, response_format)`; **NO** existe un módulo `compression/token-counting` en Agno (TokenCounter en §8 es capa propia de yaml-agno).
 - SPEC_02 (Domain Model): RunContext en el dominio.
 - SPEC_04 (Memory Architecture): modelo de memoria (qué se persiste); PII referenciado a SPEC_16.
 - SPEC_08 (TDD Microtasks): convenciones de test.
