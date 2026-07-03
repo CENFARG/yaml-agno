@@ -5,10 +5,10 @@
 > Mantener actualizado mientras se siga corrigiendo/iterando SPECs. Borrar
 > cuando el proyecto avance a implementación.
 
-**Última actualización**: 2026-07-02
-**HEAD git**: `13de014` (rama `feature/specs-agno-coverage-10-25`, 80 commits)
+**Última actualización**: 2026-07-03
+**HEAD git**: `c0e1b25` (rama `feature/specs-agno-coverage-10-25`, 85 commits)
 **Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
-**AUDITORÍA 32-SPEC**: 72 hallazgos (9 CRÍTICO/33 MEDIO/30 BAJO). Wave 1 aplicada (SPEC_02 slots, SPEC_03 tenant seam fusionado, SPEC_09 record_metric, SPEC_25 namespace clarification). Faltan Waves 2-6.
+**AUDITORÍA 32-SPEC COMPLETA**: 72 hallazgos → Waves 1-6 aplicadas + verificación adversarial. Las 11 contradicciones del mapa RESUELTAS (grep+gate). Pendiente menor: SPEC_29 Q3/Q8 (necesitan decisión real).
 **user_id UNIFICADO**: composite `{tenant_id}:{principal_id}` SIEMPRE; `resolve_user_id()` (SPEC_04) es el único resolver; `TenantContextMiddleware` (SPEC_06) delega. Workflows autónomos también cubiertos por tenant isolation.
 
 ---
