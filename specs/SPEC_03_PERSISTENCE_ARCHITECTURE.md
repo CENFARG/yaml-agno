@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_03"
 Title: "Persistence Architecture - Config Store on core-cenf DatabaseManager"
-Version: "0.3.0-iter4"
+Version: "0.3.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#PostgreSQL", "#SQLAlchemy", "#core-cenf", "#MultiTenant", "#Con
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
 Group: "G2-Runtime-Core"
 Read_Order: 4
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 4 (Wave 4) - added §7.4 DbRegistry (src/persistence/registry.py): the owner of the runtime db_ref resolver consumed by SPEC_31 (CultureManager) and SPEC_32 (RegistryPopulator). Defines the Protocol (get(db_ref) -> agno.db.Db, get_vector_db(db_ref) -> agno.vectordb.VectorDb) plus an InMemoryDbRegistry default; missing refs fail fast with ValueError naming the ref. Instances are built once at bootstrap from the core-cenf DSN/secret contract."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 5 (deep review) - verified all core-cenf API claims against source (ports.py / sqlalchemy_adapter.py / memory_database_adapter.py): DatabaseManager.transaction()->AbstractAsyncContextManager[TransactionScope], get_repository(entity_type) on DatabaseManager (raises RuntimeError outside scope), GenericRepository[T] exact-match signature (find_by_id/find_all/insert/update/delete/count with order_by/limit/offset), commit/rollback async idempotent, _active_session contextvar propagation confirms the 'inside async with' directive. Verified Agno uses SQLAlchemy Core (Table(..., schema=db_schema)) not DeclarativeBase, confirming the mandatory-ORM divergence rationale. Fixes: (a) §7.2 return type corrected to AgentConfigRecord | None (the SQLAlchemy adapter returns ORM entities, not dicts; the MemoryAdapter returns dicts — code must not assume dict); (b) §5.3/§7.2 clarified that the `as tx` binding is used only for commit(), repository is obtained from db.get_repository(); (c) §3.7 corrected the 'mirroring' claim — Agno has a full MigrationManager (up/down) not just a versions table, yaml-agno does NOT replicate that motor; (d) §5.3/§7.2 added note that set_tenant_id is normally set by core-cenf Auth adapters, repository calls are defensive/redundant when Auth is wired."
 ---
 
 # SPEC_03_PERSISTENCE_ARCHITECTURE
@@ -576,7 +576,7 @@ LIMIT 100;
 
 ### 3.7 Table: `yamlagno_schema_versions`
 
-**Purpose**: Track which schema version is provisioned, mirroring Agno's `agno_schema_versions`. Used by auto-provisioning (§6) to decide whether to run `checkfirst` creates.
+**Purpose**: Track which schema version is provisioned. The table NAME echoes Agno's `agno_schema_versions` convention, but the MECHANISM differs: Agno ships a full `MigrationManager` (versioned up/down migrations in `agno/db/migrations/`), whereas yaml-agno MVP only records that a version was applied (gating `checkfirst` re-runs in §6). Reversible migrations are a future addition (§6.2).
 
 ```sql
 CREATE TABLE yamlagno.yamlagno_schema_versions (
@@ -708,14 +708,25 @@ class TenantResolver(Protocol):
 #
 # tenant_id here is PARSED out of the composite user_id by TenantResolver (§5.2);
 # the composite itself is built by resolve_user_id() (SPEC_04).
+#
+# Note on `tx` and set_tenant_id:
+#   - `db.get_repository(T)` is called on the DatabaseManager, NOT on the scope;
+#     the scope is only used for tx.commit()/rollback(). The contextvar _active_session
+#     (set by transaction()) is what binds the repo to the right session.
+#   - set_tenant_id() is normally invoked by core-cenf Auth adapters (jwt/static) on
+#     authentication. Calling it here too is DEFENSIVE (covers paths without Auth);
+#     it drives logging/tracing correlation only and does NOT scope DB queries.
 composite_user_id = resolve_user_id(...)           # SPEC_04 owns the composite format
 tenant_id = tenant_resolver.extract_tenant(composite_user_id)  # parse prefix before ":"
 
 async with db.transaction() as tx:                 # core-cenf TransactionScope
-    set_tenant_id(tenant_id)                       # Core Infra contextvar (telemetry only)
-    repo = db.get_repository(AgentConfigRecord)    # core-cenf GenericRepository[T]
+    set_tenant_id(tenant_id)                       # telemetry/correlation only (redundant if Auth set it)
+    repo = db.get_repository(AgentConfigRecord)    # on DatabaseManager, bound via _active_session
     # find_all filters are exact-match by column; tenant_id scoping is EXPLICIT.
     rows = await repo.find_all(filters={"tenant_id": tenant_id, "is_active": True})
+    # rows are AgentConfigRecord ORM entities (SQLAlchemyAdapter) or dicts (MemoryAdapter);
+    # do NOT assume dict access — use attribute access on ORM, or normalize at the boundary.
+    await tx.commit()
 ```
 
 ---
@@ -868,17 +879,28 @@ class AgentConfigRepository:
 
     async def create(self, tenant_id: UUID, record: AgentConfigRecord) -> UUID:
         """Insert an agent config row inside a core-cenf transaction."""
-        set_tenant_id(tenant_id)  # Core Infra contextvar: telemetry/correlation only
+        set_tenant_id(tenant_id)  # telemetry/correlation only (redundant if Auth set it)
         async with self._db.transaction() as tx:
             # get_repository() is on DatabaseManager (core ports.py), NOT on the scope.
+            # The scope `tx` is used only for commit()/rollback(). The repo is bound to
+            # the transaction's session via the _active_session contextvar set by
+            # transaction(); calling get_repository() outside the `async with` raises
+            # RuntimeError (see sqlalchemy_adapter.py).
             repo = self._db.get_repository(AgentConfigRecord)  # GenericRepository[T]
-            await repo.insert(record)
+            await repo.insert(record)  # returns the entity with id populated (flush)
             await tx.commit()
             return record.id
 
-    async def get_active_by_name(self, tenant_id: UUID, name: str) -> dict[str, Any] | None:
-        """Return the active config for a tenant+name, or None."""
-        set_tenant_id(tenant_id)  # telemetry/correlation only
+    async def get_active_by_name(
+        self, tenant_id: UUID, name: str
+    ) -> AgentConfigRecord | None:
+        """Return the active config AgentConfigRecord for a tenant+name, or None.
+
+        Note: the SQLAlchemyAdapter returns ORM entities; the MemoryDatabaseAdapter
+        returns plain dicts. Callers that need a stable shape should normalize at the
+        boundary (e.g. project to a Pydantic model) rather than assuming one form.
+        """
+        set_tenant_id(tenant_id)  # telemetry/correlation only (redundant if Auth set it)
         async with self._db.transaction() as tx:
             repo = self._db.get_repository(AgentConfigRecord)
             # Multi-tenant isolation is EXPLICIT here: the core GenericRepository
@@ -895,11 +917,13 @@ class AgentConfigRepository:
 ### 7.3 Do's and Don'ts (core-cenf AGENTS.md rules)
 
 - ALWAYS `async with db.transaction()`; NEVER open raw sessions.
-- Call `db.get_repository(EntityType)` (on `DatabaseManager`, NOT on the `TransactionScope`) **inside** the `async with` block.
+- Call `db.get_repository(EntityType)` (on `DatabaseManager`, NOT on the `TransactionScope`) **inside** the `async with` block. The SQLAlchemyAdapter raises `RuntimeError` if `get_repository()` is called outside a transaction (no active `_active_session`).
+- Use the `tx` binding only for `commit()`/`rollback()`; the repository comes from `db.get_repository()`.
 - Depend on the `DatabaseManager` Protocol; NEVER import `SQLAlchemyAdapter` directly in domain code.
 - Read the DSN via `config.get_string("database.dsn")`; NEVER read `os.environ` directly (only via `ConfigManager`).
 - Secrets via `await secrets.get_secret(key)`; NEVER in env vars or logs.
-- Multi-tenant isolation is **explicit**: ALWAYS pass `tenant_id` in the `filters={}` dict. The core `GenericRepository` does NOT auto-scope by the tenant contextvar. `set_tenant_id()` (contextvar) drives **logging/tracing** only — never assume it scopes DB queries.
+- Multi-tenant isolation is **explicit**: ALWAYS pass `tenant_id` in the `filters={}` dict. The core `GenericRepository` does NOT auto-scope by the tenant contextvar. `set_tenant_id()` (contextvar) drives **logging/tracing** only — never assume it scopes DB queries. (Core-cenf Auth adapters already call `set_tenant_id` on authentication; repository-level calls are defensive.)
+- Treat repository return types as adapter-dependent: `SQLAlchemyAdapter` returns ORM entities, `MemoryDatabaseAdapter` returns plain dicts. Normalize at a boundary if a stable shape is needed.
 - Use `asyncio.TaskGroup` for concurrent bootstrap; NEVER `asyncio.gather`.
 
 ### 7.4 DbRegistry — runtime `db_ref` resolution (owner: SPEC_03)
