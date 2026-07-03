@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_13"
 Title: "Scheduler, Background Execution & Run Lifecycle"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Scheduler", "#Cron", "#Background", "#RunLifecycle", "#RunStatus", "#Resume", "#Cancel", "#SSE", "#TaskGroup"]
-Dependency_Hashes: ["SPEC_01", "SPEC_03"]
-Last_Updated: "2026-06-26"
-Revision_Note: "Iter 2 (factual). Corrected Agno version reference v2.6.14 -> v2.6.18 (verified against agno/libs/agno/pyproject.toml). No design changes; iter1 decisions stand."
+Dependency_Hashes: ["SPEC_01", "SPEC_03", "SPEC_05"]
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 3 (Wave 3 dedup). ScheduleExecutor.run now DELEGATES retry to SPEC_05 RetryPolicy (single retry abstraction: backoff+jitter+classify); removed ad-hoc bare asyncio.sleep loop. Fixed orphan /evals/run endpoint example. Marked Q1-Q5 RESOLVED (adopted decisions). Added SPEC_05 to Dependency_Hashes."
 ---
 
 # SPEC_13_SCHEDULER_BACKGROUND_LIFECYCLE
@@ -218,25 +218,52 @@ class SchedulePoller:
 
 ### 2.6 ScheduleExecutor
 
+> @ai-directive: `ScheduleExecutor.run` does NOT implement its own retry loop.
+> It DELEGATES retry to SPEC_05 `RetryPolicy` (the single step/executor-level
+> retry abstraction: exponential backoff + jitter + per-exception classification
+> via core-cenf `ErrorHandlingManager.classify()`). There is exactly ONE retry
+> abstraction at the step/executor layer; the previous bare `asyncio.sleep` loop
+> (no jitter, no classify) was removed in Wave 3. Model-level retry stays owned
+> by Agno `Model.*` (SPEC_14); the CircuitBreaker here is owned by SPEC_09.
+
 ```python
 # yaml-agno/src/adapters/scheduler/schedule_executor.py
-class ScheduleExecutor:
-    """Calls schedule endpoints, handles retries, writes run records."""
+from yaml_agno.adapters.workflows.retry_policy import RetryPolicy  # SPEC_05
 
-    def __init__(self, base_url: str, http: AsyncHTTPClient, db, obs, breaker):
+class ScheduleExecutor:
+    """Calls schedule endpoints, delegates retry to SPEC_05, writes run records."""
+
+    def __init__(self, base_url: str, http: AsyncHTTPClient, db, obs, breaker,
+                 error_manager, retry_policy: RetryPolicy | None = None):
         self._base = base_url
         self._http = http
         self._db = db
         self._obs = obs
         self._breaker = breaker
+        self._errors = error_manager   # core-cenf ErrorHandlingManager (classify/report)
 
     async def run(self, schedule) -> dict:
-        attempt = 0
-        last_err = None
-        while attempt <= schedule.max_retries:
+        """Execute a schedule with delegated retry + circuit-breaker guard.
+
+        Args:
+            schedule: The ScheduleConfig / claimed schedule row to execute.
+
+        Returns:
+            The persisted run-record dict.
+        """
+        # Build the SPEC_05 RetryPolicy from schedule fields (single source of
+        # backoff + jitter + classification). NOT a local retry loop.
+        policy = RetryPolicy(
+            max_retries=schedule.max_retries,
+            base_delay=schedule.retry_delay_seconds,
+            jitter=True,
+        )
+
+        async def _attempt() -> dict:
+            """One HTTP attempt, guarded by the SPEC_09 CircuitBreaker."""
+            if not self._breaker.allow_request():   # SPEC_09 CircuitBreaker API
+                raise CircuitOpenError()
             try:
-                if not self._breaker.allow_request():   # SPEC_09 CircuitBreaker API
-                    raise CircuitOpenError()
                 resp = await self._http.request(
                     method=schedule.method,
                     url=self._base + schedule.endpoint,
@@ -244,17 +271,21 @@ class ScheduleExecutor:
                     timeout=schedule.timeout_seconds,
                 )
                 self._breaker.record_success()
-                record = self._write_record(schedule, attempt, resp, status="completed")
-                return record
+                return self._write_record(schedule, resp, status="completed")
             except Exception as e:
-                last_err = e
                 self._breaker.record_failure()
-                attempt += 1
-                if attempt <= schedule.max_retries:
-                    await asyncio.sleep(schedule.retry_delay_seconds)
-        record = self._write_record(schedule, attempt - 1, None, status="error", error=str(last_err))
-        self._obs.counter("schedule.failed", labels={"name": schedule.name})
-        return record
+                raise
+
+        try:
+            # RetryPolicy.execute_with_retry classifies via error_manager.classify()
+            # and only retries TRANSIENT / RATE_LIMIT; backoff + jitter applied.
+            return await policy.execute_with_retry(_attempt, self._errors)
+        except Exception as last_err:
+            # Retries exhausted (or PERMANENT/VALIDATION non-retryable).
+            self._errors.report(last_err)   # SYNC report(), NOT awaited
+            record = self._write_record(schedule, None, status="error", error=str(last_err))
+            self._obs.counter("schedule.failed", labels={"name": schedule.name})
+            return record
 ```
 
 ### 2.7 scheduler_poll_interval
@@ -362,7 +393,10 @@ schedules:
 schedules:
   - name: "nightly-eval"
     cron: "0 2 * * *"
-    endpoint: "/evals/run"
+    # AgentOS-native run shape. SPEC_12 §8.1 lists /evals as
+    # create/list/get/update/delete (NO "run"), so a scheduled eval drives a
+    # workflow that produces the eval; the endpoint targets the workflow run.
+    endpoint: "/workflows/eval-runner/runs"
     enabled: false
 ```
 
@@ -728,15 +762,17 @@ THEN se responde 200 con cancelled=false
 AND el estado no cambia
 ```
 
-#### Scenario 8: Retry del ScheduleExecutor
+#### Scenario 8: Retry del ScheduleExecutor (delegado a SPEC_05 RetryPolicy)
 
 ```gherkin
 GIVEN un schedule con max_retries=2, retry_delay_seconds=30
-AND el endpoint falla 2 veces y luego exitos
+AND el endpoint falla 2 veces (errores TRANSIENT) y luego exitos
 WHEN el ScheduleExecutor.run ejecuta
-THEN se hacen 3 intentos totales (1 + 2 retries)
-AND el schedule_runs final tiene status=completed y attempt=2
+THEN delega el retry al RetryPolicy de SPEC_05 (backoff+jitter+classify)
+AND se hacen 3 intentos totales (1 + 2 retries)
+AND el schedule_runs final tiene status=completed
 AND el circuit breaker no abre (exito)
+AND no aparece un loop local de asyncio.sleep en el ScheduleExecutor
 ```
 
 #### Scenario 9: Poller usa TaskGroup no gather
@@ -813,15 +849,25 @@ async def test_poller_executes_due_concurrently(mocker):
 - **RED**:
 ```python
 async def test_retry_until_success(mocker):
+    # @ai-directive: retry is DELEGATED to SPEC_05 RetryPolicy (no local loop).
+    # The breaker is the SPEC_09 rate-based CircuitBreaker; mock its methods.
     http = mocker.AsyncMock(side_effect=[RuntimeError, RuntimeError, Mock(status=200)])
-    exec_ = ScheduleExecutor("http://x", http, db=Mock(), obs=Mock(), breaker=Mock(allow=lambda:True, record_success=lambda:None, record_failure=lambda:None))
-    sched = Mock(name="x", method="POST", endpoint="/a/runs", payload={}, timeout_seconds=1, max_retries=2)
+    breaker = mocker.Mock(allow_request=lambda: True,
+                          record_success=mocker.DEFAULT, record_failure=mocker.DEFAULT)
+    errors = mocker.Mock()
+    errors.classify.return_value = ErrorClassification.TRANSIENT   # retryable
+    exec_ = ScheduleExecutor("http://x", http, db=mocker.Mock(), obs=mocker.Mock(),
+                             breaker=breaker, error_manager=errors)
+    sched = mocker.Mock(name="x", method="POST", endpoint="/workflows/w/runs",
+                        payload={}, timeout_seconds=1, max_retries=2,
+                        retry_delay_seconds=0)
     rec = await exec_.run(sched)
     assert rec["status"] == "completed"
     assert http.request.await_count == 3
+    breaker.record_failure.assert_called()   # 2 failures recorded
 ```
-- **GREEN**: Loop de retries + run record.
-- **Commit**: `feat(scheduler): ScheduleExecutor with bounded retries and run records`
+- **GREEN**: Construir `RetryPolicy` desde los campos del schedule y llamar `execute_with_retry`; escribir run record en éxito y en agotamiento. NO implementar loop local de asyncio.sleep.
+- **Commit**: `feat(scheduler): ScheduleExecutor delegates retry to SPEC_05 RetryPolicy`
 
 #### TASK_005: BackgroundExecutor + BackgroundTask
 - **File**: `yaml-agno/src/adapters/runs/background_executor.py`
@@ -931,7 +977,7 @@ def test_yaml_agno_does_not_create_schedule_tables():
 **Justificación**: Correctitud no depende de afinidad, sólo latencia. El resumer reconstruye desde DB si la réplica original murió.
 
 ### [Decisión 6] Circuit breaker en ScheduleExecutor
-**Justificación**: Un endpoint caído no debe disparar retries infinitos. El breaker abre tras N fallos y permite recovery tras timeout. Consistente con SPEC_14.
+**Justificación**: Un endpoint caído no debe disparar retries infinitos. El breaker (rate-based, dueño SPEC_09: `failure_threshold` % + `min_requests`) abre tras una tasa de fallos y permite recovery tras `recovery_timeout`. Consistente con SPEC_09.
 
 ### [Decisión 7] `continued` como estado/evento transitorio
 **Justificación**: Refleja la semántica Agno (`RunContinued`). El estado estacionario post-resume es `running`; `continued` señala la transición para logs/UI.
@@ -940,22 +986,24 @@ def test_yaml_agno_does_not_create_schedule_tables():
 
 ## 13. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
 
-### [Pregunta 1] ¿Claim distribuido por DB o por lock externo?
+> Todas las preguntas Q1-Q5 están **RESUELTAS** (cada una tiene una decisión adoptada en su cuerpo). Se conservan como registro histórico; no requieren acción adicional. Nuevas preguntas se agregan abajo si surgen.
+
+### [Pregunta 1 — RESUELTA] ¿Claim distribuido por DB o por lock externo?
 **¿La atomicidad de `claim_due` descansa en `FOR UPDATE SKIP LOCKED` (Postgres) o requiere un lock distribuido (Redis)?**
-Implica: Postgres nativo escala sin infra extra; SQLite no soporta concurrencia multi-réplica. Decisión MVP: Postgres con SKIP LOCKED. Redis se considera para multi-DB.
+Implica: Postgres nativo escala sin infra extra; SQLite no soporta concurrencia multi-réplica. Decisión adoptada: Postgres con SKIP LOCKED. Redis se considera para multi-DB.
 
-### [Pregunta 2] ¿Granularidad de `events_to_skip`?
+### [Pregunta 2 — RESUELTA] ¿Granularidad de `events_to_skip`?
 **¿Se filtra por nombre de evento o por tipo?**
-Implica: nombre es explícito pero rígido; tipo es flexible pero requiere taxonomía. MVP adopta nombre.
+Implica: nombre es explícito pero rígido; tipo es flexible pero requiere taxonomía. Decisión adoptada: filtrado por nombre.
 
-### [Pregunta 3] ¿Polling vs. event-driven para schedules?
+### [Pregunta 3 — RESUELTA] ¿Polling vs. event-driven para schedules?
 **¿El poller es la única vía o se contempla un bus de eventos?**
-Implica: polling es simple y robusto; event-driven reduce latencia pero suma dependencias. MVP adopta polling (semántica Agno `scheduler_poll_interval`).
+Implica: polling es simple y robusto; event-driven reduce latencia pero suma dependencias. Decisión adoptada: polling (semántica Agno `scheduler_poll_interval`).
 
-### [Pregunta 4] ¿Background run expiry?
+### [Pregunta 4 — RESUELTA] ¿Background run expiry?
 **¿Los BackgroundTask persisten indefinidamente o hay TTL?**
-Implica: indefinido permite auditoría infinita pero crece la DB. Decisión MVP: sin TTL, pero se provee endpoint de purge administrativo (`/registry/purge-runs?older_than=...`).
+Implica: indefinido permite auditoría infinita pero crece la DB. Decisión adoptada: sin TTL, pero se provee endpoint de purge administrativo (`/registry/purge-runs?older_than=...`).
 
-### [Pregunta 5] ¿`continued` debe persistir como estado terminal?
+### [Pregunta 5 — RESUELTA] ¿`continued` debe persistir como estado terminal?
 **¿El estado `continued` es una marca efímera o un estado persistible consultable?**
-Implica: persistirlo permite trazabilidad fina; pero puede confundir al cliente que espera `running`. Decisión: se persiste como **evento** (`RunContinued`), no como estado estacionario en BackgroundTask.
+Implica: persistirlo permite trazabilidad fina; pero puede confundir al cliente que espera `running`. Decisión adoptada: se persiste como **evento** (`RunContinued`), no como estado estacionario en BackgroundTask.

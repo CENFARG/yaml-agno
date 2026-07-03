@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_16"
 Title: "HITL, Approvals & Guardrails - Human Oversight, Input Validation and Safety Boundaries"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#HITL", "#Approvals", "#Guardrails", "#PII", "#Secrets", "#Hooks", "#Safety", "#AgnoPreHooks"]
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_09"]
-Last_Updated: "2026-06-26"
-Revision_Note: "Iter 2 (factual). Corrected Agno version reference v2.6.14 -> v2.6.18 (verified against agno/libs/agno/pyproject.toml). Known debt (non-blocking, to resolve in the SPEC_16 deep-review iteration): EngramMemoryManager/LongTermMemoryPort adapter references inherited from iter1 — SPEC_04 iter2/iter3 eliminated the Port and Engram from the memory model; SPEC_16 still references them and must be realigned in its own iteration. No other design changes this iteration."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 3 - removed the EngramMemoryManager/LongTermMemoryPort adapter entirely; memory writes now route to the Agno LearningMachine/MemoryManager (SPEC_04 owns Agno-native memory, no Engram). PII/secret masking stays here as a guardrail that runs BEFORE content reaches Agno memory. Rewrote ApprovalManager.create_pending to emit Agno-schema keys (id, agent_id/team_id/workflow_id, approval_type, user_id) and dropped tenant_id from the persisted record (tenant scoping = composite user_id per A.1/A.11). Deleted TASK_010 (migrations/approvals.sql redefining the Agno table); replaced with a test asserting Agno provisions the approvals table and yaml-agno ships NO own approvals migration. Aligned run_status comment to lowercase RunStatus members."
 ---
 
 # SPEC_16_HITL_APPROVALS_GUARDRAILS
@@ -345,7 +345,7 @@ CREATE TABLE approvals (
     resolution_data  JSONB,
     resolved_by      TEXT,
     resolved_at      INTEGER,
-    run_status       TEXT,                    -- PAUSED | COMPLETED | RUNNING | ERROR | CANCELLED
+    run_status       TEXT,                    -- paused | completed | running | error | cancelled (lowercase RunStatus members)
     created_at       INTEGER NOT NULL,
     updated_at       INTEGER
 );
@@ -401,10 +401,17 @@ from typing import Protocol
 from dataclasses import dataclass
 
 class ApprovalDB(Protocol):
-    """Protocol for the approval persistence backend (Agno DB provider)."""
+    """Protocol for the approval persistence backend (Agno DB provider).
+
+    @ai-directive: the record schema is OWNED by Agno
+    (agno/db/schemas/approval.py). yaml-agno emits exactly those keys; it does
+    NOT add approval_id/agent_name/type/tenant_id (legacy, wrong) and does NOT
+    ship its own approvals migration. tenant scoping is the composite user_id
+    (SPEC_04 resolve_user_id, "{tenant_id}:{principal_id}"), not a column.
+    """
     async def insert_approval(self, record: dict) -> str: ...
     async def update_approval(self, approval_id: str, **fields) -> None: ...
-    async def list_pending(self, tenant_id: str) -> list[dict]: ...
+    async def list_pending(self, user_id: str) -> list[dict]: ...
     async def get_approval(self, approval_id: str) -> dict | None: ...
 
 @dataclass
@@ -414,12 +421,30 @@ class ApprovalManagerConfig:
     slack_channel: str | None = None
     circuit_breaker_threshold: int = 5
 
+
+def _source_type(
+    agent_id: str | None,
+    team_id: str | None,
+    workflow_id: str | None,
+) -> str:
+    """Derive the Agno `source_type` from which id was provided.
+
+    Agno allows: agent | team | workflow (default 'agent').
+    """
+    if team_id is not None:
+        return "team"
+    if workflow_id is not None:
+        return "workflow"
+    return "agent"
+
 class ApprovalManager:
     """Multi-tenant orchestrator for approval lifecycle.
 
     Agno owns the @approval decorator and the approvals table; this manager
     adds tenant scoping, audit, Slack publishing, and SPEC_09 circuit-breaker
-    wiring. It does NOT redefine CircuitBreaker.
+    wiring. It does NOT redefine CircuitBreaker. The persisted record uses
+    Agno schema keys (id, agent_id/team_id/workflow_id, approval_type, user_id)
+    and carries NO tenant_id column (tenant = composite user_id).
     """
 
     def __init__(self, db: ApprovalDB, config: ApprovalManagerConfig):
@@ -429,23 +454,45 @@ class ApprovalManager:
     async def create_pending(
         self,
         run_id: str,
-        agent_name: str,
         tool_name: str,
         tool_args: dict,
-        tenant_id: str,
-        member_agent_name: str | None = None,
-        type: str | None = None,
+        user_id: str,                      # composite "{tenant_id}:{principal_id}"
+        agent_id: str | None = None,
+        team_id: str | None = None,
+        workflow_id: str | None = None,
+        approval_type: str | None = None,
     ) -> str:
+        """Insert a pending approval using Agno schema keys.
+
+        Args:
+            run_id: Agno run id.
+            tool_name: Tool that triggered the approval.
+            tool_args: Captured tool arguments.
+            user_id: Composite user id "{tenant_id}:{principal_id}" (SPEC_04
+                resolve_user_id). Tenant scoping is encoded here; there is no
+                separate tenant_id column on the Agno-managed table.
+            agent_id: Source agent id (Agno key). Mutually exclusive with
+                team_id/workflow_id per source_type.
+            team_id: Source team id (Agno key).
+            workflow_id: Source workflow id (Agno key).
+            approval_type: "required" (blocking) or "audit". Defaults to config.
+
+        Returns:
+            The inserted approval id (Agno `id` primary key).
+        """
         record = {
-            "approval_id": _gen_id(),
+            "id": _gen_id(),                              # Agno PK (NOT approval_id)
             "run_id": run_id,
-            "agent_name": agent_name,
-            "member_agent_name": member_agent_name,
+            "session_id": None,                           # filled by Agno at run time
+            "status": "pending",
+            "source_type": _source_type(agent_id, team_id, workflow_id),
+            "approval_type": approval_type or self.config.default_type,  # NOT "type"
             "tool_name": tool_name,
             "tool_args": tool_args,
-            "type": type or self.config.default_type,
-            "status": "pending",
-            "tenant_id": tenant_id,
+            "agent_id": agent_id,                         # Agno key (NOT agent_name)
+            "team_id": team_id,
+            "workflow_id": workflow_id,
+            "user_id": user_id,                           # Agno isolation key
             "created_at": _now(),
         }
         return await self.db.insert_approval(record)
@@ -651,52 +698,17 @@ PII masking NO es solo un guardrail de LLM. Se aplica en cada frontera de persis
 | Frontera | Mecanismo | Punto de aplicación |
 |----------|-----------|---------------------|
 | LLM call | `PIIGuardrail` (pre-hook) | Antes de `.run()` |
-| Memory (SPEC_04) | Sanitización la hace el guardrail de SPEC_16 ANTES de persistir; el adapter de memoria recibe contenido ya limpio | Antes de `mem_save` |
+| Memory (SPEC_04) | Sanitización la hace el guardrail de SPEC_16 ANTES de persistir; el Agno MemoryManager/LearningMachine recibe contenido ya limpio | Antes de `MemoryManager.add` / `LearningMachine` write |
 | DB (SPEC_03) | Column encryption + sanitizer en repository | Antes de INSERT |
 | Logs (SPEC_09) | Structured logger con sanitizer middleware | Antes de emit log |
 
-> **@ai-directive**: `EngramMemoryManager` is an OPTIONAL adapter of the `LongTermMemoryPort` defined in SPEC_04. The default implementation is Agno's `LearningMachine` / `MemoryManager`. yaml-agno does NOT present Engram as a native memory layer or the only path. The signature MUST be consistent with SPEC_04: `__init__(self, project, session_id)` and `save_decision(self, title, content, where, learned=None)`. The adapter does NOT sanitize content itself — sanitization (PII / secret masking) is done by the SPEC_16 guardrail BEFORE the content reaches the port. Persisting already-sanitized content is what removes the contradiction with SPEC_04.
-
-```python
-# yaml-agno/src/memory/engram_adapter.py
-# OPTIONAL adapter of LongTermMemoryPort (SPEC_04). Default port impl is
-# Agno's LearningMachine; Engram is opt-in.
-
-from yaml_agno.ports.memory import LongTermMemoryPort  # SPEC_04
-
-
-class EngramMemoryManager(LongTermMemoryPort):
-    """Optional LongTermMemoryPort backed by Engram.
-
-    Args:
-        project: Engram project identifier.
-        session_id: Engram session identifier.
-
-    Note:
-        Content passed to save_decision MUST already be sanitized by the
-        SPEC_16 guardrail. This adapter performs NO sanitization; doing it
-        here would duplicate the guardrail and contradict SPEC_04.
-    """
-
-    def __init__(self, project: str, session_id: str):
-        self.project = project
-        self.session_id = session_id
-
-    async def save_decision(
-        self,
-        title: str,
-        content: str,
-        where: str,
-        learned: str | None = None,
-    ) -> None:
-        # Content arrives pre-sanitized from the SPEC_16 guardrail.
-        await mem_save(
-            title=title,
-            content=content,
-            project=self.project,
-            session_id=self.session_id,
-        )
-```
+> **@ai-directive**: long-term memory is 100% Agno native (`LearningMachine` /
+> `MemoryManager` / `UserMemory`, owned by SPEC_04). There is NO `LongTermMemoryPort`,
+> NO `EngramMemoryManager`, and NO external Engram adapter anywhere in yaml-agno.
+> PII/secret masking happens HERE, as a guardrail, BEFORE the sanitized content is
+> handed to the Agno memory layer. The guardrail is the enforcement point; the
+> memory layer just persists already-clean content. Do NOT re-introduce a memory
+> adapter in this SPEC.
 
 ### 5.3 Migración a Microsoft Presidio (NOTE)
 
@@ -1407,11 +1419,11 @@ AND no pending approval blocks the user
 #### Scenario 10: Golden Path - Secret Masking at Memory Boundary
 
 ```gherkin
-GIVEN an agent with SecretGuardrail and EngramMemoryManager
+GIVEN an agent with SecretGuardrail and the Agno MemoryManager (SPEC_04)
 WHEN the user sends input containing "api_key": "sk-1234567890abcdef"
 THEN SecretGuardrail masks it to "sk-1...cdef" before the LLM
 AND when the decision is saved to memory
-THEN the masked value is persisted in Engram
+THEN the masked value is persisted by the Agno MemoryManager
 AND the raw secret is never stored
 ```
 
@@ -1573,7 +1585,7 @@ THEN the agent receives the external result as the tool output
 - **GREEN**: Implementar models Pydantic V2.
 - **Commit**: `feat: add guardrails Pydantic config models`
 
-#### TASK_008: ApprovalManager create_pending
+#### TASK_008: ApprovalManager create_pending (Agno schema keys)
 
 - **File**: `yaml-agno/src/approval/manager.py`
 - **Test**: `tests/unit/approval/test_manager.py`
@@ -1582,14 +1594,21 @@ THEN the agent receives the external result as the tool output
   async def test_create_pending_inserts_record(fake_db):
       mgr = ApprovalManager(fake_db, ApprovalConfig())
       aid = await mgr.create_pending(
-          run_id="r1", agent_name="a1", tool_name="delete",
-          tool_args={"user_id": "u1"}, tenant_id="t1",
+          run_id="r1", tool_name="delete",
+          tool_args={"x": 1}, user_id="t1:p1", agent_id="a1",
       )
-      pending = await fake_db.list_pending("t1")
-      assert any(p["approval_id"] == aid for p in pending)
+      pending = await fake_db.list_pending("t1:p1")
+      rec = next(p for p in pending if p["id"] == aid)
+      # Agno schema keys, NOT legacy ones
+      assert rec["agent_id"] == "a1"
+      assert rec["approval_type"] == "required"
+      assert rec["user_id"] == "t1:p1"
+      assert "approval_id" not in rec      # legacy key removed
+      assert "agent_name" not in rec       # legacy key removed
+      assert "tenant_id" not in rec        # tenant = composite user_id
   ```
-- **GREEN**: Implementar `ApprovalManager.create_pending` con fake DB in-memory.
-- **Commit**: `feat: add ApprovalManager create_pending`
+- **GREEN**: Implementar `ApprovalManager.create_pending` emitiendo claves Agno (id, agent_id/team_id/workflow_id, approval_type, user_id).
+- **Commit**: `feat: add ApprovalManager create_pending with Agno schema keys`
 
 #### TASK_009: ApprovalManager resolve with expected_status anti-race
 
@@ -1599,34 +1618,48 @@ THEN the agent receives the external result as the tool output
   ```python
   async def test_resolve_passes_expected_status(fake_db):
       mgr = ApprovalManager(fake_db, ApprovalConfig())
-      await mgr.create_pending(run_id="r1", agent_name="a", tool_name="t",
-                               tool_args={}, tenant_id="t1")
-      rec = (await fake_db.list_pending("t1"))[0]
-      await mgr.resolve(rec["approval_id"], "approved", "admin1")
+      aid = await mgr.create_pending(run_id="r1", tool_name="t",
+                                     tool_args={}, user_id="t1:p1", agent_id="a")
+      await mgr.resolve(aid, "approved", "admin1")
       # Second resolve should fail because status changed
       import pytest
       with pytest.raises(Exception):
-          await mgr.resolve(rec["approval_id"], "rejected", "admin2")
+          await mgr.resolve(aid, "rejected", "admin2")
   ```
 - **GREEN**: Implementar `resolve` delegando a `db.update_approval` con `expected_status="pending"`.
 - **Commit**: `feat: add ApprovalManager resolve with anti-race`
 
-#### TASK_010: Approval DB table schema (migration)
+#### TASK_010: Agno provisions the approvals table (NO own migration)
 
-- **File**: `migrations/approvals.sql`
-- **Test**: `tests/integration/approval/test_db_schema.py`
+- **File**: `tests/integration/approval/test_db_schema.py`
+- **@ai-directive**: yaml-agno ships NO `migrations/approvals.sql`. The `approvals`
+  table is provisioned by Agno's DB provider (its own schema bootstrap). This task
+  is a test that ASSERTS that fact; it does NOT write a migration.
 - **RED**:
   ```python
-  async def test_approvals_table_exists(pg_conn):
+  async def test_agno_provisions_approvals_table(pg_conn):
+      """Agno's DB provider creates the approvals table; yaml-agno must not."""
       cur = await pg_conn.execute(
           "SELECT column_name FROM information_schema.columns "
           "WHERE table_name='approvals'"
       )
       cols = {row[0] for row in await cur.fetchall()}
-      assert {"approval_id", "run_id", "status", "tenant_id"} <= cols
+      # Agno schema keys (NOT approval_id/agent_name/type/tenant_id)
+      assert {"id", "run_id", "status", "user_id", "approval_type"} <= cols
+      assert "tenant_id" not in cols               # no tenant_id column
+      assert "approval_id" not in cols             # legacy key absent
+      assert "agent_name" not in cols              # legacy key absent
+
+  def test_yaml_agno_ships_no_approvals_migration(repo_root):
+      """Guards against re-introducing a yaml-agno-owned approvals migration."""
+      migrations = list((repo_root / "migrations").glob("*approval*"))
+      assert migrations == [], (
+          "yaml-agno must NOT ship its own approvals migration; "
+          "Agno provisions the table."
+      )
   ```
-- **GREEN**: Escribir migration SQL.
-- **Commit**: `feat: add approvals table migration`
+- **GREEN**: Confirm Agno provisions the table in the integration fixture; no migration file is created.
+- **Commit**: `test(approval): assert Agno provisions approvals table, no own migration`
 
 #### TASK_011: HookExecutor pre-hook order
 

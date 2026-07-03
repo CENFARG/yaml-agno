@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_14"
 Title: "Model Resilience & Configuration"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#models", "#fallback", "#resilience", "#circuit-breaker", "#cache", "#providers", "#pydantic-v2", "#retry", "#reasoning"]
 Dependency_Hashes: ["SPEC_01", "SPEC_05", "SPEC_08", "SPEC_09"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - SecretManager referenced via SPEC_23 (Config & Secrets). No model-level enum redefinition; asyncio.TaskGroup enforced (no gather)."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 (Wave 3 dedup). Added FallbackConfig + fallback field to ModelExpandedSpec (build_fallback_chain was unreachable); added retry_jitter field (YAML was orphan); added @ai-directive scoping compute_delay/RetryPolicy to the fallback-probe path ONLY (decision A.7: model-level retry is Agno Model.*)."
 ---
 
 # SPEC_14_MODEL_RESILIENCE_AND_CONFIG
@@ -180,7 +180,7 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field, field_validator
 
 class ModelStringSpec(BaseModel):
-    """Forma compacta: 'provider:id' o 'provider:id:alias'."""
+    """Compact form: 'provider:id' or 'provider:id:alias'."""
     raw: str
 
     @field_validator("raw")
@@ -196,8 +196,26 @@ class ModelStringSpec(BaseModel):
             raise ValueError(f"Unknown provider {provider!r}")
         return v
 
+# FallbackConfig MUST be defined before ModelExpandedSpec so the latter can
+# reference it via the `fallback` field (Pydantic forward refs are avoided).
+FallbackRef = Union[str, dict]   # "provider:id" string | {"alias": ...} | expanded dict
+
+class FallbackConfig(BaseModel):
+    """Ordered fallback chain + per-error routing strategy.
+
+    Each entry in ``fallback_models`` is resolved by ``ProviderResolver``
+    (string, alias dict, or expanded dict) in ``build_fallback_chain``.
+    """
+    fallback_models: list[FallbackRef] = Field(default_factory=list)
+    on_rate_limit: Literal["retry_only", "route_fallback", "retry_then_fallback", "fail"] = "route_fallback"
+    on_context_overflow: Literal["retry_only", "route_fallback", "retry_then_fallback", "fail"] = "route_fallback"
+    on_error: Literal["retry_only", "route_fallback", "retry_then_fallback", "fail"] = "retry_then_fallback"
+    fallback_callback: str | None = None   # import path to async callable
+    max_fallback_hops: int = Field(default=3, ge=1)
+    propagate_session: bool = True
+
 class ModelExpandedSpec(BaseModel):
-    """Forma expandida con parámetros completos."""
+    """Expanded form with full parameters."""
     provider: Literal[
         "anthropic", "openai_chat", "openai_responses", "google", "mistral",
         "deepseek", "cohere", "perplexity", "xai", "meta", "dashscope", "vercel",
@@ -209,7 +227,7 @@ class ModelExpandedSpec(BaseModel):
     id: str
     alias: str | None = None
 
-    # Params de generación (sección 4)
+    # Generation params (section 4)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -217,18 +235,29 @@ class ModelExpandedSpec(BaseModel):
     stop_sequences: list[str] | None = None
     seed: int | None = None
 
-    # Razonamiento (sección 8)
+    # Reasoning (section 8)
     reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
     thinking: bool | None = None
 
-    # Caching (sección 5)
+    # Caching (section 5)
     cache_response: bool = False
 
-    # Retry a nivel modelo (sección 7)
+    # Model-level retry (section 7). NOTE: these forward to Agno Model.* fields
+    # (retries / retry_delay / exponential_backoff / wait_on_rate_limit) — they
+    # are NOT consumed by compute_delay/RetryPolicy (that path is fallback-probe
+    # only; see section 7.3 @ai-directive).
     retries: int = Field(default=0, ge=0, le=10)
     retry_delay: float = Field(default=1.0, ge=0.0)
     exponential_backoff: bool = True
     wait_on_rate_limit: bool = False
+    # Jitter applied to the model-level retry delay (fraction in [0.0, 1.0]).
+    # Forwarded to Agno Model.* when the provider SDK accepts it; otherwise
+    # applied by the fallback-probe path. Default 0.2 matches section 7.4.
+    retry_jitter: float = Field(default=0.2, ge=0.0, le=1.0)
+
+    # Fallback chain (section 6). Without this field, build_fallback_chain()
+    # was unreachable (it reads spec.fallback / spec.fallback.fallback_models).
+    fallback: FallbackConfig | None = None
 
     # Provider-specific kwargs
     provider_kwargs: dict = Field(default_factory=dict)
@@ -518,11 +547,34 @@ model:
 
 ### 7.3 Cálculo de delay
 
+> @ai-directive: `compute_delay` and the model-layer `RetryPolicy` (TASK_010) are
+> used **ONLY** by the fallback-probe path — i.e. inside `call_with_fallback`
+> (section 6.6) when a hop fails with a retryable error and the routing strategy
+> is `retry_only` / `retry_then_fallback`. They do NOT layer a second retry loop
+> on top of Agno's model-level retry. Per decision A.7, model-level retry is
+> owned by Agno `Model.*` fields (`retries` / `retry_delay` /
+> `exponential_backoff` / `wait_on_rate_limit`), which `ProviderFactory` forwards
+> verbatim. yaml-agno has exactly ONE retry abstraction at the step/executor
+> layer (SPEC_05 `RetryPolicy`, backoff + jitter + `classify()`); the model layer
+> does not duplicate it.
+
 ```python
-def compute_delay(attempt: int, base: float, exponential: bool) -> float:
-    if exponential:
-        return base * (2 ** attempt)
-    return base
+def compute_delay(attempt: int, base: float, exponential: bool, jitter: float = 0.0) -> float:
+    """Delay for a fallback-probe retry attempt (NOT a second model retry loop).
+
+    Args:
+        attempt: Zero-based attempt index within the fallback-probe path.
+        base: Base delay in seconds (spec.retry_delay).
+        exponential: Whether to double the delay per attempt.
+        jitter: Jitter fraction in [0.0, 1.0]; 0 disables jitter.
+
+    Returns:
+        The computed delay in seconds.
+    """
+    delay = base * (2 ** attempt) if exponential else base
+    if jitter > 0.0:
+        delay *= 1.0 + random.uniform(-jitter, jitter)
+    return delay
 ```
 
 `wait_on_rate_limit=True` hace que, ante un 429 con header `Retry-After`, se respete ese valor por encima del cálculo (el mayor de los dos).
@@ -1250,7 +1302,7 @@ async def test_routes_on_rate_limit():
 - **GREEN**: Implementar `call_with_fallback` integrando `get_circuit_breaker` de SPEC_05 (sección 6.6). Usar `asyncio.TaskGroup` si hay probing.
 - **Commit**: `feat(models): integrate fallback routing with Circuit Breaker (SPEC_05)`
 
-### TASK_010: RetryPolicy con backoff y jitter
+### TASK_010: compute_delay y RetryPolicy (fallback-probe path ONLY)
 - **File**: `src/yaml_agno/infra/models/retry.py`
 - **Test**: `tests/infra/models/test_retry.py`
 - **RED**:
@@ -1270,8 +1322,8 @@ def test_jitter_bounds():
     d = compute_delay(1, 1.0, True, jitter=0.2)
     assert 1.6 <= d <= 2.4   # 2.0 * (1 ± 0.2)
 ```
-- **GREEN**: Implementar `compute_delay` y `RetryPolicy.respect_retry_after`.
-- **Commit**: `feat(models): add retry policy with exponential backoff and jitter`
+- **GREEN**: Implementar `compute_delay` y `RetryPolicy.respect_retry_after`. @ai-directive: este RetryPolicy es consumido SOLO por la ruta de fallback-probe (sección 6.6 `call_with_fallback`); NO es un segundo loop de retry sobre Agno `Model.retries` (decisión A.7). El retry a nivel step/executor es propiedad de SPEC_05.
+- **Commit**: `feat(models): add fallback-probe retry delay with exponential backoff and jitter`
 
 ### TASK_011: ModelCapabilitiesValidator
 - **File**: `src/yaml_agno/domain/models/capabilities.py`

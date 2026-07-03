@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_18"
 Title: "Evals and Observability Integrations - Agno Evals and OTel Provider Catalog"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Evals", "#AccuracyEval", "#PerformanceEval", "#ReliabilityEval", "#AgentAsJudge", "#OpenTelemetry", "#Langfuse", "#Langsmith", "#Tracing", "#ObservabilityManager"]
 Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_01", "SPEC_27"]
-Last_Updated: "2026-06-17"
-Revision_Note: "iter2: alignment to SPEC_03 iter2 persistence frontier. Removed own tracing-to-DB (trace_db / DbSpanExporter / TraceExporter / TraceDbConfig / TraceExportConfig / TRACE_DB_URL) - tracing-to-DB is now owned by SPEC_27 (Agno setup_tracing + DatabaseSpanExporter); SPEC_18 keeps ONLY evals + the 16 observability provider EXPORT adapters. Rewrote all provider adapters to resolve credentials via core ConfigManager (config.get_string) / SecretManager (await secrets.get_secret) with dot-notation keys and inject them into the provider SDK - no raw os.environ reads; os.environ writes are a documented, controlled injection exception only. Removed env block passthrough via os.environ.setdefault in the registry."
+Last_Updated: "2026-07-02"
+Revision_Note: "iter3 (Wave 4): eval_runs is now a yamlagno.* config-store table (yamlagno_eval_runs, schema yamlagno, tenant_id NOT NULL, explicit WHERE) — NOT Agno agno_* (no such Agno eval_runs table exists and agno_* cannot carry tenant_id per A.9/A.11); added EvalRunRecord DeclarativeBase provisioned by ConfigStoreProvisioner; documented _persist as a NO-OP when db is None so TASK_005/TASK_012 (db=None) pass without a fake db while persistence-asserting tests must pass one."
 ---
 
 # SPEC_18_EVALS_AND_OBSERVABILITY
@@ -385,13 +385,31 @@ class EvalRunner:
     """
     Runs an eval over one or several cases.
     Uses asyncio.TaskGroup to parallelize cases (NOT asyncio.gather).
-    Persists eval-run results to the operational db (Agno `agno_*` tables).
+    Persists eval-run results to the yamlagno.* config-store table
+    `yamlagno_eval_runs` (NOT Agno `agno_*` — see §2.3).
     Trace persistence is NOT this component's concern (SPEC_27 owns tracing-to-DB).
     """
 
     def __init__(self, db, observability_manager):
         self.db = db
         self.obs = observability_manager
+
+    async def _persist(self, run: EvalRunResult) -> None:
+        """Persist an eval-run result to the yamlagno.* config store.
+
+        When `self.db` is None (unit tests in TASK_005/TASK_012 that exercise
+        scoring/span wiring, not persistence), this is a NO-OP: the run is
+        returned in-memory and no row is written. When `self.db` is a real
+        core-cenf DatabaseManager, the run is written to `yamlagno_eval_runs`
+        (schema yamlagno, tenant_id NOT NULL, explicit WHERE) via
+        `db.get_repository(EvalRunRecord)` inside `async with db.transaction()`.
+        Tests that assert persistence MUST pass a fake db (or assert via the
+        repository); tests that only assert scoring/spans pass `db=None`.
+        """
+        if self.db is None:
+            return
+        # real path: build EvalRunRecord(tenant_id=...) from `run` and insert
+        # via db.get_repository(EvalRunRecord) inside async with self.db.transaction()
 
     async def arun_accuracy(
         self,
@@ -492,12 +510,61 @@ class EvalRunner:
 
 ### 2.3 Persistencia de Eval Runs
 
-Los eval runs se persisten en el `db` operativo de Agno (tablas `agno_*`), siguiendo el patrón de los docs (`db=db` en `AccuracyEval`). La persistencia de traces (spans) NO es responsabilidad de SPEC_18: es propiedad de SPEC_27 (tracing-to-DB). yaml-agno expone endpoints REST `GET/POST/PATCH/DELETE /eval-runs` (definido en SPEC_19).
+<!-- @ai-directive TABLE OWNERSHIP: eval_runs is a yamlagno.* config-store table,
+     NOT an Agno runtime agno_* table. Agno does NOT ship an eval_runs table, and
+     agno_* tables cannot carry tenant_id (authoritative decision A.9/A.11), so
+     reusing them would either not persist evals at all or leak them across
+     tenants. The table is provisioned by ConfigStoreProvisioner (SPEC_03 §6). -->
+
+Los eval runs se persisten en la tabla **yamlagno.\*** `yamlagno_eval_runs`
+(schema `yamlagno`, columna `tenant_id` NOT NULL, `WHERE tenant_id = ...`
+explícito en cada query). NO se persisten en tablas runtime `agno_*` de Agno:
+Agno no tiene tabla `eval_runs`, y las `agno_*` no pueden llevar `tenant_id`
+(decisiones A.9/A.11) — hacerlo filtraría eval runs cruz-tenant. El `db`
+inyectado en `EvalRunner.__init__` es el `DatabaseManager` de core-cenf (el
+mismo config store de SPEC_03); `_persist` lo escribe via
+`db.get_repository(EvalRunRecord)` dentro de `async with db.transaction()`.
+La persistencia de traces (spans) NO es responsabilidad de SPEC_18: es
+propiedad de SPEC_27 (tracing-to-DB). yaml-agno expone endpoints REST
+`GET/POST/PATCH/DELETE /eval-runs` (definido en SPEC_19).
 
 ```python
-# Tabla conceptual (mapeo Agno schema)
-# eval_runs:
-#   id, eval_type, eval_name, agent_id, team_id, status,
+# yaml-agno/src/evals/records.py
+# Config-store record (schema yamlagno), provisioned by ConfigStoreProvisioner.
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import String, Text, DateTime
+from datetime import datetime, timezone
+
+class _EvalBase(DeclarativeBase):
+    """Shared DeclarativeBase for yaml-agno eval tables (schema yamlagno)."""
+
+class EvalRunRecord(_EvalBase):
+    """Persistent eval-run row in the yamlagno config store.
+
+    Google-style: provisioned by ConfigStoreProvisioner (SPEC_03 §6), never by
+    a per-spec migration. Multi-tenant isolation is EXPLICIT: tenant_id is
+    NOT NULL and every query filters by it (authoritative decisions A.9/A.11).
+    """
+    __tablename__ = "yamlagno_eval_runs"
+    __table_args__ = {"schema": "yamlagno"}
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    eval_type: Mapped[str] = mapped_column(Text, nullable=False)
+    eval_name: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    team_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    aggregate_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    case_results_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+# Conceptual columns:
+#   id, tenant_id, eval_type, eval_name, agent_id, team_id, status,
 #   aggregate_json, case_results_json, created_at, user_id
 ```
 
@@ -1635,6 +1702,9 @@ Strict TDD RED/GREEN/REFACTOR. Cada tarea: test primero, falla, implementación 
 ### TASK_005: EvalRunner arun_accuracy con TaskGroup
 - **File**: `yaml-agno/src/evals/runner.py`
 - **Test**: `tests/integration/evals/test_runner.py`
+- **NOTE**: `db=None` makes `_persist` a NO-OP (§2.3) — this task asserts
+  scoring only, not persistence. A persistence-asserting test MUST pass a
+  fake db and assert via the repository.
 - **RED**:
   ```python
   async def test_runner_accuracy_pass(monkeypatch):
@@ -1781,6 +1851,8 @@ Strict TDD RED/GREEN/REFACTOR. Cada tarea: test primero, falla, implementación 
 ### TASK_012: Integración ObservabilityManager (Port SPEC_09)
 - **File**: `yaml-agno/src/observability/integration.py`
 - **Test**: `tests/integration/observability/test_integration.py`
+- **NOTE**: `db=None` makes `_persist` a NO-OP (§2.3) — this task asserts
+  span/counter wiring, not persistence.
 - **RED**:
   ```python
   async def test_eval_run_uses_obs_manager_span():

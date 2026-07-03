@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_10"
 Title: "Knowledge & RAG Architecture - Vector DBs, Embedders, Chunkers and Retrieval"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Knowledge", "#RAG", "#VectorDb", "#Embedder", "#Chunker", "#AgenticRAG", "#HybridSearch", "#Reranking", "#Filters", "#PydanticV2"]
 Dependency_Hashes: ["SPEC_02", "SPEC_03"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 metadata bump (was outside prior correction round scope)."
+Last_Updated: "2026-07-02"
+Revision_Note: "iter2 (Wave 4 contract fixes): defined ContentsDbConfig (db_url, table_name, schema) — KnowledgeConfig.contents_db referenced it but no schema existed; clarified knowledge_contents is a yamlagno.* config-store table (schema yamlagno, tenant_id NOT NULL, explicit WHERE) NOT a reuse of agno_* runtime tables (A.9/A.11 cross-tenant leak guard); documented the CustomChunkerConfig extra=allow exception (custom flows pass ctor kwargs as siblings, collected into init_args by the loader; built-in variants stay extra=forbid)."
 ---
 
 # SPEC_10_KNOWLEDGE_AND_RAG
@@ -89,6 +89,22 @@ class KnowledgeConfig(BaseModel):
     max_results: int = Field(default=5, ge=1, le=200)
     search_knowledge: bool = False      # agentic RAG on/off
     knowledge_filters: list[KnowledgeFilterConfig] | None = None
+
+
+class ContentsDbConfig(BaseModel):
+    """Tracking table for ingested content (dedupe, reprocessing).
+
+    The physical table (default `knowledge_contents`) is a yamlagno.* config-store
+    table: schema `yamlagno`, a non-null `tenant_id` column, and explicit
+    `WHERE tenant_id = ...` on every query (authoritative decision A.9/A.11).
+    It is NOT a reuse of Agno runtime `agno_*` tables — those cannot carry
+    tenant_id and would leak across tenants. The DSN comes from ConfigManager;
+    any password is resolved via SecretManager (no ambient credentials).
+    """
+    model_config = {"extra": "forbid"}
+    db_url: str = Field(..., description="DSN injected via ConfigManager/SecretManager")
+    table_name: str = Field(default="knowledge_contents", max_length=120)
+    schema: str = Field(default="yamlagno", description="yamlagno config-store schema")
 ```
 
 ---
@@ -588,7 +604,16 @@ class FixedSizeChunkerConfig(BaseModel):
     separator: str = "\n\n"
 
 class CustomChunkerConfig(BaseModel):
-    """Chunker definido por el usuario via import path."""
+    """Chunker definido por el usuario via import path.
+
+    `extra="allow"` is intentional: custom chunkers may declare arbitrary
+    constructor keyword arguments in `init_args`, and YAML authors pass those
+    kwargs as siblings of `module`/`init_args` at the same level. The loader
+    collects every non-reserved key into `init_args` before instantiating the
+    imported class (the reserved keys are `type`, `module`, `init_args`).
+    This is the documented escape hatch for custom flows; built-in chunker
+    variants above all use `extra="forbid"`.
+    """
     model_config = {"extra": "allow"}
     type: Literal["custom"]
     module: str = Field(..., max_length=300)   # myapp.chunkers.MyChunker
@@ -727,13 +752,21 @@ knowledge:
 
 ### 7.1 Contents DB
 
-Tracking de contenido ingerido (dedupe, reprocesamiento). Reutiliza `PostgresDb` de SPEC_03.
+Tracking de contenido ingerido (dedupe, reprocesamiento). La tabla física
+(default `knowledge_contents`) es una tabla **yamlagno.\*** (schema `yamlagno`,
+columna `tenant_id` NOT NULL, `WHERE tenant_id = ...` explícito en cada query),
+provisionada por `ConfigStoreProvisioner` (SPEC_03 §6) — NO es un reuse de las
+tablas runtime `agno_*` de Agno (esas no pueden llevar `tenant_id` y filtrarían
+cruz-tenant; autoritative decisions A.9/A.11). El DSN se lee via ConfigManager;
+el password via SecretManager (sin credenciales ambientales). Schema:
+`ContentsDbConfig` (§1.3, `db_url`, `table_name`, `schema`).
 
 ```yaml
 knowledge:
   contents_db:
-    db_url: "${CONTENTS_DB_URL}"
-    table_name: "knowledge_contents"
+    db_url: "${CONTENTS_DB_URL}"        # ConfigManager/SecretManager
+    table_name: "knowledge_contents"    # -> yamlagno.knowledge_contents
+    schema: "yamlagno"                  # default; yamlagno config-store schema
 ```
 
 ### 7.2 Readers (auto-detect por extension)

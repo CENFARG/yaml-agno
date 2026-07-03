@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_31"
 Title: "Culture Manager - Experimental Cross-Session Cultural Knowledge (LLM-Extractive)"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Culture", "#CultureManager", "#CulturalKnowledge", "#Experimental", "#CrossSession", "#LLMExtraction", "#Delegation"]
 Dependency_Hashes: ["SPEC_04", "SPEC_14"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - new SPEC (Culture). EXPERIMENTAL flag."
+Last_Updated: "2026-07-02"
+Revision_Note: "iter2 (Wave 4 collateral): fixed glued-backtick markdown (**RED`:/GREEN`:/Commit`: -> **RED**:/etc) across the TDD section so the steps render correctly. The DbRegistry import (from yaml_agno.persistence.registry import DbRegistry, attributed to SPEC_03) is now backed by the SPEC_03 iter4 DbRegistry definition. No content/concept changes."
 ---
 
 # SPEC_31_CULTURE_MANAGER
@@ -608,7 +608,7 @@ def test_culture_default_flags():
 #### TASK_004: Missing db_ref raises clear error
 - **File**: `yaml-agno/src/yaml_agno/culture/factory.py`
 - **Test**: `tests/unit/culture/test_db_ref_missing.py`
-- **RED`: a config with an unknown `db_ref` raises `ValueError` naming the catalog.
+- **RED**: a config with an unknown `db_ref` raises `ValueError` naming the catalog.
 - **GREEN**: look up in `DbRegistry`; raise if absent.
 - **Commit**: `feat(culture): validate db_ref against persistence catalog`
 
@@ -627,39 +627,39 @@ def test_culture_default_flags():
 #### TASK_007: AgentBuilder / TeamBuilder wiring
 - **File**: `yaml-agno/src/yaml_agno/runtime/agent_builder.py` (extend)
 - **Test**: `tests/unit/culture/test_agent_wiring.py`
-- **RED`: an `AgentConfig` with a culture block produces an `Agent` whose culture attribute is the built manager.
+- **RED**: an `AgentConfig` with a culture block produces an `Agent` whose culture attribute is the built manager.
 - **GREEN**: call `CultureConfigFactory(db_registry).build(config.culture)`, forward to `Agent(culture=...)`.
 - **Commit**: `feat(culture): wire CultureManager into AgentBuilder`
 
 #### TASK_008: Capture pipeline is delegated (contract test)
 - **File**: `tests/unit/culture/test_capture_delegated.py`
-- **RED`: spy on `CultureManager.create_cultural_knowledge`; assert yaml-agno never reimplements the system-message builder or db-tool generator (no calls to construct `Function.from_callable` for culture tools in yaml-agno code).
-- **GREEN`: static/contract test guarding the delegation boundary.
+- **RED**: spy on `CultureManager.create_cultural_knowledge`; assert yaml-agno never reimplements the system-message builder or db-tool generator (no calls to construct `Function.from_callable` for culture tools in yaml-agno code).
+- **GREEN**: static/contract test guarding the delegation boundary.
 - **Commit**: `test(culture): assert capture pipeline not reimplemented`
 
 #### TASK_009: Model resolution via SPEC_14
 - **File**: `tests/unit/culture/test_model_resolution.py`
-- **RED`: a config with a `provider: openai id: gpt-4o` model block produces a `CultureManager.model` that is the resolved OpenAIChat instance.
-- **GREEN`: delegate to `ModelFactory`.
+- **RED**: a config with a `provider: openai id: gpt-4o` model block produces a `CultureManager.model` that is the resolved OpenAIChat instance.
+- **GREEN**: delegate to `ModelFactory`.
 - **Commit**: `test(culture): assert model resolved via ModelFactory`
 
 #### TASK_010: Async parity
 - **File**: `tests/unit/culture/test_async_parity.py`
-- **RED`: with an `AsyncBaseDb` in the catalog, the built manager supports `acreate_cultural_knowledge` (call signature present).
-- **GREEN`: contract test against Agno async methods.
+- **RED**: with an `AsyncBaseDb` in the catalog, the built manager supports `acreate_cultural_knowledge` (call signature present).
+- **GREEN**: contract test against Agno async methods.
 - **Commit**: `test(culture): assert async capture path available`
 
 #### TASK_011: Forward compatibility (unknown keys tolerated)
 - **File**: `tests/unit/culture/test_forward_compat.py`
-- **RED`: a config with `future_field: x` validates without error.
-- **GREEN`: `extra="ignore"` (already set); test guards it.
+- **RED**: a config with `future_field: x` validates without error.
+- **GREEN**: `extra="ignore"` (already set); test guards it.
 - **Commit**: `test(culture): assert unknown keys tolerated for forward compat`
 
 #### TASK_012: Integration test — end-to-end capture (mocked LLM)
 - **File**: `tests/integration/test_culture_e2e.py`
 - **Test**: build an agent with culture enabled, run a message, mock the extraction model to emit an `add_cultural_knowledge` tool call, assert a `CulturalKnowledge` row appears in the (test) db and `knowledge_updated` is true.
-- **RED`: assert the persisted row.
-- **GREEN`: `@pytest.mark.integration`.
+- **RED**: assert the persisted row.
+- **GREEN**: `@pytest.mark.integration`.
 - **Commit**: `test(culture): add e2e integration test with mocked extraction`
 
 ---

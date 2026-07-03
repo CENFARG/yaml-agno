@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_21"
 Title: "Kubernetes Deployment"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Kubernetes", "#Deployment", "#Helm", "#Kustomize", "#HPA", "#PDB", "#Probes", "#ExternalSecrets", "#ConfigManager", "#SecretManager", "#RollingUpdate", "#MultiTenant", "#MultiCloud", "#CloudRun"]
 Dependency_Hashes: ["SPEC_12", "SPEC_20", "SPEC_06", "SPEC_09"]
 Last_Updated: "2026-06-17"
-Revision_Note: "iter1 — recast SPEC_21 as the FUTURE deployment strategy (Cloud Run is the current primary, ref SPEC_20 §17); added @ai-directive clarifying Cloud Run > K8s precedence."
+Revision_Note: "Wave-5 secrets contract alignment: wait-for-db no longer reads a separate database_host secret (not in the SPEC_20 §8.2 contract); host is derived from database_url via a lightweight URL parse. Documented that connection params come from database_url only unless a separate database_host secret is explicitly added."
 ---
 
 # SPEC_21_KUBERNETES_DEPLOYMENT
@@ -199,19 +199,23 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
+        # @ai-directive: connection params come from database_url only (SPEC_20 §8.2 contract lists
+        # just database_url; no separate database_host secret). The init container derives the host
+        # from database_url with a lightweight URL parse and waits for DNS to resolve it. If a
+        # separate database_host secret is ever added to the SPEC_20 contract, swap this derivation
+        # for a direct secretKeyRef to database_host.
         - name: wait-for-db
           image: {{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}
           command:
             - sh
             - -c
-            - "until getent hosts ${DATABASE_HOST}; do echo waiting db; sleep 2; done"
+            - "DATABASE_HOST=$(printf '%s' \"${DATABASE_URL}\" | sed -E 's#^[^:]+://[^@]*@##; s#[:/].*##'); until getent hosts \"${DATABASE_HOST}\"; do echo \"waiting db: ${DATABASE_HOST}\"; sleep 2; done"
           env:
-            - name: DATABASE_HOST
+            - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "yaml-agno.fullname" . }}-secret
-                  key: database_host
-                  optional: true
+                  key: database_url
       containers:
         - name: agentos
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -450,7 +454,6 @@ spec:
       engineVersion: v2
       data:
         database_url: "{{`{{ .database_url }}`}}"
-        database_host: "{{`{{ .database_host }}`}}"
         openai_api_key: "{{`{{ .openai_api_key }}`}}"
         jwt_signing_key: "{{`{{ .jwt_signing_key }}`}}"
         redis_url: "{{`{{ .redis_url }}`}}"
@@ -458,9 +461,6 @@ spec:
     - secretKey: database_url
       remoteRef:
         key: {{ .Values.externalSecret.path }}/database_url
-    - secretKey: database_host
-      remoteRef:
-        key: {{ .Values.externalSecret.path }}/database_host
     - secretKey: openai_api_key
       remoteRef:
         key: {{ .Values.externalSecret.path }}/openai_api_key

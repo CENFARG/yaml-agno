@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_03"
 Title: "Persistence Architecture - Config Store on core-cenf DatabaseManager"
-Version: "0.3.0-iter3"
+Version: "0.3.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PostgreSQL", "#SQLAlchemy", "#core-cenf", "#MultiTenant", "#ConfigStore"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 3 - fused the tenant seam: TenantResolver is no longer a competitor of resolve_user_id() (SPEC_04). It is reframed as a CONSUMER of the composite user_id built by SPEC_04; it only PARSES tenant_id out of it for yamlagno_* WHERE filters + telemetry. Renamed its method to extract_tenant(composite_user_id). Updated TASK_006 test accordingly and resolved the §12.2 isolation questions via the composite user_id + explicit WHERE + no RLS + set_tenant_id telemetry-only contract. The 3-level org/org_user_roles/user MODEL is retained as a config-row scoping design surface."
+Revision_Note: "Iter 4 (Wave 4) - added §7.4 DbRegistry (src/persistence/registry.py): the owner of the runtime db_ref resolver consumed by SPEC_31 (CultureManager) and SPEC_32 (RegistryPopulator). Defines the Protocol (get(db_ref) -> agno.db.Db, get_vector_db(db_ref) -> agno.vectordb.VectorDb) plus an InMemoryDbRegistry default; missing refs fail fast with ValueError naming the ref. Instances are built once at bootstrap from the core-cenf DSN/secret contract."
 ---
 
 # SPEC_03_PERSISTENCE_ARCHITECTURE
@@ -899,6 +899,104 @@ class AgentConfigRepository:
 - Secrets via `await secrets.get_secret(key)`; NEVER in env vars or logs.
 - Multi-tenant isolation is **explicit**: ALWAYS pass `tenant_id` in the `filters={}` dict. The core `GenericRepository` does NOT auto-scope by the tenant contextvar. `set_tenant_id()` (contextvar) drives **logging/tracing** only — never assume it scopes DB queries.
 - Use `asyncio.TaskGroup` for concurrent bootstrap; NEVER `asyncio.gather`.
+
+### 7.4 DbRegistry — runtime `db_ref` resolution (owner: SPEC_03)
+
+<!-- @ai-directive OWNER: yaml_agno.persistence.registry.DbRegistry is OWNED by
+     SPEC_03 (src/persistence/registry.py). Consumed by SPEC_31 (CultureManager)
+     and SPEC_32 (RegistryPopulator) to resolve YAML `db_ref` / `vector_db` refs
+     to live Agno DbDb / VectorDb objects. yaml-agno does NOT re-implement Agno's
+     Db/VectorDb construction; it builds them from config and registers them by ref. -->
+
+yaml-agno agents/teams reference named databases via `db_ref` (e.g. `primary_pg`,
+`kb_vectors`). The `DbRegistry` is the single resolver that turns a ref string
+into the live Agno object. It is constructed once at bootstrap from the
+`databases` / `vector_databases` config blocks and exposed to SPEC_31 / SPEC_32.
+It does NOT own connections itself — it holds already-built Agno `Db` /
+`VectorDb` instances (built via the same core-cenf DSN/secret contract as §7.1).
+
+```python
+# yaml-agno/src/persistence/registry.py
+"""Runtime db_ref resolver. Owner: SPEC_03.
+
+Turns YAML `db_ref` / `vector_db` strings into the live Agno Db / VectorDb they
+reference. Instances are built once at bootstrap (see build_db_registry) and
+held by ref. This is a pure lookup table — no connection management, no SQL.
+"""
+from __future__ import annotations
+from typing import Protocol
+
+class DbRegistry(Protocol):
+    """Resolves named database refs to live Agno objects.
+
+    Implementations hold pre-built agno.db.Db and agno.vectordb.VectorDb
+    instances keyed by their YAML ref. Lookup is O(1); a missing ref raises
+    ValueError naming the ref (consumed by SPEC_31 / SPEC_32 fail-fast paths).
+    """
+
+    def get(self, db_ref: str):
+        """Return the agno.db.Db registered under db_ref.
+
+        Args:
+            db_ref: the YAML ref string (e.g. "primary_pg").
+
+        Returns:
+            The live agno.db.Db instance.
+
+        Raises:
+            ValueError: if db_ref was not registered.
+        """
+        ...
+
+    def get_vector_db(self, db_ref: str):
+        """Return the agno.vectordb.VectorDb registered under db_ref.
+
+        Args:
+            db_ref: the YAML ref string (e.g. "kb_vectors").
+
+        Returns:
+            The live agno.vectordb.VectorDb instance.
+
+        Raises:
+            ValueError: if db_ref was not registered.
+        """
+        ...
+
+
+class InMemoryDbRegistry:
+    """Default DbRegistry implementation: two dicts keyed by ref.
+
+    Built once at bootstrap from config; immutable afterwards. Thread/async
+    safe because it is read-only after construction.
+    """
+
+    def __init__(self) -> None:
+        self._dbs: dict[str, object] = {}
+        self._vector_dbs: dict[str, object] = {}
+
+    def register_db(self, db_ref: str, db) -> None:
+        self._dbs[db_ref] = db
+
+    def register_vector_db(self, db_ref: str, vector_db) -> None:
+        self._vector_dbs[db_ref] = vector_db
+
+    def get(self, db_ref: str):
+        if db_ref not in self._dbs:
+            raise ValueError(f"Unknown db_ref: {db_ref!r} (not registered)")
+        return self._dbs[db_ref]
+
+    def get_vector_db(self, db_ref: str):
+        if db_ref not in self._vector_dbs:
+            raise ValueError(f"Unknown vector_db ref: {db_ref!r} (not registered)")
+        return self._vector_dbs[db_ref]
+```
+
+> **Bootstrap wiring**: `build_db_registry(config, secrets)` iterates the
+> `databases` and `vector_databases` config blocks, builds each Agno `Db` /
+> `VectorDb` from its DSN (ConfigManager) + password (SecretManager), and
+> registers it under its ref. The resulting `DbRegistry` is a singleton passed
+> to SPEC_31 `CultureManager` and SPEC_32 `RegistryPopulator`. A `db_ref`
+> absent from the registry fails fast with a `ValueError` naming the ref.
 
 ---
 

@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_15"
 Title: "Context Engineering & Compression"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#context-engineering", "#compression", "#dependencies", "#session-state", "#run-context", "#token-counting", "#pydantic-v2"]
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_08", "SPEC_14"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - RunContext imported from agno.run.base (never redefined). Context compression moved here from SPEC_04 (SPEC_04 owns the memory MODEL only)."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - removed the 'Engram adapter' leak from the SPEC_04 component list (frontier table and owner table); SPEC_04 owns Agno-native memory only (LearningMachine/MemoryManager). Replaced the undefined MemoryLayer type in ContextEngineer with the concrete SPEC_04 Agno MemoryManager reference. Defined TokenCounter.count_part (referenced by count_messages but never defined). No other changes."
 ---
 
 # SPEC_15_CONTEXT_ENGINEERING_AND_COMPRESSION
@@ -23,8 +23,8 @@ Revision_Note: "Iteration 1 - RunContext imported from agno.run.base (never rede
 
 | Aspecto | SPEC_04 (MODELO de memoria) | SPEC_15 (OPERACIÓN de contexto) |
 |---------|----------------------------|---------------------------------|
-| Responsabilidad | QUÉ se guarda (capas session/working/long-term, Engram) | QUÉ se carga al prompt y CÓMO se comprime |
-| Componentes | SessionStore, WorkingMemory, LongTermMemory, Engram adapter | ContextBuilder, DependencyResolver, CompressionManager, TokenCounter |
+| Responsabilidad | QUÉ se guarda (capas session/working/long-term, Agno native) | QUÉ se carga al prompt y CÓMO se comprime |
+| Componentes | SessionStore, WorkingMemory, Agno LearningMachine/MemoryManager | ContextBuilder, DependencyResolver, CompressionManager, TokenCounter |
 | Compresión | NO (delegado aquí) | SÍ (dueño de `CompressionManager`, `compress_tool_results`) |
 | `session_state` como dato | Define persistencia del estado | Define cómo se inyecta al prompt |
 | PII sanitization | Referenciado | MOVIDO a SPEC_16 (guardrails) |
@@ -47,7 +47,7 @@ Revision_Note: "Iteration 1 - RunContext imported from agno.run.base (never rede
 ### 1.3 Qué NO cubre
 | Tema | Dueño |
 |------|-------|
-| Engram, capas session/working/long-term (qué se persiste) | SPEC_04 |
+| Agno LearningMachine/MemoryManager, capas session/working/long-term (qué se persiste) | SPEC_04 |
 | PII sanitization en el contexto | SPEC_16 (guardrails) |
 | Cache key del modelo (afectada por contexto dinámico) | SPEC_14 |
 | Knowledge base retrieval (RAG) | SPEC_10 |
@@ -610,6 +610,32 @@ class TokenCounter:
                     total += self.count_part(part)
         return total
 
+    def count_part(self, part: Any) -> int:
+        """Tokens of a single multimodal content part.
+
+        Agno/LLM message `content` can be a list of parts (text, image, etc.).
+        Text parts are encoded; non-text parts fall back to a char/4 estimate
+        (image payloads carry no text tokens here).
+
+        Args:
+            part: A content part. A plain string, or a dict with a ``text`` key
+                (OpenAI-style ``{"type": "text", "text": "..."}``).
+
+        Returns:
+            Estimated token count for the part.
+        """
+        if isinstance(part, str):
+            self._ensure_encoding()
+            return len(self._enc.encode(part))
+        if isinstance(part, dict):
+            text = part.get("text")
+            if isinstance(text, str):
+                self._ensure_encoding()
+                return len(self._enc.encode(text))
+            # Non-text part (image_url, input_audio, file, ...): approximate.
+            return max(1, len(str(part)) // 4)
+        return max(1, len(str(part)) // 4)
+
     def count_tools(self, tool_defs: list[dict]) -> int:
         """Tokens de las definiciones de tools (JSON schema)."""
         import json
@@ -698,14 +724,14 @@ class ContextEngineer:
         spec: ContextEngineeringSpec,
         dependency_resolver: DependencyResolver,
         session_store: "SessionStore",          # SPEC_04
-        memory_layer: "MemoryLayer | None",     # SPEC_04
+        memory_manager: "MemoryManager | None",  # SPEC_04 (Agno native)
         knowledge_retriever: "KnowledgeRetriever | None",  # SPEC_10
         token_counter: TokenCounter,
     ):
         self.spec = spec
         self.deps = dependency_resolver
         self.store = session_store
-        self.memory = memory_layer
+        self.memory = memory_manager              # Agno MemoryManager/UserMemory
         self.knowledge = knowledge_retriever
         self.tokens = token_counter
 
@@ -1224,7 +1250,7 @@ async def test_injects_name_then_datetime_order():
                                   timezone_identifier="UTC")
     engineer = ContextEngineer(spec, dep_resolver=MagicMock(),
                                session_store=MagicMock(),
-                               memory_layer=None, knowledge_retriever=None,
+                               memory_manager=None, knowledge_retriever=None,
                                token_counter=MagicMock())
     engineer._registry = MagicMock()
     ctx = await engineer.build(base_messages=[], run_context=fake_rc())

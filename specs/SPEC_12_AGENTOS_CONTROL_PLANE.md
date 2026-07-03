@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_12"
 Title: "AgentOS Control Plane"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#AgentOS", "#FastAPI", "#ControlPlane", "#MCP", "#Interfaces", "#AGUI", "#Slack", "#A2A", "#Resync", "#RBAC"]
-Dependency_Hashes: ["SPEC_06", "SPEC_13"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 metadata bump (was outside prior correction round scope)."
+Dependency_Hashes: ["SPEC_06", "SPEC_09", "SPEC_13"]
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 (Wave 3). Moved ResyncSettings definition ABOVE AgentOSConfig (NameError at import); added config: ConfigManager param to ResyncManager.__init__ (resync_now called self._config.reload -> AttributeError); fixed CircuitBreaker construction to SPEC_09 rate-based API (failure_threshold % + min_requests); rewrote sequenceDiagram Note to plain prose (embedded -> tokens)."
 ---
 
 # SPEC_12_AGENTOS_CONTROL_PLANE
@@ -89,6 +89,13 @@ Cada parámetro mapea a un campo del aggregate `AgentOSConfig`. La columna "YAML
 
 ### 2.2 Aggregate Root: `AgentOSConfig` (Pydantic V2)
 
+> @ai-directive: `ResyncSettings` MUST be defined ABOVE `AgentOSConfig`. The
+> `resync` field uses `Field(default_factory=ResyncSettings)`, which Pydantic
+> evaluates eagerly at class-body execution — a forward reference (string
+> annotation alone) is NOT enough and raises `NameError` at import. All nested
+> settings models (`AuthorizationSettings`, `MCPServerSettings`,
+> `SchedulerSettings`, `ResyncSettings`) are therefore declared first.
+
 ```python
 # yaml-agno/src/domain/agentos/agentos_config.py
 from __future__ import annotations
@@ -110,6 +117,20 @@ class MCPServerSettings(BaseModel):
 class SchedulerSettings(BaseModel):
     enabled: bool = False
     poll_interval: int = 15  # seconds
+
+class ResyncSettings(BaseModel):
+    """Hot-reload settings. Defined here (above AgentOSConfig) so the
+    `resync` field's default_factory resolves at class-body execution time."""
+    enabled: bool = False
+    watch: bool = False          # filesystem watch
+    debounce_ms: int = 500
+    max_concurrent: int = 1
+    # SPEC_09 rate-based CircuitBreaker params. failure_threshold is a
+    # PERCENTAGE (0.0-100.0) of failures that trips the breaker; min_requests
+    # is the minimum sample size before the rate is evaluated.
+    failure_threshold: float = 50.0   # % of failures to open the circuit
+    min_requests: int = 5             # min requests before rate is evaluated
+    recovery_timeout: int = 30        # seconds before HALF_OPEN probe
 
 class AgentOSConfig(BaseModel):
     model_config = {"extra": "forbid"}
@@ -141,8 +162,13 @@ class AgentOSConfig(BaseModel):
 
     def to_agno_kwargs(self) -> dict[str, Any]:
         """Produce the kwargs passed to agno.os.AgentOS(**kwargs).
+
         Booleans and primitives are emitted directly; complex objects are
-        injected by the AgentOSFactory AFTER resolution from registries."""
+        injected by the AgentOSFactory AFTER resolution from registries.
+
+        Returns:
+            The kwargs dict for the AgentOS constructor.
+        """
         return model_dump(self, exclude_none=False, exclude_unset=False)
 ```
 
@@ -498,7 +524,7 @@ sequenceDiagram
     M->>A: register mcp_server
     M->>M: connect tool endpoints
     L->>A: serve /mcp
-    Note over U,A: shutdown: L->M: stop() -> disconnect
+    Note over U,A: On shutdown the LifespanAdapter calls MCPServerLifecycle stop, which disconnects the MCP server.
 ```
 
 ---
@@ -615,15 +641,24 @@ agentos:
 
 ### 7.2 ResyncSettings
 
-```python
-# yaml-agno/src/domain/agentos/resync_settings.py
-class ResyncSettings(BaseModel):
-    enabled: bool = False
-    watch: bool = False          # filesystem watch
-    debounce_ms: int = 500
-    max_concurrent: int = 1
-    failure_threshold: int = 3
-    recovery_timeout: int = 30
+> @ai-directive: `ResyncSettings` is defined ONCE in section 2.2 (above
+> `AgentOSConfig`, to satisfy the eager `default_factory` resolution). The
+> physical module is `yaml-agno/src/domain/agentos/agentos_config.py` (re-export
+> from `resync_settings.py` is optional). It is NOT redefined here — this section
+> only documents the YAML shape and the rate-based CircuitBreaker semantics.
+
+```yaml
+agentos:
+  resync:
+    enabled: true
+    watch: true
+    debounce_ms: 500
+    max_concurrent: 1
+    # SPEC_09 rate-based CircuitBreaker. failure_threshold is a PERCENTAGE of
+    # failures (not a raw count); min_requests gates when the rate is evaluated.
+    failure_threshold: 50.0   # % failures -> open (matches ResyncSettings default)
+    min_requests: 5
+    recovery_timeout: 30
 ```
 
 ### 7.3 Validación de referencias cruzadas
@@ -740,21 +775,45 @@ class AuthorizationAdapter:
 
 ### 10.1 ResyncManager
 
+> @ai-directive: `ResyncManager.__init__` REQUIRES a `config: ConfigManager`
+> param (core-cenf instance, injected via DI) and stores it as `self._config`.
+> `resync_now()` calls `await self._config.reload()` — without the injected
+> instance this raised `AttributeError`. The CircuitBreaker is the SPEC_09
+> rate-based breaker: `failure_threshold` is a PERCENTAGE (float) and
+> `min_requests` gates when the rate is evaluated — NOT a raw failure count.
+
 ```python
 # yaml-agno/src/adapters/agentos/resync_manager.py
 import asyncio, anyio
 from pathlib import Path
+from core_infrastructure.config import ConfigManager   # core-cenf instance (DI)
 
 class ResyncManager:
-    def __init__(self, config_path: Path, agentos, settings: ResyncSettings, obs):
+    def __init__(
+        self,
+        config_path: Path,
+        agentos,
+        settings: ResyncSettings,
+        obs,
+        config: ConfigManager,
+    ):
         self._cfg = config_path
         self._os = agentos
         self._settings = settings
         self._obs = obs
-        self._breaker = CircuitBreaker(settings.failure_threshold, settings.recovery_timeout)
+        self._config = config   # core-cenf ConfigManager; reload() is async
+        # SPEC_09 rate-based CircuitBreaker. failure_threshold is a PERCENTAGE
+        # (0.0-100.0); min_requests gates rate evaluation. Both come from
+        # ResyncSettings so the YAML drives breaker behavior.
+        self._breaker = CircuitBreaker(
+            failure_threshold=settings.failure_threshold,   # % failures
+            recovery_timeout=settings.recovery_timeout,
+            min_requests=settings.min_requests,
+        )
         self._sem = asyncio.Semaphore(settings.max_concurrent)
 
     async def watch(self):
+        """Watch the config parent dir and debounce-change reload resyncs."""
         if not self._settings.watch:
             return
         async with anyio.Path(self._cfg).parent.watch() as events:
@@ -762,11 +821,16 @@ class ResyncManager:
                 await self._debounce(ev)
 
     async def resync_now(self):
+        """Reload config + re-sync agents/teams/workflows, breaker-guarded.
+
+        Raises:
+            ResyncBlockedError: if the SPEC_09 CircuitBreaker is OPEN.
+        """
         async with self._sem:
             if not self._breaker.allow_request():   # SPEC_09 CircuitBreaker API
                 raise ResyncBlockedError("circuit open")
             try:
-                # ConfigManager is a core-cenf instance (injected); reload is async.
+                # ConfigManager is the injected core-cenf instance; reload is async.
                 await self._config.reload()
                 self._os.resync()  # agno re-loads agents/teams/workflows
                 self._breaker.record_success()
@@ -778,9 +842,9 @@ class ResyncManager:
 
 ### 10.2 Semántica
 
-- `resync()` recarga agents/teams/workflows/knowledge desde `ConfigManager`. No reinicia el proceso ni pierde sessions.
+- `resync()` recarga agents/teams/workflows/knowledge desde el `ConfigManager` inyectado. No reinicia el proceso ni pierde sessions.
 - Endpoints y middleware **no** se reconstruyen (solo los objetos de dominio).
-- Circuit breaker bloquea resyncs tras N fallos consecutivos y reintenta tras `recovery_timeout`.
+- Circuit breaker (SPEC_09, rate-based: `failure_threshold` % + `min_requests`) bloquea resyncs tras una tasa de fallos y reintenta tras `recovery_timeout`. `failure_threshold` NO es un conteo crudo.
 
 ### 10.3 Disparadores
 
@@ -883,12 +947,12 @@ AND el agente researcher se recarga sin perder sesiones activas
 AND GET /health sigue respondiendo 200 durante el reload
 ```
 
-#### Scenario 7: Resync bloqueado por circuit breaker
+#### Scenario 7: Resync bloqueado por circuit breaker (rate-based, SPEC_09)
 
 ```gherkin
-GIVEN un ResyncManager cuyo CircuitBreaker tiene failure_threshold=3
-AND han ocurrido 3 resyncs fallidos consecutivos
-WHEN se dispara un cuarto resync
+GIVEN un ResyncManager cuyo CircuitBreaker tiene failure_threshold=50.0 (% failures) y min_requests=4
+AND han ocurrido 4 resyncs, todos fallidos (100% failures, >= min_requests y >= failure_threshold)
+WHEN se dispara un quinto resync
 THEN se lanza ResyncBlockedError("circuit open")
 AND no se invoca agentos.resync()
 AND tras recovery_timeout el breaker pasa a half-open y permite un intento
@@ -981,20 +1045,30 @@ async def test_mcp_lifespan_start_stop_called():
 - **GREEN**: Implementar start/stop idempotentes con AsyncExitStack.
 - **Commit**: `feat(agentos): MCPServerLifecycle start/stop hooks`
 
-#### TASK_005: ResyncManager con circuit breaker
+#### TASK_005: ResyncManager con circuit breaker (rate-based)
 - **File**: `yaml-agno/src/adapters/agentos/resync_manager.py`
 - **Test**: `tests/unit/adapters/test_resync_manager.py`
 - **RED**:
 ```python
-async def test_resync_blocks_after_threshold(mocker):
-    mgr = ResyncManager(..., settings=ResyncSettings(enabled=True, failure_threshold=2, recovery_timeout=1))
+async def test_resync_blocks_after_failure_rate(mocker):
+    # SPEC_09 rate-based breaker: failure_threshold is a PERCENTAGE, min_requests
+    # gates rate evaluation. With failure_threshold=50.0 and min_requests=2,
+    # two consecutive failures (100% rate, >= min_requests) trip the breaker.
+    cfg = mocker.Mock()                 # ConfigManager (core-cenf instance)
+    mgr = ResyncManager(
+        config_path=Path("agentos.yaml"), agentos=mocker.Mock(), obs=mocker.Mock(),
+        config=cfg,
+        settings=ResyncSettings(enabled=True, failure_threshold=50.0,
+                                min_requests=2, recovery_timeout=1),
+    )
     mocker.patch.object(AgentOS, "resync", side_effect=RuntimeError)
     with pytest.raises(RuntimeError): await mgr.resync_now()
-    with pytest.raises(RuntimeError): await mgr.resync_now()
+    with pytest.raises(RuntimeError): await mgr.resync_now()   # 2 fails -> 100% >= 50%
     with pytest.raises(ResyncBlockedError): await mgr.resync_now()
+    cfg.reload.assert_awaited()   # injected ConfigManager is used (no AttributeError)
 ```
-- **GREEN**: CircuitBreaker + semaphore + debounce.
-- **Commit**: `feat(agentos): ResyncManager with circuit breaker and debounced watch`
+- **GREEN**: CircuitBreaker (SPEC_09 rate-based) + semaphore + debounce + injected `ConfigManager`.
+- **Commit**: `feat(agentos): ResyncManager with rate-based breaker and injected ConfigManager`
 
 #### TASK_006: FastAPIAppBuilder conditional routers
 - **File**: `yaml-agno/src/adapters/agentos/fastapi_app_builder.py`

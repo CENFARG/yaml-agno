@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_09"
 Title: "Observability and SRE - Metrics, Tracing and Resilience"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#OpenTelemetry", "#SRE", "#CircuitBreaker", "#Resilience"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 - completed the ObservabilityManager Port: added record_metric(name, value, attributes) so distributions (latency, token usage) are first-class on the contract, not just counters. Unblocks the SPEC_24 adapter which already calls record_metric and attributes it to this Port. Other Wave-2 debts (ErrorCategory/CRITICAL categorization, LoggerManager Port duplication) remain out of scope."
+Revision_Note: "Iter 3 - realigned to core-cenf: removed local _categorize_error()/ErrorCategory enum (incl CRITICAL); retry/circuit classification now delegates to ErrorHandlingManager.classify() returning core-cenf ErrorClassification (TRANSIENT/PERMANENT/VALIDATION/AUTH/RATE_LIMIT). Removed should_retry usage (retry decision is SPEC_05 RetryPolicy). Replaced engram_save_total/engram_search_total metrics with Agno-native learning_decision_log_save_total/memory_add_total (reflect SPEC_04 LearningMachine/MemoryManager). Dropped the duplicate LoggerManager Protocol Port (core-cenf owns it); kept only the yaml-agno ContextAwareLogger wrapper. Renumbered sections sequentially. No Engram anywhere."
 ---
 
 # SPEC_09_OBSERVABILITY_AND_SRE
@@ -19,20 +19,14 @@ Revision_Note: "Iter 2 - completed the ObservabilityManager Port: added record_m
 
 ## 1. CORE INFRA MANAGER INTEGRATION
 
-### 1.1 LoggerManager Integration
+### 1.1 LoggerManager Integration (core-cenf owned)
+
+> **@ai-directive**: `LoggerManager` is OWNED by core-cenf (`core_infrastructure.logging.LoggerManager`).
+> yaml-agno CONSUMES it; this SPEC does NOT redefine the Port. The API surface consumed
+> here is `debug`/`info`/`warn`/`error(message, error=None)`. The only yaml-agno-owned
+> logging artifact is the `ContextAwareLogger` wrapper below.
 
 **Responsabilidad**: Registro de eventos base con control de verbosidad (dev/test/prod).
-
-**Port (Protocol)**:
-```python
-from typing import Protocol
-
-class LoggerManager(Protocol):
-    def debug(self, message: str) -> None: ...
-    def info(self, message: str) -> None: ...
-    def warn(self, message: str) -> None: ...
-    def error(self, message: str, error: Exception | None = None) -> None: ...
-```
 
 **Perfiles de Verbosidad**:
 | Perfil | Formato | Colores | Stack Traces | Uso |
@@ -44,19 +38,20 @@ class LoggerManager(Protocol):
 **Uso en yaml-agno**:
 ```python
 # yaml-agno/src/agents/agent_executor.py
+from core_infrastructure.logging import LoggerManager  # core-cenf owns it
 
 class AgentExecutor:
     def __init__(self, logger_manager: LoggerManager):
         self.logger = logger_manager
-    
+
     async def execute_agent(self, agent: Agent) -> Result:
         self.logger.info(f"Starting agent: {agent.name}")
-        
+
         try:
             result = await agent.run()
             self.logger.info(f"Agent completed: {agent.name}")
             return result
-            
+
         except Exception as e:
             self.logger.error(
                 f"Agent failed: {agent.name}",
@@ -74,9 +69,14 @@ class AgentExecutor:
 # only — they do NOT scope DB queries (DB isolation is an explicit WHERE filter,
 # see SPEC_03 §5.3).
 from core_infrastructure.common.context import get_tenant_id, get_correlation_id
+from core_infrastructure.logging import LoggerManager
 
 class ContextAwareLogger:
-    """Enriches log lines with the core-cenf tenant/correlation contextvars."""
+    """Enriches log lines with the core-cenf tenant/correlation contextvars.
+
+    yaml-agno-owned thin wrapper over the core-cenf LoggerManager. It does NOT
+    redefine the Port — it decorates an already-resolved LoggerManager instance.
+    """
 
     def __init__(self, logger_manager: LoggerManager):
         self.logger = logger_manager
@@ -177,7 +177,7 @@ class AgentExecutor:
 
 ## 2. OPENTELEMETRY STANDARD METRICS
 
-### 1.1 Métricas Requeridas
+### 2.1 Métricas Requeridas
 
 | Métrica | Tipo | Unidad | Descripción |
 |---------|------|--------|-------------|
@@ -192,10 +192,10 @@ class AgentExecutor:
 | `di_cache_miss_total` | Counter | count | Total de cache misses DI |
 | `session_message_total` | Counter | count | Total de mensajes en sesión |
 | `context_compression_total` | Counter | count | Total de compresiones de contexto |
-| `engram_save_total` | Counter | count | Total de saves en Engram |
-| `engram_search_total` | Counter | count | Total de searches en Engram |
+| `learning_decision_log_save_total` | Counter | count | Saves al decision_log del Agno LearningMachine (SPEC_04) |
+| `memory_add_total` | Counter | count | Adds al Agno MemoryManager/UserMemory (SPEC_04) |
 
-### 1.2 Labels (Attributes) Requeridas
+### 2.2 Labels (Attributes) Requeridas
 
 Todas las métricas deben incluir estos labels:
 
@@ -210,7 +210,7 @@ Todas las métricas deben incluir estos labels:
 | `status` | Estado de ejecución | `success|error` |
 | `error_type` | Tipo de error | `timeout|validation` |
 
-### 1.3 Buckets de Histogram
+### 2.3 Buckets de Histogram
 
 ```python
 # yaml-agno/src/telemetry/metrics.py
@@ -247,25 +247,36 @@ def setup_metrics():
 
 ---
 
-## 2. METADATA AND REQUIRED LABELS
+## 3. TRACING METADATA AND SPANS
 
-### 2.1 Spans de Tracing
+> **@ai-directive (TracerProvider SSOT)**: the GLOBAL `TracerProvider` is owned by
+> Agno's `agno.tracing.setup_tracing` (see SPEC_27). yaml-agno does NOT call
+> `trace.set_tracer_provider()` globally — that would double-register and corrupt
+> OTel state. The snippet below illustrates span ATTRIBUTE usage against the
+> provider that `setup_tracing` already registered; the local `setup_tracing`
+> helper here only creates a span processor for the dev console exporter and MUST
+> NOT invoke `trace.set_tracer_provider`. SPEC_24's adapter obeys the same rule.
+
+### 3.1 Spans de Tracing
 
 ```python
 # yaml-agno/src/telemetry/tracing.py
 
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-def setup_tracing():
-    """Configura tracing OpenTelemetry"""
-    provider = TracerProvider()
+def setup_dev_span_processor():
+    """Attach a dev-only console span processor to the GLOBAL provider.
+
+    @ai-directive: does NOT call trace.set_tracer_provider(). The global
+    TracerProvider is registered once by agno.tracing.setup_tracing (SPEC_27).
+    """
+    tracer = trace.get_tracer(__name__)
+    # A console exporter is added as a processor on the existing global provider,
+    # not by replacing it.
     processor = SimpleSpanProcessor(ConsoleSpanExporter())
-    provider.add_span_processor(processor)
-    trace.set_tracer_provider(provider)
-    return trace.get_tracer(__name__)
+    trace.get_tracer_provider().add_span_processor(processor)
+    return tracer
 
 # Uso
 tracer = setup_tracing()
@@ -284,7 +295,7 @@ with tracer.start_as_current_span("agent_execution") as span:
         span.record_exception(e)
 ```
 
-### 2.2 Context Propagation
+### 3.2 Context Propagation
 
 ```python
 # Propagación de contexto entre servicios
@@ -305,9 +316,19 @@ context = propagator.extract(carrier=headers, context=context)
 
 ---
 
-## 3. CIRCUIT BREAKER & RETRY POLICIES
+## 4. CIRCUIT BREAKER & RETRY POLICIES
 
-### 3.1 Circuit Breaker Configuration
+> **@ai-directive (classification boundary)**: `CircuitBreaker` itself does NOT
+> classify errors — it only tracks success/failure counts and state transitions
+> (CLOSED → OPEN → HALF_OPEN). The error CLASSIFICATION that decides whether a
+> failure counts toward the breaker, and whether to retry, comes from core-cenf
+> `ErrorHandlingManager.classify()` (returning `ErrorClassification`: TRANSIENT /
+> PERMANENT / VALIDATION / AUTH / RATE_LIMIT). There is no type-name matching
+> (`type(e).__name__`) and no local `ErrorCategory` enum anywhere in this SPEC.
+> The retry DECISION is the SPEC_05 `RetryPolicy`'s, fed by that classification
+> (see §4.3 `ResilientExecutor`).
+
+### 4.1 Circuit Breaker Configuration
 
 ```python
 # yaml-agno/src/resilience/circuit_breaker.py
@@ -433,7 +454,7 @@ class CircuitBreaker:
         }
 ```
 
-### 3.2 Constantes de Retry
+### 4.2 Constantes de Retry
 
 ```python
 # yaml-agno/src/resilience/retry.py
@@ -491,105 +512,106 @@ class RetryConfig:
         raise last_error  # Exhausted retries
 ```
 
-### 3.3 Retry con Circuit Breaker
+### 4.3 Retry con Circuit Breaker
 
 ```python
 # yaml-agno/src/resilience/resilient_executor.py
 
+from core_infrastructure.errors import ErrorHandlingManager, ErrorClassification
+
 class ResilientExecutor:
     """
     Ejecutor con circuit breaker + retry.
-    
+
     Estrategia:
     1. Circuit breaker permite/deniega request
-    2. Si permitido, ejecuta con retry policy
+    2. Si permitido, ejecuta con retry policy (SPEC_05 RetryPolicy)
     3. Cada intento registra success/failure en circuit breaker
+    4. La clasificación de errores la hace core-cenf
+       (ErrorHandlingManager.classify() -> ErrorClassification); NUNCA un
+       type-name matching local.
+
+    @ai-directive: this executor does NOT own the retry DECISION. Whether an
+    error is retriable is decided by the SPEC_05 RetryPolicy, which consumes
+    the same ErrorClassification returned by ErrorHandlingManager.classify().
+    There is no should_retry() here and no ErrorCategory enum here.
     """
-    
+
     def __init__(
         self,
         circuit_breaker: CircuitBreaker | None = None,
-        retry_config: RetryConfig | None = None
+        retry_policy: "RetryPolicy | None" = None,           # SPEC_05
+        error_handler: ErrorHandlingManager | None = None,    # core-cenf
     ):
         self.circuit_breaker = circuit_breaker or CircuitBreaker()
-        self.retry_config = retry_config or RetryConfig()
-    
+        self.retry_policy = retry_policy
+        self.error_handler = error_handler
+
     async def execute(self, func: Callable[..., Any], *args, **kwargs) -> Any:
         """
         Execute with circuit breaker + retry.
 
         Steps:
-        1. Check circuit breaker state
-        2. Execute with retries (each attempt affects the circuit breaker)
-        3. Return the result or raise the final error
+        1. Check circuit breaker state.
+        2. Execute with retries (each attempt affects the circuit breaker).
+        3. On failure, classify via core-cenf ErrorHandlingManager.classify()
+           (TRANSIENT / PERMANENT / VALIDATION / AUTH / RATE_LIMIT) and hand the
+           ErrorClassification to the SPEC_05 RetryPolicy, which decides whether
+           to retry and the backoff.
+        4. Return the result or raise the final error.
         """
         # Circuit breaker check
         if not self.circuit_breaker.allow_request():
             raise CircuitBreakerOpenError(
                 f"Circuit breaker is OPEN. Metrics: {self.circuit_breaker.get_state_metrics()}"
             )
-        
-        last_error = None
-        
+
+        last_error: Exception | None = None
+
         # Retry loop - cada intento registra en circuit breaker
-        for attempt in range(self.retry_config.MAX_RETRIES + 1):
+        for attempt in range(self.retry_policy.MAX_RETRIES + 1 if self.retry_policy else 0):
             try:
                 result = await func(*args, **kwargs)
                 self.circuit_breaker.record_success()
                 return result
-            
+
             except Exception as e:
                 last_error = e
                 self.circuit_breaker.record_failure()
-                
-                # Verificar si es error recuperable
-                category = self._categorize_error(e)
-                
-                if category == ErrorCategory.PERMANENT:
-                    # No reintentar errores permanentes
+
+                # Clasificación vía core-cenf (real API: classify() -> ErrorClassification).
+                # No type-name matching, no local enum, no CRITICAL.
+                classification: ErrorClassification = self.error_handler.classify(e)
+
+                # El retry DECISION es del RetryPolicy (SPEC_05), no de este ejecutor.
+                if self.retry_policy is not None and not self.retry_policy.should_retry(
+                    classification, attempt
+                ):
                     break
-                
-                if attempt < self.retry_config.MAX_RETRIES:
-                    delay = self.retry_config.calculate_delay(attempt)
+
+                if attempt < (self.retry_policy.MAX_RETRIES if self.retry_policy else 0):
+                    delay = self.retry_policy.calculate_delay(attempt)
                     await asyncio.sleep(delay)
-        
-        raise last_error  # Exhausted retries o permanent error
-    
-    def _categorize_error(self, error: Exception) -> ErrorCategory:
-        """Categoriza error para decidir retry"""
-        error_type = type(error).__name__
-        
-        # Transient errors
-        if error_type in ["TimeoutError", "ConnectionError", "RateLimitError"]:
-            return ErrorCategory.TRANSIENT
-        
-        # Permanent errors
-        elif error_type in ["ValueError", "ValidationError", "AuthenticationError"]:
-            return ErrorCategory.PERMANENT
-        
-        # Critical errors
-        elif error_type in ["DatabaseConnectionError", "SystemFailure"]:
-            return ErrorCategory.CRITICAL
-        
-        return ErrorCategory.PERMANENT  # Default
-    
+
+        raise last_error  # Exhausted retries o error no-retriable
+
     def get_metrics(self) -> Dict[str, Any]:
         """Retorna métricas combinadas de circuit breaker y retry"""
         return {
             "circuit_breaker": self.circuit_breaker.get_state_metrics(),
-            "retry_config": {
-                "max_retries": self.retry_config.MAX_RETRIES,
-                "base_delay": self.retry_config.BASE_DELAY,
-                "max_delay": self.retry_config.MAX_DELAY,
+            "retry_policy": {
+                "max_retries": self.retry_policy.MAX_RETRIES if self.retry_policy else 0,
+                "base_delay": self.retry_policy.BASE_DELAY if self.retry_policy else 0.0,
+                "max_delay": self.retry_policy.MAX_DELAY if self.retry_policy else 0.0,
             }
         }
 ```
 
 ---
 
-## 4. BEHAVIOR DELTA - BDD SCENARIOS
+## 5. BEHAVIOR DELTA - BDD SCENARIOS
 
-### 4.1 Escenarios de Aceptación
+### 5.1 Escenarios de Aceptación
 
 #### Scenario 1: Golden Path - Agent Execution Traced
 
@@ -653,9 +675,9 @@ AND the result is returned
 
 ---
 
-## 3. TDD MICRO-TASK EXECUTION PROTOCOL
+## 6. TDD MICRO-TASK EXECUTION PROTOCOL
 
-### 5.1 Cascading Task Checklist
+### 6.1 Cascading Task Checklist
 
 #### TASK_001: Setup OpenTelemetry Metrics
 
@@ -807,7 +829,7 @@ AND the result is returned
 
 ---
 
-## 4. SUPUESTOS TÉCNICOS ADOPTADOS
+## 7. SUPUESTOS TÉCNICOS ADOPTADOS
 
 ### [Decisión 1] OpenTelemetry para Observabilidad
 
@@ -832,7 +854,7 @@ AND the result is returned
 
 ---
 
-## 5. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
+## 8. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
 
 ### [Pregunta 1] Sampling Rate para Spans
 
@@ -865,24 +887,24 @@ Implica:
 
 ---
 
-## 6. CALIBRACIÓN FINAL
+## 9. CALIBRACIÓN FINAL
 
-### 8.1 Resumen de Especificación
+### 9.1 Resumen de Especificación
 
-Los 10 documentos SPEC completos cubren:
+Los documentos SPEC cubren (referencia cruzada de dueños, no lista exhaustiva):
 
 1. **SPEC_00**: Estrategia del sistema, visión, principios
 2. **SPEC_01**: Runtime architecture, factories, session management
 3. **SPEC_02**: Domain model DDD, entidades, value objects
 4. **SPEC_03**: Persistencia PostgreSQL, schema DDL, transactions
-5. **SPEC_04**: Memoria, Engram, compresión, PII sanitization
-6. **SPEC_05**: Workflows, teams, interacción, error recovery
+5. **SPEC_04**: Memoria (Agno native LearningMachine/MemoryManager), compresión (SPEC_15), PII (SPEC_16)
+6. **SPEC_05**: Workflows, teams, interacción, error recovery (RetryPolicy)
 7. **SPEC_06**: API REST, AX schemas, health checks
 8. **SPEC_07**: Dashboard frontend, React, Zustand
 9. **SPEC_08**: TDD microtasks, checklist de implementación
-10. **SPEC_09**: Observabilidad, métricas, circuit breaker
+10. **SPEC_09**: Observabilidad, métricas, circuit breaker (dueño de CircuitBreaker)
 
-### 8.2 Próximos Pasos
+### 9.2 Próximos Pasos
 
 1. **Revisión por usuario**: Validar SPECs completos
 2. **Ajustes**: Modificar según feedback

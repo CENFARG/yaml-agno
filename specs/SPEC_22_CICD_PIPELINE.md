@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_22"
 Title: "CI/CD Pipeline - GitHub Actions, Security Gates, SBOM and GitOps Deploy"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#CICD", "#GitHubActions", "#TDD", "#SecurityScans", "#SBOM", "#GitOps", "#ArgoCD", "#Helm", "#GHCR", "#QualityGates", "#ReleaseAutomation", "#CoverageGate", "#CloudRun", "#uv"]
 Dependency_Hashes: ["SPEC_20", "SPEC_21"]
 Last_Updated: "2026-06-17"
-Revision_Note: "iter1 — fixed SPEC_20/21/24 identity swap in §0; added Cloud Run as primary deploy target alongside future K8s; unified dependency manager to uv (was poetry); removed non-ASCII chars."
+Revision_Note: "Wave-5 artefact-location SSOT: Dockerfile + docker-compose.yml live at repo root per SPEC_20; fixed all deploy/docker/Dockerfile and deploy/compose/agentos-smoke.yml refs to repo root. Fixed cross-ref ArgoCD/Argo Rollouts SPEC_20 -> SPEC_21 (SPEC_20 is Docker-only). Fixed e2e smoke probe GET /health -> /healthz (decided endpoints are /healthz and /readyz only)."
 ---
 
 # SPEC_22_CICD_PIPELINE
@@ -264,13 +264,13 @@ jobs:
         run: pipx install uv==${{ env.UV_VERSION }}
       - run: uv sync --frozen
       - name: Spin AgentOS (compose)
-        run: docker compose -f deploy/compose/agentos-smoke.yml up -d --wait
+        run: docker compose -f docker-compose.yml up -d --wait
       - name: pytest e2e smoke
         env:
           AGENTOS_URL: http://localhost:8000
         run: uv run pytest tests/e2e -m e2e --junitxml=junit-e2e.xml
       - if: always()
-        run: docker compose -f deploy/compose/agentos-smoke.yml down -v
+        run: docker compose -f docker-compose.yml down -v
 
   tdd-verify:
     name: TDD RED→GREEN→REFACTOR verification
@@ -382,7 +382,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/docker/Dockerfile
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -921,10 +921,10 @@ TASK_2211 | File: scripts/image_size_gate (inside cd.yml)
   Green:  manifest size sum > 400MB → exit 1
   Commit: "RED/GREEN: image size quality gate"
 
-TASK_2212 | File: deploy/compose/agentos-smoke.yml + e2e smoke
+TASK_2212 | File: docker-compose.yml + e2e smoke
   Test: tests/e2e/test_agentos_smoke.py::test_health_endpoint_200
   RED:    AgentOS health returns non-200
-  Green:  compose up --wait + GET /health → assert 200
+  Green:  compose up --wait + GET /healthz → assert 200
   Commit: "RED/GREEN: e2e AgentOS smoke test"
 ```
 
@@ -935,8 +935,8 @@ TASK_2212 | File: deploy/compose/agentos-smoke.yml + e2e smoke
 1. **GitHub Enterprise/Team** con: Environments, OIDC federation, GHCR, Dependabot, SARIF upload (Advanced Security o CodeQL gratis para públicos).
 2. **Runner**: `ubuntu-24.04` managed; self-hosted ARM opcional para acelerar multi-arch (sustituye QEMU).
 3. **OIDC sin PATs de larga vida**: el deploy a gitops-manifests usa `secrets.GITOPS_PAT` a corto plazo; idealmente migrar a `id-token: write` + GitHub App con token efímero (deuda técnica explícita).
-4. **ArgoCD** ya desplegado en el cluster (definido en SPEC_20); este SPEC solo hace commits al repo de manifiestos.
-5. **Canary** requiere Argo Rollouts (referenciado en SPEC_20); si no está disponible, fallback a rolling.
+4. **ArgoCD** ya desplegado en el cluster (definido en SPEC_21); este SPEC solo hace commits al repo de manifiestos.
+5. **Canary** requiere Argo Rollouts (referenciado en SPEC_21); si no está disponible, fallback a rolling.
 6. **Coverage 100%**: gate estricto. Exclusions via `# pragma: no cover` solo en bloques imposibles (`if TYPE_CHECKING`, `sys.exit` post-test).
 7. **Semgrep + Bandit** complementarios: Bandit para Python AST; Semgrep para reglas cross-language y secretos.
 8. **SBOM CycloneDX 1.5** mínimo; consumo por Dependabot y por `sbom_diff`.
@@ -987,7 +987,7 @@ updates:
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 10
   - package-ecosystem: docker
-    directory: "/deploy/docker"
+    directory: "/"
     schedule: { interval: weekly }
   - package-ecosystem: github-actions
     directory: "/"

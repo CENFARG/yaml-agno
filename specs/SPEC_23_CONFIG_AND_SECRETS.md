@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_23"
 Title: "Config & Secrets Management - ConfigManager, Zero-Trust SecretManager, Feature Flags and Hot-Reload"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#ConfigManager", "#SecretManager", "#ZeroTrust", "#FeatureFlags", "#HotReload", "#MultiTenant", "#Vault", "#PydanticV2", "#Rotation", "#AuditLog", "#ConfigDB", "#CoreConsumer"]
 Dependency_Hashes: ["SPEC_03", "SPEC_00", "SPEC_02"]
 Last_Updated: "2026-06-17"
-Revision_Note: "iter2 — yaml-agno is now a CONSUMER of core-cenf: ConfigManager, SecretManager and FeatureFlagManager are imported from core_infrastructure (not reimplemented). Removed local EnvLayer/RemoteLayer/FileLayer/DefaultsLayer, ConfigPort/SecretPort/FlagPort redefinitions and the yaml-agno-managed pool. yaml-agno owns only the yamlagno.feature_flags / yamlagno.secret_audit ORM tables (DeclarativeBase, via GenericRepository) and the DSN/env wiring. DDL moved to schema 'yamlagno' with 'yamlagno_*' prefix; pool/engine belongs to the core SQLAlchemyAdapter."
+Revision_Note: "Wave-5 alignment: Env enum SSOT resolved to dev|staging|prod (§2.2 pattern + §2.3 get_env() contract aligned; local is treated as dev and documented, test removed from the Env pattern). actor/updated_by columns now specified as composite user_id form {tenant}:{principal} per SPEC_04 A.1. Fixed BDD §2.7 wording: get_secret is async, await get_secret()."
 ---
 
 # SPEC_23_CONFIG_AND_SECRETS
@@ -122,6 +122,8 @@ flags:
 
 ### 2.2 Pydantic V2 Settings Schema (validación estricta)
 
+@ai-directive: the Env enum SSOT is `dev|staging|prod`. There is no `local` and no `test` value; local development uses `env=dev` (document `local==dev`), and tests select adapters via `InMemorySecretAdapter` rather than a dedicated `test` env value.
+
 ```python
 # yaml_agno/infra/config/schemas.py
 from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator
@@ -129,7 +131,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class AppConfig(BaseModel):
     name: str = Field(min_length=1, max_length=64)
-    env: str = Field(pattern="^(dev|test|staging|prod)$")
+    env: str = Field(pattern="^(dev|staging|prod)$")
 
 class RuntimeConfig(BaseModel):
     max_concurrent_agents: int = Field(ge=1, le=500)
@@ -202,7 +204,7 @@ def build_config_manager(env: str) -> ConfigManager:
 
 | Method | Signature | yaml-agno usage |
 |--------|-----------|-----------------|
-| `get_env()` | `-> Env` (`"local"\|"dev"\|"staging"\|"prod"`) | branch on environment |
+| `get_env()` | `-> Env` (`"dev"\|"staging"\|"prod"`) | branch on environment |
 | `get_string(key, default=None)` | dot-notation, e.g. `"database.dsn"` | read DSN, endpoints |
 | `get_number(key, default=None)` | `-> float` | timeouts, pool sizes |
 | `get_boolean(key, default=None)` | `-> bool` | toggles |
@@ -400,13 +402,13 @@ Feature: Config & Secrets management
   # --- ZERO-TRUST SECRETS (delegates to core SecretManager) ---
   Scenario: secret is fetched and cached within TTL by the core
     Given a core SecretManager backed by EncryptedSecretAdapter
-    When get_secret("db/password") is called twice within the core TTL
+    When await get_secret("db/password") is called twice within the core TTL
     Then the backend fetch happens at most once
     And yamlagno.secret_audit records the access
 
   Scenario: secret not found raises a core error and is audited
     Given a core SecretManager where key "missing" is absent
-    When get_secret("missing") is called
+    When await get_secret("missing") is called
     Then the core raises ValidationError
     And yamlagno.secret_audit records ok=False
 
@@ -573,6 +575,7 @@ CREATE TABLE yamlagno.feature_flags (
     variant_rules JSONB,                      -- A/B targeting payload
     description   TEXT,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- @ai-directive: stores the composite user_id form "{tenant}:{principal}" (SPEC_04 A.1), never a bare actor.
     updated_by    TEXT NOT NULL,
     UNIQUE (name, tenant_id)
 );
@@ -585,7 +588,8 @@ CREATE INDEX ix_yamlagno_flags_tenant
 CREATE TABLE yamlagno.secret_audit (
     id            BIGSERIAL,
     secret_name   TEXT NOT NULL,
-    actor         TEXT NOT NULL,              -- service/tenant/user
+    -- @ai-directive: stores the composite user_id form "{tenant}:{principal}" (SPEC_04 A.1), never a bare actor.
+    actor         TEXT NOT NULL,
     tenant_id     UUID,
     hit           TEXT NOT NULL CHECK (hit IN ('cache','remote','miss')),
     ok            BOOLEAN NOT NULL,

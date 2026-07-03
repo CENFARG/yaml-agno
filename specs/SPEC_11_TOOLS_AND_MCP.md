@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_11"
 Title: "Tools & MCP Architecture - Toolkits, Custom Tools and Model Context Protocol"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Tools", "#MCP", "#MCPTools", "#MultiMCPTools", "#Toolkits", "#ToolDecorator", "#ToolRegistry", "#Hooks", "#Caching", "#PydanticV2"]
 Dependency_Hashes: ["SPEC_01", "SPEC_02"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 metadata bump (was outside prior correction round scope)."
+Last_Updated: "2026-07-02"
+Revision_Note: "iter2 (Wave 4 contract fixes): added McpMultiToolConfig (kind: mcp_multi, servers: list[McpToolConfig]) as the 5th variant of the ToolConfig union — the mcp_multi YAML and TASK_008 now have a matching schema; updated the taxonomy table to 5 variants; clarified CustomToolLoader.load returns the raw callable and the ToolFactory applies @tool(**config flags) (Scenario 2); defined is_module_allowed + import whitelist (yaml_agno.security, ConfigManager key security.import_whitelist, fail closed) in SPEC_11 since no other SPEC owns it — satisfies backend-sanitization rule 10."
 ---
 
 # SPEC_11_TOOLS_AND_MCP
@@ -39,7 +39,8 @@ graph TB
 | Built-in toolkit | `builtin` | clase en `agno.tools.*` | Catalogo 120+ |
 | Custom function | `function` | `@tool` decorator o funcion plana | Logica propia |
 | Custom toolkit | `toolkit_class` | subclass de `agno.tools.Toolkit` | Bundle reusable |
-| MCP server | `mcp` | `MCPTools` / `MultiMCPTools` | Servidores externos via protocolo MCP |
+| MCP server (single) | `mcp` | `MCPTools` | Un servidor externo via protocolo MCP |
+| MCP servers (multi) | `mcp_multi` | `MultiMCPTools` | Varios servidores MCP en una sola instancia |
 
 ### 1.2 Boundary del aggregate
 
@@ -60,10 +61,15 @@ class ToolSetConfig(BaseModel):
     callable_tools_cache_key: str | None = None
 
 type ToolConfig = Annotated[
-    BuiltinToolConfig | CustomToolConfig | CustomToolkitConfig | McpToolConfig,
+    BuiltinToolConfig | CustomToolConfig | CustomToolkitConfig
+    | McpToolConfig | McpMultiToolConfig,
     Field(discriminator="kind"),
 ]
 ```
+
+> **`kind` taxonomy (5 variants)**: `builtin` | `function` | `toolkit_class` | `mcp`
+> (single server, `McpToolConfig`) | `mcp_multi` (multiple servers in one entry,
+> `McpMultiToolConfig`). `mcp_multi` maps to Agno `MultiMCPTools` (§6.10, TASK_008).
 
 ---
 
@@ -456,9 +462,23 @@ type McpToolConfig = Annotated[
     StdioMcpConfig | HttpMcpConfig,
     Field(discriminator="transport"),
 ]
+
+class McpMultiToolConfig(BaseModel):
+    """Multiple MCP servers aggregated into a single Agno MultiMCPTools entry.
+
+    Discriminated by `kind: "mcp_multi"` in the ToolConfig union. Each entry in
+    `servers` is a single-server McpToolConfig (stdio or http). The resolver
+    builds one agno MultiMCPTools instance owning all servers (§6.10, TASK_008).
+    """
+    model_config = {"extra": "forbid"}
+    kind: Literal["mcp_multi"]
+    servers: list[McpToolConfig] = Field(..., min_length=1)
+    cache_results: bool = False
 ```
 
-> Nota: `McpToolConfig` se anida bajo `kind: "mcp"` dentro de `ToolConfig`.
+> Nota: `McpToolConfig` se anida bajo `kind: "mcp"` (single server) y
+> `McpMultiToolConfig` bajo `kind: "mcp_multi"` (multiple servers), ambas
+> dentro de `ToolConfig`.
 
 ### 6.10 YAML - MCP
 
@@ -676,15 +696,64 @@ BUILTIN_REGISTRY: dict[str, Callable[..., object]] = {
 
 ```python
 import importlib
+# @ai-directive: is_module_allowed + the import whitelist are OWNED by SPEC_11
+# (src/yaml_agno/security.py, see §9.5.1). They satisfy backend-sanitization
+# (authoritative rule 10): ConfigManager loads the whitelist, fail closed.
 from yaml_agno.security import is_module_allowed
 
 class CustomToolLoaderImpl:
+    """Loads a custom Python callable referenced by `module` in YAML.
+
+    This loader returns the RAW callable. It does NOT apply the `@tool`
+    decorator or any config flags (requires_confirmation, cache_results,
+    cache_ttl, tool_hooks). The ToolFactory is responsible for wrapping the
+    returned callable with `@tool(**config_flags)` so that Scenario 2's
+    assertions (flags applied, result cached) hold. Keeping the two concerns
+    separated (import vs decoration) is what lets `cache_callables` cache the
+    final decorated object and lets the whitelist guard the import boundary.
+    """
+
     def load(self, config: CustomToolConfig) -> Callable:
         if not is_module_allowed(config.module):
             raise SecurityError(f"Module {config.module} not in import whitelist")
         mod_path, _, fn_name = config.module.rpartition(".")
         fn = getattr(importlib.import_module(mod_path), fn_name)
         return fn
+```
+
+### 9.5.1 Import Whitelist (backend sanitization, owner: SPEC_11)
+
+<!-- @ai-directive OWNER: yaml_agno.security (is_module_allowed + whitelist) is
+     OWNED by SPEC_11. No other SPEC defines it. ConfigManager key:
+     `security.import_whitelist` (list[str] of module-path prefixes, e.g.
+     ["myapp.tools.", "myapp.hooks."]). Default is EMPTY (fail closed); an
+     empty whitelist rejects every custom module path, so custom tools are
+     opt-in by explicit configuration. This satisfies authoritative
+     decision 10 (backend sanitization/validation MANDATORY) for the
+     dynamic-import attack surface (YAML `module:` → code execution). -->
+
+```python
+# yaml-agno/src/yaml_agno/security.py
+from core.config import ConfigManager  # core-cenf (no os.environ)
+
+def _whitelist() -> list[str]:
+    """Load the import whitelist from ConfigManager (key: security.import_whitelist).
+
+    Returns a list of module-path prefixes. Default empty (fail closed).
+    """
+    return ConfigManager.get("security.import_whitelist", default=[]) or []
+
+def is_module_allowed(module_path: str) -> bool:
+    """Return True iff module_path starts with an allowed prefix.
+
+    Fail closed: empty whitelist rejects everything. Prefix match supports
+    whole-package allowlisting (e.g. "myapp.tools." allows any submodule).
+    """
+    return any(module_path == p or module_path.startswith(p)
+               for p in _whitelist())
+
+class SecurityError(Exception):
+    """Raised when a YAML-referenced module is not in the import whitelist."""
 ```
 
 ### 9.6 MCPResolver async

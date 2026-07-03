@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_17"
 Title: "Multimodal I/O - Images, Audio, Video and Files Processing and Generation"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Multimodal", "#Media", "#Images", "#Audio", "#Video", "#Files", "#ToolResult", "#FileStorage"]
 Dependency_Hashes: ["SPEC_02", "SPEC_11"]
 Last_Updated: "2026-07-02"
-Revision_Note: "iter3 (collateral): updated §2.1 references after SPEC_06 iter3 eliminated AgentRunRequest/AgentRunResponse (no own /run endpoint — the run endpoint is AgentOS native multipart/form-data POST /agents/{agent_id}/runs). MediaInput is retained as an INTERNAL yaml-agno model (maps to agno.media.Image/Audio/Video/File); it is no longer described as a field added to an AgentRunRequest DTO. The rest of iter2 (MediaRegistry via core GenericRepository, yamlagno.* schema, MediaArtifactRecord) is unchanged. A full SPEC_17 deep review is deferred to its own iteration. (Prior iter1/iter2 history: AgentRunRequest/Response no longer redefined; TTL/retention future feature; datetime.now(timezone.utc); media_artifacts to yamlagno.* via core GenericRepository; MediaArtifactRecord(DeclarativeBase, schema='yamlagno') provisioned by ConfigStoreProvisioner; MediaArtifact VO remapped; multi-tenant explicit filters.)"
+Revision_Note: "iter4 (Wave 4 contract fixes): run_multimodal_agent signature now passes input_text/run_id/tenant_id explicitly and reads send_media_to_model/store_media from MediaConfig (no AgentRunRequest DTO references remain); process_inputs call now passes run_id in the correct position matching the (media_type, inputs, tenant_id, run_id, session_id, storage_backend) signature; S3Adapter resolves AWS credentials explicitly via SecretManager at bootstrap (no ambient credential chain, aligns §13.3); removed dead _YamlagnoBase.metadata_schema attribute (kept __table_args__ schema); MediaType Literal defined once in models.py and imported in config.py."
 
 # SPEC_17_MULTIMODAL_IO
 
@@ -362,11 +362,33 @@ import boto3
 from .storage import FileStorageAdapter
 
 class S3Adapter(FileStorageAdapter):
-    def __init__(self, bucket: str, region: str, prefix: str = "media/"):
+    """S3 storage adapter.
+
+    AWS credentials (aws_access_key_id / aws_secret_access_key) MUST be passed
+    explicitly at construction; they are resolved once at bootstrap from the
+    SecretManager (SPEC_23 / SPEC_17 §13.3). This adapter NEVER relies on the
+    boto ambient credential chain (no implicit env / IAM / profile fallback),
+    so credentials are explicit and tenant-aware-auditable. See §13.3.
+    """
+
+    def __init__(
+        self,
+        bucket: str,
+        region: str,
+        prefix: str = "media/",
+        *,
+        aws_access_key_id: str,
+        aws_secret_access_key: str,
+    ):
         self.bucket = bucket
         self.region = region
         self.prefix = prefix
-        self.client = boto3.client("s3", region_name=region)
+        self.client = boto3.client(
+            "s3",
+            region_name=region,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+        )
 
     async def put(self, key: str, content: bytes, mime: str) -> str:
         full_key = f"{self.prefix}{key}"
@@ -607,7 +629,6 @@ from .models import MediaArtifact
 
 class _YamlagnoBase(DeclarativeBase):
     """Shared DeclarativeBase for yaml-agno config-store tables (schema yamlagno)."""
-    metadata_schema = "yamlagno"
 
 
 class MediaArtifactRecord(_YamlagnoBase):
@@ -1031,9 +1052,7 @@ agent:
 # yaml-agno/src/media/config.py
 
 from pydantic import BaseModel, Field
-from typing import Literal
-
-MediaType = Literal["image", "audio", "video", "file"]
+from .models import MediaType  # SSOT: defined once in models.py
 
 class S3StorageConfig(BaseModel):
     bucket: str
@@ -1130,31 +1149,76 @@ async def run_multimodal_agent(
     audio: list[MediaInput],
     videos: list[MediaInput],
     files: list[MediaInput],
+    input_text: str,
     user_id: str,
+    run_id: str,
     session_id: str | None,
-    tenant_id: str | None,
+    tenant_id: str,
     processor: MediaProcessor,
 ):
-    # 1. Procesar media de entrada
+    """Run an agent with multimodal inputs (no request DTO).
+
+    Args:
+        agent: the Agno Agent instance to run.
+        config: MediaConfig carrying send_media_to_model / store_media / storage.
+        images: image MediaInputs (may be empty).
+        audio: audio MediaInputs (may be empty).
+        videos: video MediaInputs (may be empty).
+        files: file MediaInputs (may be empty).
+        input_text: textual prompt for the run.
+        user_id: composite "{tenant_id}:{principal_id}" (SPEC_04).
+        run_id: Agno run identifier (propagated to MediaArtifact.run_id).
+        session_id: Agno session identifier, if any.
+        tenant_id: tenant scope for MediaArtifact persistence.
+        processor: MediaProcessor used to validate/store/register input media.
+
+    Returns:
+        The Agno run response.
+    """
+    # 1. Procesar media de entrada. process_inputs signature is
+    #    (media_type, inputs, tenant_id, run_id, session_id, storage_backend):
+    #    run_id MUST precede session_id and storage_backend.
     artifacts_by_type = {}
     if images:
         artifacts_by_type["image"] = await processor.process_inputs(
-            "image", images, tenant_id, session_id,
+            "image", images, tenant_id, run_id, session_id,
             config.storage.backend,
         )
-    # ... audio, video, file
+    if audio:
+        artifacts_by_type["audio"] = await processor.process_inputs(
+            "audio", audio, tenant_id, run_id, session_id,
+            config.storage.backend,
+        )
+    if videos:
+        artifacts_by_type["video"] = await processor.process_inputs(
+            "video", videos, tenant_id, run_id, session_id,
+            config.storage.backend,
+        )
+    if files:
+        artifacts_by_type["file"] = await processor.process_inputs(
+            "file", files, tenant_id, run_id, session_id,
+            config.storage.backend,
+        )
 
     # 2. Convertir artifacts a clases Agno
     converter = MediaConverter()
-    images = [a.to_agno_image() for a in artifacts_by_type.get("image", [])]
-    # ...
+    agno_images = [a.to_agno_image() for a in artifacts_by_type.get("image", [])]
+    agno_audio = [a.to_agno_audio() for a in artifacts_by_type.get("audio", [])]
+    agno_videos = [a.to_agno_video() for a in artifacts_by_type.get("video", [])]
+    agno_files = [a.to_agno_file() for a in artifacts_by_type.get("file", [])]
 
-    # 3. Ejecutar
+    # 3. Ejecutar. send_media_to_model / store_media come from MediaConfig
+    #    (NOT a request DTO — there is no AgentRunRequest; SPEC_06 iter3).
     response = await agent.arun(
-        input=request.input,
-        images=images,
-        send_media_to_model=request.send_media_to_model,
-        store_media=request.store_media,
+        input=input_text,
+        images=agno_images or None,
+        audio=agno_audio or None,
+        videos=agno_videos or None,
+        files=agno_files or None,
+        send_media_to_model=config.send_media_to_model,
+        store_media=config.store_media,
+        user_id=user_id,
+        session_id=session_id,
     )
     return response
 ```
@@ -1170,10 +1234,28 @@ async def run_multimodal_agent(
 ```python
 # yaml-agno/src/runtime/bootstrap.py (extracto)
 
-def bootstrap_media(config: MediaStorageConfig) -> tuple[FileStorageManager, FileStorageAdapter]:
+from core.secrets import SecretManager  # core-cenf
+
+async def bootstrap_media(
+    config: MediaStorageConfig, secret_manager: SecretManager
+) -> tuple[FileStorageManager, FileStorageAdapter]:
+    """Build the FileStorageManager and select the active adapter.
+
+    S3 credentials are resolved ONCE here from the SecretManager (SPEC_23 /
+    SPEC_17 §13.3) and passed explicitly to S3Adapter. No ambient chain.
+    """
     manager = FileStorageManager()
     if config.backend == "s3" and config.s3:
-        manager.register("s3", S3Adapter(config.s3.bucket, config.s3.region, config.s3.prefix))
+        aws_key = await secret_manager.get_secret("AWS_S3_KEY")
+        aws_secret = await secret_manager.get_secret("AWS_S3_SECRET")
+        manager.register(
+            "s3",
+            S3Adapter(
+                config.s3.bucket, config.s3.region, config.s3.prefix,
+                aws_access_key_id=aws_key,
+                aws_secret_access_key=aws_secret,
+            ),
+        )
     elif config.backend == "local" and config.local:
         manager.register("local", LocalFSAdapter(config.local.base_dir, config.local.base_url))
     elif config.backend == "gcs" and config.gcs:

@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_32"
 Title: "Registry & Components - Code-Defined Runtime Catalog vs Versioned Persistent Catalog"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Registry", "#Components", "#RehydrateFunction", "#Workflows", "#VersionedConfig", "#Rollback", "#ControlPlane", "#Delegation"]
 Dependency_Hashes: ["SPEC_12", "SPEC_02"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - new SPEC (Registry & Components). code-defined vs persisted."
+Last_Updated: "2026-07-02"
+Revision_Note: "iter2 (Wave 4): _no_dual_catalog can't be a Pydantic model_validator (registry_entry_ids is sibling state from the agentos doc, unreachable from the agent model) — moved to a CompositionRoot post-load validator validate_no_dual_catalog(agents, registry_entry_ids) invoked after both docs are loaded; confirmed the SPEC_02 persistence slot cross-ref is consistent (SPEC_02 iter2 added persistence as an opaque dict slot, SPEC_32 owns the typed ComponentPersistenceConfig); fixed glued-backtick markdown (**RED`:/GREEN`:/Commit`:/Test`: -> **RED**:/etc) across the TDD section."
 ---
 
 # SPEC_32_REGISTRY_AND_COMPONENTS
@@ -332,20 +332,50 @@ agent:
 
 ### 5.6 Boundary rule (validation)
 
-A single agent MUST NOT be both code-defined (Registry) and persistable (Components). Enforced at config time:
+A single agent MUST NOT be both code-defined (Registry) and persistable (Components).
+
+<!-- @ai-directive: this rule CANNOT be a Pydantic model_validator on the agent
+     model. The `registry_entry_ids` set comes from the `agentos:` document (a
+     SIBLING document), not from the agent's own fields, and a Pydantic
+     model_validator only sees the model's own validated fields — it cannot
+     reach cross-document sibling state. The check is therefore a CompositionRoot
+     post-load validator: after BOTH the agent document and the agentos registry
+     document are loaded, the root walks every agent and rejects any that is
+     both registry-listed (its id/name appears in a registry entry of kind=agent)
+     and has persistence.persist=true. -->
 
 ```python
-@model_validator(mode="after")
-def _no_dual_catalog(self):
-    in_registry = self.id in registry_entry_ids          # populated by the agentos registry block
-    persisted = self.persistence is not None and self.persistence.persist
-    if in_registry and persisted:
-        raise ValueError(
-            f"Agent '{self.name}' is both registry-listed and persist=true. "
-            "Choose one: code-defined (Registry) OR persisted (Components). See SPEC_32."
-        )
-    return self
+# yaml-agno/src/yaml_agno/registry/composition_root.py
+"""CompositionRoot post-load validators (run after all docs are parsed)."""
+
+def validate_no_dual_catalog(
+    agents: list,           # list[AgentConfig] (SPEC_02), each with .persistence
+    registry_entry_ids: set[str],   # ids/names from agentos.registry kind=agent entries
+) -> None:
+    """Reject agents that are BOTH registry-listed AND persisted.
+
+    Args:
+        agents: every loaded AgentConfig.
+        registry_entry_ids: the set of ids declared as kind=agent in the
+            agentos.registry block (empty if there is no registry block).
+
+    Raises:
+        ValueError: naming the first agent that violates the rule.
+    """
+    for agent in agents:
+        identity = agent.component_id or agent.name
+        in_registry = identity in registry_entry_ids
+        persisted = agent.persistence is not None and agent.persistence.persist
+        if in_registry and persisted:
+            raise ValueError(
+                f"Agent '{agent.name}' is both registry-listed and persist=true. "
+                "Choose one: code-defined (Registry) OR persisted (Components). See SPEC_32."
+            )
 ```
+
+> This validator is invoked by the CompositionRoot (SPEC_01 runtime) once the
+> full document set (agents + agentos) is loaded and validated in isolation.
+> It is NOT a field on any single Pydantic model.
 
 ---
 
@@ -666,65 +696,65 @@ def test_registry_forbids_inline_body():
 #### TASK_004: Dedupe is delegated (identity for tools)
 - **File**: `tests/unit/registry/test_dedupe.py`
 - **RED**: registering the same tool object twice keeps one; registering two distinct same-named toolkits keeps both.
-- **GREEN`: contract test against `Registry.add_tool` behavior.
+- **GREEN**: contract test against `Registry.add_tool` behavior.
 - **Commit**: `test(registry): assert tool dedupe by identity preserved`
 
 #### TASK_005: Missing ref raises clear error
 - **File**: `yaml-agno/src/yaml_agno/registry/populator.py`
 - **Test**: `tests/unit/registry/test_missing_ref.py`
-- **RED`: a `db` ref absent from DbRegistry raises `ValueError` naming the ref.
-- **GREEN`: look up and raise if None.
-- **Commit`: `feat(registry): raise clear error on missing ref`
+- **RED**: a `db` ref absent from DbRegistry raises `ValueError` naming the ref.
+- **GREEN**: look up and raise if None.
+- **Commit**: `feat(registry): raise clear error on missing ref`
 
 #### TASK_006: rehydrate_function integration (contract)
 - **File**: `tests/unit/registry/test_rehydrate.py`
-- **RED`: register a tool, build a func_dict for its function, `rehydrate_function` returns a Function with non-None entrypoint; a missing name yields entrypoint=None.
-- **GREEN`: contract test against `Registry.rehydrate_function`.
-- **Commit`: `test(registry): assert rehydrate_function reattaches entrypoint`
+- **RED**: register a tool, build a func_dict for its function, `rehydrate_function` returns a Function with non-None entrypoint; a missing name yields entrypoint=None.
+- **GREEN**: contract test against `Registry.rehydrate_function`.
+- **Commit**: `test(registry): assert rehydrate_function reattaches entrypoint`
 
 #### TASK_007: AgentOSFactory wiring (SPEC_12)
 - **File**: `yaml-agno/src/yaml_agno/os/agentos_factory.py` (extend)
 - **Test**: `tests/unit/registry/test_agentos_wiring.py`
-- **RED`: an `agentos.registry` block produces an `AgentOS` whose `/registry` GET returns the registered resources and `/components` GET excludes registry-owned ids.
-- **GREEN`: call `RegistryPopulator.populate`, pass `Registry` to `AgentOS(registry=...)`.
-- **Commit`: `feat(registry): wire populated Registry into AgentOSFactory`
+- **RED**: an `agentos.registry` block produces an `AgentOS` whose `/registry` GET returns the registered resources and `/components` GET excludes registry-owned ids.
+- **GREEN**: call `RegistryPopulator.populate`, pass `Registry` to `AgentOS(registry=...)`.
+- **Commit**: `feat(registry): wire populated Registry into AgentOSFactory`
 
 #### TASK_008: /registry filtering contract
 - **File**: `tests/unit/registry/test_registry_endpoint.py`
-- **RED`: GET `/registry?resource_type=TOOL&name=yfin` returns only matching tools.
-- **GREEN`: contract test against the Agno router (TestClient).
-- **Commit`: `test(registry): assert /registry filtering and pagination`
+- **RED**: GET `/registry?resource_type=TOOL&name=yfin` returns only matching tools.
+- **GREEN**: contract test against the Agno router (TestClient).
+- **Commit**: `test(registry): assert /registry filtering and pagination`
 
 #### TASK_009: /components CRUD contract (references SPEC_12)
 - **File**: `tests/unit/registry/test_components_crud.py`
-- **RED`: POST `/components`, GET it, PATCH, DELETE; verify versions created.
-- **GREEN`: contract test using a test sync DB and the Agno router.
-- **Commit`: `test(registry): assert /components CRUD against test db`
+- **RED**: POST `/components`, GET it, PATCH, DELETE; verify versions created.
+- **GREEN**: contract test using a test sync DB and the Agno router.
+- **Commit**: `test(registry): assert /components CRUD against test db`
 
 #### TASK_010: set-current rollback
 - **File**: `tests/unit/registry/test_rollback.py`
-- **RED`: create two config versions, set-current to v1, assert current_version changed and the agent reads v1.
-- **GREEN`: contract test against `db.set_current_version`.
-- **Commit`: `test(registry): assert config rollback via set-current`
+- **RED**: create two config versions, set-current to v1, assert current_version changed and the agent reads v1.
+- **GREEN**: contract test against `db.set_current_version`.
+- **Commit**: `test(registry): assert config rollback via set-current`
 
 #### TASK_011: _resolve_db_in_config backend-redirect block
 - **File**: `tests/unit/registry/test_resolve_db.py`
-- **RED`: a config with `db.id` and a caller `db_url` override keeps the resolved db's db_url.
-- **GREEN`: contract test against `_resolve_db_in_config`.
-- **Commit`: `test(registry): assert db.id redirect blocked`
+- **RED**: a config with `db.id` and a caller `db_url` override keeps the resolved db's db_url.
+- **GREEN**: contract test against `_resolve_db_in_config`.
+- **Commit**: `test(registry): assert db.id redirect blocked`
 
 #### TASK_012: list_components excludes registry ids
 - **File**: `tests/unit/registry/test_exclusion.py`
-- **RED`: a registry agent id absent from `/components` results even if a row exists in the DB.
-- **GREEN`: contract test against `db.list_components(..., exclude_component_ids=...)`.
-- **Commit`: `test(registry): assert list_components excludes registry-owned ids`
+- **RED**: a registry agent id absent from `/components` results even if a row exists in the DB.
+- **GREEN**: contract test against `db.list_components(..., exclude_component_ids=...)`.
+- **Commit**: `test(registry): assert list_components excludes registry-owned ids`
 
 #### TASK_013: Integration test — populate, rehydrate, run workflow
 - **File**: `tests/integration/test_registry_e2e.py`
-- **Test`: build an AgentOS with a registry containing a tool and a code-defined agent, serialize a trivial workflow, reload it, assert `rehydrate_function` reattached the entrypoint and the workflow runs.
-- **RED`: assert the workflow executes the rehydrated function.
-- **GREEN`: `@pytest.mark.integration`.
-- **Commit`: `test(registry): add e2e populate-rehydrate-run integration test`
+- **Test**: build an AgentOS with a registry containing a tool and a code-defined agent, serialize a trivial workflow, reload it, assert `rehydrate_function` reattached the entrypoint and the workflow runs.
+- **RED**: assert the workflow executes the rehydrated function.
+- **GREEN**: `@pytest.mark.integration`.
+- **Commit**: `test(registry): add e2e populate-rehydrate-run integration test`
 
 ---
 

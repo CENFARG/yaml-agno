@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_01"
 Title: "Agno Runtime Architecture"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Agno", "#Runtime", "#SessionManagement", "#WorkflowPrimitives"]
 Dependency_Hashes: ["SPEC_00"]
-Last_Updated: "2026-06-26"
-Revision_Note: "Iter 2 (factual). Corrected Agno version references v2.6.14 -> v2.6.18 (verified against agno/libs/agno/pyproject.toml). No design changes; all architectural decisions from iter1 stand."
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 3 - dropped all 'Engram optional external adapter' framing; long-term memory is Agno native LearningMachine/MemoryManager only (no Engram anywhere). Removed user_id from SessionConfig/session YAML block; user_id is a RUNTIME value injected by TenantContextMiddleware (SPEC_06) as the composite '{tenant_id}:{principal_id}' resolved by resolve_user_id() (SPEC_04), never a YAML field. Documented the runtime injection. No other design changes."
 ---
 
 # SPEC_01_AGNO_RUNTIME_ARCHITECTURE
@@ -172,10 +172,12 @@ agent:
   instructions: "Process invoices..."
   
   session:
-    user_id: "${user_db.id}"
-    session_name: "facturacion_${user_db.id}"
+    # @ai-directive: user_id is NOT declared in YAML. It is injected at RUNTIME
+    # by TenantContextMiddleware (SPEC_06) as the composite
+    # "{tenant_id}:{principal_id}" from resolve_user_id() (SPEC_04).
+    session_name: "facturacion"
     storage_type: postgres  # any Agno DB: sqlite|postgres|memory|redis|mongo|... (see §1.3)
-    
+
   execution:
     max_iterations: 10
     stream: false
@@ -187,9 +189,15 @@ agent:
 
 La tabla lista los parámetros de sesión que efectivamente existen en la API de Agno v2.6.18 (verificados en `agno/agent/agent.py:1336-1361`). **No se inventan parámetros.**
 
+> **@ai-directive (user_id is runtime-only)**: `user_id` aparece en la API de Agno
+> como `run(user_id=...)`, pero en yaml-agno NO es un campo YAML. Lo inyecta
+> `TenantContextMiddleware` (SPEC_06) en cada request a partir del contexto
+> autenticado, como el composite `"{tenant_id}:{principal_id}"` que produce
+> `resolve_user_id()` (SPEC_04). Declararlo en YAML permitiría spoofing de
+> identidad; por eso se omite de la tabla de parámetros declarables.
+
 | Parámetro YAML | Agno equivalent | Tipo | Validación |
 |----------------|-----------------|------|------------|
-| `user_id` | `run(user_id=...)` / Agent attr | `str` | Identifica al usuario (scope de memoria/sesión) |
 | `session_id` | `run(session_id=...)` | `str \| None` | Continúa sesión existente (autogenerada si None) |
 | `session_state` | `run(session_state=...)` / Agent attr | `dict` | Estado persistente entre turns |
 | `storage_type` | `db=` (SqliteDb/PostgresDb/RedisDb/...) | `str` | Resuelto vía DependencyManager (§1.3) |
@@ -441,8 +449,11 @@ agent:
 
   session:
     # Identification (Agno first-class isolation keys)
-    user_id: "${user_db.id}"
-    session_id: "my_session_${user_id}"
+    # @ai-directive: user_id is NOT a YAML field. It is a RUNTIME value injected by
+    # TenantContextMiddleware (SPEC_06) as the composite "{tenant_id}:{principal_id}"
+    # resolved by resolve_user_id() (SPEC_04). Declaring it in YAML would let a
+    # caller forge identity; it must come from authenticated request context only.
+    session_id: "my_session_${run.user_id}"
 
     # Storage (resolved via DependencyManager; any Agno DB)
     storage_type: postgres
@@ -467,8 +478,13 @@ from pydantic import BaseModel, Field
 from yaml_agno.di import DependencyManager
 
 class SessionConfig(BaseModel):
-    """Session config from YAML. No closed storage enum; validated against registry."""
-    user_id: str
+    """Session config from YAML. No closed storage enum; validated against registry.
+
+    @ai-directive: user_id is NOT a field here. It is a RUNTIME value injected by
+    TenantContextMiddleware (SPEC_06) as the composite "{tenant_id}:{principal_id}"
+    from resolve_user_id() (SPEC_04). Keeping it out of the YAML model prevents a
+    caller from declaring/overriding identity at config time.
+    """
     session_id: str | None = None          # Agno first-class key
     storage_type: str = "sqlite"           # registry key, not enum
     connection_string: str | None = None   # from SecretManager, never env in prod
@@ -515,7 +531,7 @@ graph LR
 ```
 
 > **@ai-directive**: aclaraciones técnicas verificadas en Agno v2.6.18:
-> - **Engram NO es de Agno** (0 menciones en código/doc de Agno). Es nuestro MCP tool. El runtime core de yaml-agno **no** lo muestra como capa nativa. El equivalente Agno para "long-term cross-session memory" es **`LearningMachine`** (6 stores: user_profile, user_memory, session_context, entity_memory, learned_knowledge, decision_log) o, más simple, **`MemoryManager`/`UserMemory`**. Engram se trata como **adapter opcional externo**, definido en SPEC_04, no en el runtime core.
+> - **Long-term memory es 100% Agno native**: el runtime core de yaml-agno usa **`LearningMachine`** (6 stores: user_profile, user_memory, session_context, entity_memory, learned_knowledge, decision_log) o, más simple, **`MemoryManager`/`UserMemory`**. NO existe ningún adapter de Engram, ningún `LongTermMemoryPort`, ni mención a Engram en el runtime. SPEC_04 es el dueño de la memoria Agno-native.
 > - **Redis SÍ es de Agno**: `agno.db.redis.RedisDb` (DB de sessions/memory con `expire` TTL), `agno.vectordb.redis.RedisDB` (vector DB) y `RedisRunCancellationManager` (cancelación pub-sub). La etiqueta anterior "Redis/Agno" era imprecisa: Redis es una opción de backend Agno, no un cache genérico nuestro.
 > - **`learning` y `culture`**: `learning` = `LearningMachine` (sistema unificado de aprendizaje). `culture` = `CultureManager` (experimental, "shared cultural knowledge"). Ambos son de Agno. Memory (MemoryManager) ≠ Learning (LearningMachine es la evolución más rica). Ver SPEC_04 para detalle.
 
@@ -525,7 +541,7 @@ graph LR
 |------|----------------|--------------|-----------------|
 | **Session State** | `db=` + `session_id`/`user_id` | PostgresDb / SqliteDb / RedisDb | Historial de runs, tool calls |
 | **Working Memory** | run context (interno Agno) | (efímero, run actual) | Contexto del run actual |
-| **Long-term Memory** | `LearningMachine` (o `MemoryManager`) | db= (misma DB) | Observaciones cross-session; "Engram" es adapter opcional externo (SPEC_04) |
+| **Long-term Memory** | `LearningMachine` (o `MemoryManager`) | db= (misma DB) | Observaciones cross-session; 100% Agno native (SPEC_04) |
 
 #### State Persistence YAML
 
@@ -550,7 +566,7 @@ agent:
       compress_tool_results: true
       compression_ratio_threshold: 0.5
 
-    # Long-term memory (Agno native; Engram is optional external adapter - SPEC_04)
+    # Long-term memory (Agno native LearningMachine/MemoryManager - SPEC_04)
     memory:
       # Agno native options (mutually exclusive strategies):
       enable_agentic_memory: true       # agent decides when to store/recall (efficient)
@@ -989,10 +1005,12 @@ AND the error message contains "Agent not found: nonexistent_agent"
 - **RED**:
   ```python
   def test_session_config_validation():
-      config = SessionConfig(user_id="test-user", session_id="test")
+      # user_id is NOT a field; it is injected at runtime by the middleware.
+      config = SessionConfig(session_id="test")
       assert config.storage_type == "sqlite"  # registry key, not enum
+      assert not hasattr(config, "user_id")   # not a YAML field
   ```
-- **GREEN**: Implementar `SessionConfig` (storage_type como string/registry key)
+- **GREEN**: Implementar `SessionConfig` (storage_type como string/registry key, sin user_id)
 - **Commit**: `feat: add SessionConfig Pydantic model`
 
 #### TASK_008: Implement SessionManager (async validate via DependencyManager)

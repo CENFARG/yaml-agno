@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_27"
 Title: "Tracing Architecture"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Tracing", "#OpenTelemetry", "#Trace", "#Span", "#DatabaseSpanExporter", "#OpenInference", "#Observability", "#DB"]
-Dependency_Hashes: ["SPEC_09", "SPEC_03"]
-Last_Updated: "2026-06-17"
-Revision_Note: "Iteration 1 - new SPEC (Tracing). API verified vs agno/tracing/setup."
+Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_24"]
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - confirmed and documented the TracerProvider SSOT: agno.tracing.setup_tracing owns the GLOBAL TracerProvider (registered once at startup). SPEC_24's PrometheusOtelObservabilityManager adapter and SPEC_09's dev span helper attach processors to that provider; neither calls trace.set_tracer_provider(). Added explicit cross-ref so SPEC_24 aligns. Added SPEC_24 to Dependency_Hashes."
 ---
 
 # SPEC_27_TRACING_ARCHITECTURE
@@ -88,6 +88,14 @@ Verified behavior:
 - `batch_processing=True` → spans are buffered and flushed by a `BatchSpanProcessor` governed by `max_queue_size`, `max_export_batch_size`, and `schedule_delay_millis`.
 - Returns `None`; side-effecting global OTel registration.
 - Must be called once at startup (lifespan), before any instrumented run executes.
+
+> **@ai-directive (TracerProvider SSOT)**: `setup_tracing` is the SOLE owner of the
+> global `TracerProvider`. No other yaml-agno component may call
+> `trace.set_tracer_provider()`. SPEC_24's `PrometheusOtelObservabilityManager`
+> adapter and SPEC_09's dev span helper only ATTACH span processors to the provider
+> that `setup_tracing` registered (via `trace.get_tracer_provider()`). Startup
+> ordering (SPEC_12 `LifespanAdapter`) guarantees `setup_tracing` runs before any
+> adapter that needs the tracer, so the provider is always present when they attach.
 
 ### 2.2 `DatabaseSpanExporter`
 

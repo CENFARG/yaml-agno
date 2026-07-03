@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_24"
 Title: "Monitoring Stack - Prometheus, Grafana, Loki, Alertmanager y Tracing"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Prometheus", "#Grafana", "#Loki", "#Alertmanager", "#Tempo", "#OpenTelemetry", "#SRE", "#SLI", "#SLO", "#MonitoringAsCode", "#CloudRun", "#CloudMonitoring"]
-Dependency_Hashes: ["SPEC_09", "SPEC_21"]
-Last_Updated: "2026-06-17"
-Revision_Note: "iter1 — added Cloud Run monitoring strategy (Cloud Monitoring / Managed Prometheus / OTel export) as the PRIMARY observability target; kube-prometheus-stack retained as the FUTURE (K8s) target."
+Dependency_Hashes: ["SPEC_09", "SPEC_21", "SPEC_27"]
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 2 - TracerProvider SSOT: the adapter NO LONGER calls trace.set_tracer_provider() globally. The global TracerProvider is owned by Agno's setup_tracing (SPEC_27); this adapter only adds a BatchSpanProcessor to the already-registered provider. Aligned record_metric()/increment_counter() arg names to the SPEC_09 ObservabilityManager Port (attributes=, not labels=). No Engram anywhere."
 ---
 
 # SPEC_24_MONITORING_STACK
@@ -630,12 +630,19 @@ from typing import Any
 from prometheus_client import Counter, Histogram, Gauge
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 class PrometheusOtelObservabilityManager:
     """Adapter productivo: implementa ObservabilityManager (SPEC_09)
-    y exporta a Prometheus (/metrics) + OTel Collector → Tempo."""
+    y exporta a Prometheus (/metrics) + OTel Collector -> Tempo.
+
+    @ai-directive (TracerProvider SSOT): this adapter does NOT call
+    trace.set_tracer_provider(). The GLOBAL TracerProvider is registered ONCE
+    by Agno's agno.tracing.setup_tracing (owned by SPEC_27, invoked at startup).
+    Calling set_tracer_provider here would double-register and corrupt OTel
+    state. This adapter only attaches a BatchSpanProcessor to the provider that
+    setup_tracing already registered, then resolves a tracer from it.
+    """
 
     def __init__(self, otel_endpoint: str):
         # Métricas Prometheus (registradas una sola vez)
@@ -645,26 +652,36 @@ class PrometheusOtelObservabilityManager:
             "yaml_agno_agent_run_duration_seconds", "Run latency",
             ["agent_name", "tenant_id"],
             buckets=(0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30))
-        # OTel tracer
-        provider = TracerProvider()
+        # OTel tracer: resolve from the GLOBAL provider that SPEC_27 registered.
+        # Add our OTLP exporter as a span processor on that provider — do NOT
+        # replace the provider.
+        provider = trace.get_tracer_provider()
         provider.add_span_processor(
             BatchSpanProcessor(OTLPSpanExporter(endpoint=otel_endpoint, insecure=False)))
-        trace.set_tracer_provider(provider)
         self._tracer = trace.get_tracer("yaml-agno")
 
-    def increment_counter(self, name: str, value: float = 1.0, labels: dict[str, Any] | None = None) -> None:
-        labels = labels or {}
-        getattr(self, f"_{name}").labels(**labels).inc(value)
+    def increment_counter(self, name: str, value: float = 1.0, attributes: dict[str, Any] | None = None) -> None:
+        """Counter increment. `attributes` matches the SPEC_09 Port signature."""
+        attributes = attributes or {}
+        getattr(self, f"_{name}").labels(**attributes).inc(value)
 
-    def record_metric(self, name: str, value: float, labels: dict[str, Any] | None = None) -> None:
-        labels = labels or {}
-        getattr(self, f"_{name}").labels(**labels).observe(value)
+    def record_metric(self, name: str, value: float, attributes: dict[str, Any] | None = None) -> None:
+        """Distribution/histogram observation. `attributes` matches the SPEC_09 Port signature."""
+        attributes = attributes or {}
+        getattr(self, f"_{name}").labels(**attributes).observe(value)
 
     def start_span(self, name: str):
         return self._tracer.start_as_current_span(name)
 ```
 
 **Exports**: Prometheus (HTTP `/metrics`), OTel (OTLP gRPC → Collector → Tempo). Adapters alternativos (`DatadogObservabilityManager`, `NoopObservabilityManager`) viven detrás del mismo Port para tests.
+
+> **@ai-directive (cross-ref)**: the global `TracerProvider` is the SSOT and is owned
+> by SPEC_27 (`agno.tracing.setup_tracing`, called once at AgentOS startup). Both
+> SPEC_24's adapter (here) and SPEC_09's dev span helper attach processors to that
+> provider; neither calls `trace.set_tracer_provider()`. The startup ordering is
+> enforced by the SPEC_12 `LifespanAdapter`: `setup_tracing` runs before any
+> observability adapter that needs the tracer.
 
 ---
 

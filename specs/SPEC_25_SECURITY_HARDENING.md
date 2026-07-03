@@ -1,14 +1,14 @@
 ---
 Spec_ID: "SPEC_25"
 Title: "Security Hardening - Pod Security, Network Policies, RBAC, Supply Chain y Compliance"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PodSecurityStandards", "#NetworkPolicies", "#RBAC", "#SupplyChain", "#Cosign", "#Kyverno", "#Falco", "#OWASP", "#GDPR", "#SOC2", "#ZeroTrust", "#CloudRun", "#IAM"]
 Dependency_Hashes: ["SPEC_19", "SPEC_21"]
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 - tenant-boundary clarification (audit Wave-1). Added @ai-directive stating K8s namespaces are a DEPLOYMENT boundary, NOT a tenant isolation boundary; tenant isolation is the composite user_id + explicit WHERE on yamlagno_* (SPEC_03/SPEC_04), never tenant-per-namespace. Aligned §2.2.7 and assumptions. The runAsUser UID conflict vs SPEC_20 (10001 vs 65532) is a separate Wave-5 issue, NOT touched here."
+Revision_Note: "Wave-5 UID SSOT alignment: K8s manifests now use runAsUser/runAsGroup/fsGroup 65532 to match the SPEC_20 image USER directive (65532:65532). @ai-directive 65532 is the SSOT non-root UID across image (SPEC_20) and pod (SPEC_25)."
 ---
 
 # SPEC_25_SECURITY_HARDENING
@@ -159,10 +159,11 @@ spec:
       serviceAccountName: agentos-sa        # §2.3
       automountServiceAccountToken: false
       securityContext:
+        # @ai-directive: 65532 is the SSOT non-root UID (matches SPEC_20 image USER 65532:65532).
         runAsNonRoot: true
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -174,7 +175,7 @@ spec:
             privileged: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
-            runAsUser: 10001
+            runAsUser: 65532
             capabilities:
               drop: ["ALL"]
             seccompProfile:
