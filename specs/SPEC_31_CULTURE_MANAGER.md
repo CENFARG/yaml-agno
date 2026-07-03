@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_31"
 Title: "Culture Manager - Experimental Cross-Session Cultural Knowledge (LLM-Extractive)"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Culture", "#CultureManager", "#CulturalKnowledge", "#Experiment
 Dependency_Hashes: ["SPEC_04", "SPEC_14"]
 Group: "G4-Memoria-Aprendizaje"
 Read_Order: 9
-Last_Updated: "2026-07-02"
-Revision_Note: "iter2 (Wave 4 collateral): fixed glued-backtick markdown (**RED`:/GREEN`:/Commit`: -> **RED**:/etc) across the TDD section so the steps render correctly. The DbRegistry import (from yaml_agno.persistence.registry import DbRegistry, attributed to SPEC_03) is now backed by the SPEC_03 iter4 DbRegistry definition. No content/concept changes."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter3 (deep adversarial review vs Agno v2.6.18 source). All CultureManager / CulturalKnowledge API claims CONFIRMED against agno/culture/manager.py and agno/db/schemas/culture.py: dataclass fields + the `__init__` delete_knowledge=False override (effective default), all public sync/async methods, the get_model() gpt-4o fallback, and the 'experimental' docstring. DbRegistry.get(db_ref) usage (§4.4) confirmed consistent with SPEC_03 §7.4 (fail-fast ValueError on missing ref). Fix: §2.4 public-methods list now includes `add_cultural_knowledge(knowledge)` (manager.py:145) which was omitted — it is the direct-CRUD counterpart to the LLM-tool `add_cultural_knowledge` exposed to the extraction model, and consumers may call it directly. No delegation boundary or experimental-surfacing changes."
 ---
 
 # SPEC_31_CULTURE_MANAGER
@@ -149,11 +149,15 @@ async def acreate_cultural_knowledge(self, message=None, messages=None, run_metr
 
 # Direct CRUD
 def add_cultural_knowledge(self, knowledge: CulturalKnowledge) -> Optional[str]: ...
+def update_cultural_knowledge(self, knowledge: CulturalKnowledge) -> Optional[str]: ...
+def delete_cultural_knowledge(self, id: str) -> None: ...
 def get_knowledge(self, id: str) -> Optional[CulturalKnowledge]: ...
 async def aget_knowledge(self, id: str) -> Optional[CulturalKnowledge]: ...
 def get_all_knowledge(self, name: Optional[str] = None) -> Optional[List[CulturalKnowledge]]: ...
 async def aget_all_knowledge(self, name: Optional[str] = None) -> Optional[List[CulturalKnowledge]]: ...
 def clear_all_knowledge(self) -> None: ...
+
+> Note: `add_cultural_knowledge`, `update_cultural_knowledge`, `delete_cultural_knowledge` are ALSO generated as LLM tools inside the capture pipeline (see §2.6, §5.3) — the same names appear both as direct Python methods (consumers may call them to bypass the LLM pass) and as model-callable functions gated by the boolean flags. yaml-agno only forwards the flags; it does not reimplement either surface.
 
 # Maintenance task (delete/update/clear via LLM)
 def update_culture_task(self, task: str) -> str: ...
