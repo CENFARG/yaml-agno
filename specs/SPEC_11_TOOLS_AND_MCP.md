@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_11"
 Title: "Tools & MCP Architecture - Toolkits, Custom Tools and Model Context Protocol"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Tools", "#MCP", "#MCPTools", "#MultiMCPTools", "#Toolkits", "#T
 Dependency_Hashes: ["SPEC_01", "SPEC_02"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 5
-Last_Updated: "2026-07-02"
-Revision_Note: "iter2 (Wave 4 contract fixes): added McpMultiToolConfig (kind: mcp_multi, servers: list[McpToolConfig]) as the 5th variant of the ToolConfig union — the mcp_multi YAML and TASK_008 now have a matching schema; updated the taxonomy table to 5 variants; clarified CustomToolLoader.load returns the raw callable and the ToolFactory applies @tool(**config flags) (Scenario 2); defined is_module_allowed + import whitelist (yaml_agno.security, ConfigManager key security.import_whitelist, fail closed) in SPEC_11 since no other SPEC owns it — satisfies backend-sanitization rule 10."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 3 - Deep adversarial review vs Agno v2.6.18: fixed MCPTools invented params (headers/timeout/sse_read_timeout do NOT exist on MCPTools; they live on *ClientParams, passed via server_params; timeout_seconds is the real stdio timeout). Fixed MCPResolverImpl to construct StreamableHTTPClientParams/SSEClientParams instead of passing invented kwargs. Fixed @tool show_result default (None, not True; auto-True only if stop_after_tool_call). Added missing @tool params (strict, instructions, add_instructions, external_execution_silent, pre_hook, post_hook) and HITL mutual-exclusivity constraint. Fixed toolkit constructor params: YFinanceTools (enable_* flags), DuckDbTools (no schemas/semantic_models), PostgresTools (db_name/user/host/table_schema, no db_url/schemas/tables), PythonTools (base_dir/safe_globals, methods are not flags). Documented MultiMCPTools and SSE upstream deprecation warnings. YFinanceAdapter now normalizes bare aliases to canonical enable_* names."
 ---
 
 # SPEC_11_TOOLS_AND_MCP
@@ -94,18 +94,18 @@ type ToolConfig = Annotated[
 
 ### 2.2 Tabla de toolkits destacados con params
 
-| Toolkit | Clase Agno | Params clave |
+| Toolkit | Clase Agno | Params clave (constructor) |
 |---------|-----------|--------------|
-| `hackernews` | `HackerNewsTools` | `cache_results` |
-| `yfinance` | `YFinanceTools` | `stock_price`, `company_info`, `company_news`, `analyst_prices`, `income_statement`, `cache_results` |
-| `duckdb` | `DuckDbTools` | `db_path`, `schemas`, `semantic_models`, `cache_results` |
-| `calculator` | `CalculatorTools` | `include_tools`, `exclude_tools` |
-| `duckduckgo` | `DuckDuckGoTools` | `fixed_max_results`, `cache_results` |
+| `hackernews` | `HackerNewsTools` | `enable_get_top_stories`, `enable_get_user_details`, `all`, `cache_results` |
+| `yfinance` | `YFinanceTools` | `enable_stock_price`, `enable_company_info`, `enable_company_news`, `enable_analyst_recommendations`, `enable_income_statements`, `enable_stock_fundamentals`, `enable_key_financial_ratios`, `enable_technical_indicators`, `enable_historical_prices`, `all`, `cache_results` |
+| `duckdb` | `DuckDbTools` | `db_path`, `connection`, `init_commands`, `read_only`, `config`, `cache_results` |
+| `calculator` | `CalculatorTools` | `include_tools`, `exclude_tools` (vía `**kwargs` → `Toolkit`) |
+| `duckduckgo` | `DuckDuckGoTools` | `fixed_max_results`, `cache_results` (subclass de `WebSearchTools`) |
 | `slack` | `SlackTools` | `slack_bot_token`, `slack_app_token`, `cache_results` |
-| `postgres` | `PostgresTools` | `db_url`, `schemas`, `tables`, `cache_results` |
-| `python` | `PythonTools` | `base_dir`, `run_code`, `save_and_run`, `list_files`, `read_file` |
-| `shell` | `ShellTools` | `run_shell_command` |
-| `reasoning` | `ReasoningTools` | `enable_think`, `enable_analyze`, `instructions`, `add_instructions`, `add_few_shot`, `few_shot_examples` |
+| `postgres` | `PostgresTools` | `db_name`, `user`, `password`, `host`, `port`, `table_schema`, `connection`, `cache_results`. Nota: `_requires_connect=True` (el agente auto-llama `connect()`/`close()`). |
+| `python` | `PythonTools` | `base_dir`, `safe_globals`, `safe_locals`, `restrict_to_base_dir`, `cache_results`. (Las funciones expuestas — `run_python_code`, `save_to_file_and_run`, `list_files`, `read_file` — son **métodos**, no flags del constructor; todas habilitadas por defecto.) |
+| `shell` | `ShellTools` | `enable_run_shell_command` (o `all`), `working_directory` |
+| `reasoning` | `ReasoningTools` | `enable_think`, `enable_analyze`, `instructions`, `add_instructions`, `add_few_shot`, `few_shot_examples`, `all` |
 | `github` | `GithubTools` | `access_token`, `cache_results` |
 | `firecrawl` | `FirecrawlTools` | `api_key`, `formats` |
 | `googledrive` | `GoogleDriveTools` | `credentials_path`, `token_path` |
@@ -163,16 +163,26 @@ Agno permite cualquier funcion Python como tool. El decorator `@tool` controla e
 |-------|------|---------|-------------|
 | `name` | `str` | nombre funcion | Custom name |
 | `description` | `str` | docstring | Custom description |
+| `strict` | `bool` | `None` | Mode estricto de schema de tool |
+| `instructions` | `str` | `None` | Instrucciones custom |
+| `add_instructions` | `bool` | `True` | Auto-inyecta instrucciones de uso |
 | `requires_confirmation` | `bool` | `False` | Pedir confirmacion al usuario (HITL) |
 | `requires_user_input` | `bool` | `False` | Pedir input antes de ejecutar |
 | `user_input_fields` | `list[str]` | `[]` | Campos que requieren input |
 | `external_execution` | `bool` | `False` | Se ejecuta fuera del control del agente |
-| `show_result` | `bool` | `True` | Mostrar resultado en la respuesta |
+| `external_execution_silent` | `bool` | `None` | Silencia el feedback de external_execution |
+| `pre_hook` / `post_hook` | `Callable` | `None` | Hook individual pre/post ejecucion |
+| `show_result` | `bool` | `None` | Mostrar resultado en la respuesta. Nota: el default de Agno es `None` (no forzado); solo se auto-setea a `True` cuando `stop_after_tool_call=True`. |
 | `stop_after_tool_call` | `bool` | `False` | Detener el run tras la llamada |
 | `tool_hooks` | `list[Callable]` | `[]` | Hooks pre/post |
 | `cache_results` | `bool` | `False` | Cachear resultado |
 | `cache_dir` | `str` | - | Dir de cache |
 | `cache_ttl` | `int` | - | TTL en segundos |
+
+> **Constraint (exclusividad HITL)**: de `requires_confirmation`, `requires_user_input`,
+> `external_execution` **a lo sumo uno** puede ser `True` simultáneamente. El decorator
+> de Agno levanta `ValueError` si se combinan. yaml-agno replica esta validación en el
+> boundary (`CustomToolConfig` con `model_validator`).
 
 ### 3.2 Built-in params inyectados
 
@@ -196,7 +206,7 @@ class CustomToolConfig(BaseModel):
     requires_user_input: bool = False
     user_input_fields: list[str] = Field(default_factory=list)
     external_execution: bool = False
-    show_result: bool = True
+    show_result: bool | None = None   # Agno default None; auto-True only if stop_after_tool_call
     stop_after_tool_call: bool = False
     cache_results: bool = False
     cache_dir: str | None = None
@@ -365,6 +375,10 @@ graph LR
 | **streamable-http** (recomendado) | `url` | Servidores remotos HTTP | si |
 | **SSE** (deprecado) | `url`, `transport="sse"` | Redes restringidas | si |
 
+> **SSE soft-deprecated en Agno**: tanto `MCPTools` como `MultiMCPTools` emiten un
+> `log_info` de deprecation cuando `transport="sse"`, recomendando streamable-http.
+> No es un error, pero los nuevos configs SHOULD usar `streamable-http`.
+
 ### 6.3 Stdio example
 
 ```python
@@ -388,14 +402,20 @@ mcp = MCPTools(url="http://localhost:8000/sse", transport="sse")
 
 ### 6.5 Server params (headers, timeouts)
 
+`MCPTools` does NOT accept a top-level `headers`, `timeout`, or `sse_read_timeout` argument.
+HTTP headers and timeouts must be supplied via `server_params` (a `StreamableHTTPClientParams`
+or `SSEClientParams` instance) or — for per-run dynamic headers — via the `header_provider`
+callable (§6.6). The constructor uses `timeout_seconds: int = 10` for the stdio client timeout.
+
 ```python
-from agno.tools.mcp import MCPTools, SSEClientParams
+from agno.tools.mcp import MCPTools
+from agno.tools.mcp.params import SSEClientParams
 
 server_params = SSEClientParams(
-    url=...,
-    headers=...,
-    timeout=...,
-    sse_read_timeout=...,
+    url="http://localhost:8000/sse",
+    headers={"Authorization": "Bearer ..."},
+    timeout=5.0,
+    sse_read_timeout=300.0,
 )
 mcp = MCPTools(server_params=server_params, transport="sse")
 ```
@@ -420,7 +440,13 @@ Solo aplica a transports HTTP (`streamable-http`, `sse`). stdio no soporta heade
 
 ### 6.7 Multiple servers
 
-Dos enfoques: varias instancias `MCPTools` o una sola `MultiMCPTools`.
+Dos enfoques: varias instancias `MCPTools` (recomendado) o una sola `MultiMCPTools`.
+
+> **Deprecation upstream**: `MultiMCPTools` emite un `DeprecationWarning` al
+> construirse (Agno v2.6.18); el maintainer recomienda usar múltiples instancias
+> de `MCPTools`. yaml-agno mantiene el variant `kind: mcp_multi` para compatibilidad
+> de YAMLs existentes, pero los nuevos configs SHOULD usar múltiples entradas
+> `kind: mcp`. La decisión 10.2 y TASK_008 registran esta deuda.
 
 ```python
 # MultiMCPTools
@@ -664,11 +690,30 @@ class ToolFactory(Protocol):
 from agno.tools.yfinance import YFinanceTools
 
 class YFinanceAdapter:
+    """Adapter for YFinanceTools.
+
+    YFinanceTools uses ``enable_<feature>`` flags (not bare ``stock_price``).
+    The adapter accepts both the bare YAML name (``stock_price: true``) and the
+    canonical Agno name (``enable_stock_price: true``), normalizing the former
+    so users can write concise YAML.
+    """
+
+    _ALIASES = {
+        "stock_price": "enable_stock_price",
+        "company_info": "enable_company_info",
+        "company_news": "enable_company_news",
+        "analyst_prices": "enable_analyst_recommendations",
+        "income_statement": "enable_income_statements",
+    }
+    _KNOWN = set(_ALIASES.values()) | {"all", "cache_results"}
+
     def build(self, params: dict) -> YFinanceTools:
-        known = {"stock_price", "company_info", "company_news",
-                 "analyst_prices", "income_statement", "cache_results"}
-        kwargs = {k: v for k, v in params.items() if k in known}
-        return YFinanceTools(**kwargs)
+        normalized: dict = {}
+        for k, v in params.items():
+            key = self._ALIASES.get(k, k)
+            if key in self._KNOWN:
+                normalized[key] = v
+        return YFinanceTools(**normalized)
 ```
 
 ### 9.4 ToolkitRegistry built-in map
@@ -762,19 +807,35 @@ class SecurityError(Exception):
 
 ```python
 from agno.tools.mcp import MCPTools, MultiMCPTools
+from agno.tools.mcp.params import StreamableHTTPClientParams, SSEClientParams
 
 class MCPResolverImpl:
     async def resolve_single(self, config: McpToolConfig) -> MCPTools:
         if config.transport == "stdio":
             tools = MCPTools(command=config.command, env=config.env)
         else:
-            tools = MCPTools(url=config.url, transport=config.transport,
-                             headers=config.headers, timeout=config.timeout,
+            # MCPTools does NOT accept top-level headers/timeout/sse_read_timeout.
+            # Those live on the *ClientParams dataclasses passed via `server_params`.
+            # Dynamic per-run headers go through `header_provider` (resolved separately).
+            ParamsCls = (StreamableHTTPClientParams
+                         if config.transport == "streamable-http"
+                         else SSEClientParams)
+            server_params = ParamsCls(
+                url=config.url,
+                headers=config.headers,
+                timeout=config.timeout,
+                sse_read_timeout=config.sse_read_timeout,
+            )
+            tools = MCPTools(server_params=server_params,
+                             transport=config.transport,
                              refresh_connection=config.refresh_connection)
         await tools.connect()
         return tools
 
     async def resolve_multi(self, servers: list) -> MultiMCPTools:
+        # NOTE: MultiMCPTools is deprecated upstream (DeprecationWarning on
+        # construction). Prefer multiple MCPTools instances for new configs.
+        # Kept here for the mcp_multi YAML variant (§6.10) until full removal.
         mcp = MultiMCPTools(commands=[s.command for s in servers if s.transport=="stdio"])
         await mcp.connect()
         return mcp
@@ -806,7 +867,7 @@ class MCPResolverImpl:
 **Justificación**: Cuando el agente lanza varios tool calls en paralelo, yaml-agno garantiza uso de `asyncio.TaskGroup` (NO `asyncio.gather`) para propagacion correcta de ExceptionGroup.
 
 ### 10.8 [Decision] `extra="allow"` en BuiltinToolConfig
-**Justificación**: Cada toolkit tiene params propios (`stock_price`, `company_news`...). Forzar un schema por toolkit seria 120+ modelos. `extra="allow"` deja fluirlos y el adapter filtra los conocidos. Los desconocidos se ignoran con warning.
+**Justificación**: Cada toolkit tiene params propios (e.g. `enable_stock_price`, `enable_company_news`...). Forzar un schema por toolkit seria 120+ modelos. `extra="allow"` deja fluirlos y el adapter normaliza/filtra los conocidos (aceptando alias YAML cortos como `stock_price` además del nombre canónico `enable_stock_price`). Los desconocidos se ignoran con warning.
 
 ---
 
@@ -818,7 +879,8 @@ class MCPResolverImpl:
 ```gherkin
 GIVEN un YAML agent.tools con kind=builtin name=yfinance stock_price=true cache_results=true
 WHEN ToolFactory.build(tool_set) se ejecuta
-THEN se instancia YFinanceTools(stock_price=True, cache_results=True)
+THEN el YFinanceAdapter normaliza stock_price -> enable_stock_price
+Y se instancia YFinanceTools(enable_stock_price=True, cache_results=True)
 Y se incluye en la lista de tools del agno Agent
 ```
 
@@ -919,7 +981,7 @@ def test_tool_set_minimal():
 #### TASK_002: ToolkitRegistry con adapters built-in
 - **File**: `yaml-agno/src/yaml_agno/tools/registry.py`
 - **Test**: `tests/unit/tools/test_registry.py`
-- **RED**: `registry.get("yfinance", {"stock_price": True})` retorna `YFinanceTools(stock_price=True)`.
+- **RED**: `registry.get("yfinance", {"stock_price": True})` retorna `YFinanceTools(enable_stock_price=True)` (el adapter normaliza el alias corto `stock_price` al flag canónico `enable_stock_price`).
 - **GREEN**: implementar `BUILTIN_REGISTRY` + adapters yfinance, hackernews, calculator, duckduckgo.
 - **Commit**: `feat(tools): add ToolkitRegistry with core adapters`
 
