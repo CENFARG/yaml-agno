@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_13"
 Title: "Scheduler, Background Execution & Run Lifecycle"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Scheduler", "#Cron", "#Background", "#RunLifecycle", "#RunStatu
 Dependency_Hashes: ["SPEC_01", "SPEC_03", "SPEC_05"]
 Group: "G6-Orquestacion"
 Read_Order: 16
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 3 (Wave 3 dedup). ScheduleExecutor.run now DELEGATES retry to SPEC_05 RetryPolicy (single retry abstraction: backoff+jitter+classify); removed ad-hoc bare asyncio.sleep loop. Fixed orphan /evals/run endpoint example. Marked Q1-Q5 RESOLVED (adopted decisions). Added SPEC_05 to Dependency_Hashes."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter4 (deep adversarial review vs Agno v2.6.18 source). (1) RunStatus §7.2 now lists ALL real enum members including `regenerated` (agno/run/base.py:337) which was omitted — it is non-terminal and marks a run whose response was regenerated via /continue?regenerate=true; documented that yaml-agno treats it as non-terminal. (2) SchedulePoller §2.5 clarified: `claim_due()` is a yaml-agno adapter method that wraps Agno's `db.claim_due_schedule()` (the atomic claim lives on the BaseDb, NOT on ScheduleManager) — the previous wording read as if ScheduleManager exposed claim_due, which it does not. The adapter naming is preserved but the delegation is now explicit."
 ---
 
 # SPEC_13_SCHEDULER_BACKGROUND_LIFECYCLE
@@ -203,9 +203,16 @@ class SchedulePoller:
             self._task.cancel()
             await asyncio.wait([self._task])
 
+    def claim_due(self) -> list:
+        """yaml-agno adapter method. Delegates the atomic claim to Agno's
+        `db.claim_due_schedule()` (the claim lives on the BaseDb / scheduler
+        db layer, NOT on ScheduleManager itself — verified agno/scheduler).
+        Returns the claimed schedule rows, marking them executing."""
+        return self._mgr.db.claim_due_schedule()
+
     async def _loop(self):
         while True:
-            due = self._mgr.claim_due()   # atomic claim, marks executing
+            due = self.claim_due()   # adapter -> db.claim_due_schedule()
             if due:
                 async with asyncio.TaskGroup() as tg:   # NO gather
                     for s in due:
@@ -216,7 +223,7 @@ class SchedulePoller:
         await self._exec.run(self._mgr.get(schedule_id))
 ```
 
-> Concurrent execution usa **`asyncio.TaskGroup`** (Python 3.12). Si una ejecución lanza, el grupo cancela hermanas y propaga; el executor atrapa internamente y escribe run record, evitando cancelación cruzada en casos controlados.
+> @ai-directive (claim SSOT): the atomic claim of due schedules is owned by Agno's db layer (`db.claim_due_schedule()`), not by `ScheduleManager`. The `claim_due()` call shown above is a yaml-agno adapter convenience that forwards to the db; do NOT add a `claim_due` method to a re-wrapped ScheduleManager. Concurrent execution uses **`asyncio.TaskGroup`** (Python 3.12). If a controlled execution raises, the executor catches it internally and writes a run record, preventing cross-cancellation of sibling tasks in the managed case.
 
 ### 2.6 ScheduleExecutor
 
@@ -565,23 +572,27 @@ stateDiagram-v2
 
 | State | Significado |
 |-------|-------------|
+| `pending` | Creado, aún no iniciado |
 | `running` | Ejecución en curso |
 | `paused` | Pausado (HITL / requirement pendiente) |
 | `continued` | Señal de que un run pausado fue continuado (`RunContinued` event) |
 | `cancelled` | Cancelado por API o thread |
 | `completed` | Finalizó con éxito |
 | `error` | Finalizó con error |
+| `regenerated` | Marker: run whose response was regenerated via `/continue?regenerate=true` (no terminal) |
 
-> `continued` es un evento/transitorio; el estado estacionario post-resume vuelve a `running`.
+> `continued` es un evento/transitorio; el estado estacionario post-resume vuelve a `running`. `regenerated` (Agno v2.6.18, `agno/run/base.py:337`) marca un run regenerado que coexiste junto al original; **NO es terminal** — yaml-agno no lo incluye en `TERMINAL` y lo trata como variante observacional de `running`/`completed`.
 
 ### 7.2 RunStatusState value object
 
 ```python
 # yaml-agno/src/domain/runs/run_status.py
 # @ai-directive: RunStatus is IMPORTED from Agno (agno.run.base), never redefined.
-# Members (Agno v2.6.18): pending, running, completed, paused, cancelled, error.
+# Members (Agno v2.6.18, run/base.py:323-338):
+#   pending, running, completed, paused, cancelled, error, regenerated
 # yaml-agno does NOT invent extra states (e.g. no "continued"); pause -> running
 # transition is handled by Agno's continue_run, not a separate status.
+# `regenerated` is a non-terminal marker for regenerated runs.
 from agno.run.base import RunStatus
 
 TERMINAL = {RunStatus.completed, RunStatus.error, RunStatus.cancelled}
