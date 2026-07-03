@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_01"
 Title: "Agno Runtime Architecture"
-Version: "0.2.0-iter4"
+Version: "0.2.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Agno", "#Runtime", "#SessionManagement", "#WorkflowPrimitives"]
 Dependency_Hashes: ["SPEC_00"]
 Group: "G2-Runtime-Core"
 Read_Order: 2
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 4 - Wave 6 hygiene: fixed mermaid edge label '|Agent:run:|' -> '|builds Agent|' (clearer semantic, the factory builds the Agent instance). No other changes."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 5 - Deep review against Agno v2.6.18 source: removed invented params (show_tool_calls, max_iterations), fixed InMemoryDb module path (agno.db.in_memory, not agno.db.memory), fixed markdown default (False, not True), fixed resolve_class sync/await mismatch, fixed build_db signature call sites, dropped speculative Agno version claim for pre_hooks, documented real num_history_runs default (3)."
 ---
 
 # SPEC_01_AGNO_RUNTIME_ARCHITECTURE
@@ -80,9 +80,15 @@ class AgentConfig(BaseModel):
     context: dict[str, Any] | None = Field(None, description="add_*_to_context flags (see SPEC_15)")
 
     # --- runtime behavior (subset; full list in section 1.2) ---
-    markdown: bool = True
+    # @ai-directive: Agno defaults markdown=False (agent.py:460). yaml-agno does NOT
+    # override this; declare markdown: true in YAML to enable.
+    markdown: bool = False
     add_history_to_context: bool = False
-    num_history_runs: int | None = Field(None, description="Mutually exclusive with num_history_messages")
+    num_history_runs: int | None = Field(
+        None,
+        description="Mutually exclusive with num_history_messages. Agno defaults to 3 "
+        "when BOTH are None (agent.py:572-573); set explicitly to override.",
+    )
     num_history_messages: int | None = None
     # ... remaining 80+ params mapped in section 1.2 table ...
 
@@ -108,10 +114,14 @@ class AgentFactory:
         knowledge = await self.deps.build_knowledge(config.knowledge)# SPEC_10
         memory = await self.deps.build_memory(config.memory)         # SPEC_04
         learning = await self.deps.build_learning(config.learning)   # SPEC_04
-        db = await self.deps.build_db(config.session)                # SPEC_03
+        db = await self.deps.build_db(                               # SPEC_03
+            config.session.storage_type,
+            config.session.connection_string,
+        )
         guardrails = await self.deps.build_guardrails(config.guardrails)  # SPEC_16
 
         # The Agent class itself is resolved lazily via DependencyManager too.
+        # resolve_class is SYNC (lru_cache); do NOT await it.
         Agent = self.deps.resolve_class("agno.agent", "Agent")
 
         agent = Agent(
@@ -123,7 +133,7 @@ class AgentFactory:
             memory_manager=memory,
             learning=learning,
             db=db,
-            pre_hooks=guardrails,  # guardrails mount as pre_hooks in Agno v2.1.0+
+            pre_hooks=guardrails,  # guardrails mount as Agent pre_hooks (agent.py:438)
             markdown=config.markdown,
             add_history_to_context=config.add_history_to_context,
             num_history_runs=config.num_history_runs,
@@ -155,13 +165,21 @@ La tabla siguiente mapea los grupos de parámetros del constructor `Agent()` de 
 
 ##### 1.2.1 Parámetros de runtime/debug (residentes en este SPEC)
 
-| Parámetro YAML | Agno equivalent | Default | Descripción |
-|----------------|-----------------|---------|-------------|
-| `markdown` | `Agent.markdown` | `true` | Render markdown en la respuesta |
-| `debug_mode` | `Agent.debug_mode` / run kwarg | `false` | Logs de ejecución detallados |
-| `debug_level` | `Agent.debug_level` | `1` | Nivel de detalle (1-2) |
-| `show_tool_calls` | `Agent.show_tool_calls` | `false` | Mostrar tool calls en output |
-| `telemetry` | `Agent.telemetry` | `true` | Telemetría anónima (ver SPEC_09) |
+> **@ai-directive (verificado en Agno v2.6.18, `agno/agent/agent.py:460,497-499`)**: los
+> defaults listados abajo son los **defaults reales del constructor `Agent()`**, no valores
+> arbitrarios de yaml-agno. `show_tool_calls` fue removido: **no existe** en Agno (cero
+> coincidencias en `libs/agno/agno/`). Para ver tool calls en output, usar `debug_mode: true`
+> o `debug_level: 2`.
+
+| Parámetro YAML | Agno equivalent | Default Agno | Descripción |
+|----------------|-----------------|--------------|-------------|
+| `markdown` | `Agent.markdown` (agent.py:460) | `false` | Render markdown en la respuesta. yaml-agno **no** overridea; declarar `markdown: true` en YAML para habilitar |
+| `debug_mode` | `Agent.debug_mode` / `run(debug_mode=)` (agent.py:497,1414) | `false` | Logs de ejecución detallados (constructor + kwarg por-run) |
+| `debug_level` | `Agent.debug_level` (agent.py:498) | `1` | Nivel de detalle, `Literal[1, 2]` (Agno fuerza a 1 si el valor es inválido) |
+| `telemetry` | `Agent.telemetry` (agent.py:499) | `true` | Telemetría anónima (ver SPEC_09) |
+
+> **`show_tool_calls` REMOVIDO**: parámetro inventado en iteraciones previas. No existe en
+> el constructor `Agent()` ni en `run()`/`arun()` de Agno v2.6.18. Usar `debug_mode` en su lugar.
 
 #### Loop de Eventos y Sesión
 
@@ -181,15 +199,13 @@ agent:
     storage_type: postgres  # any Agno DB: sqlite|postgres|memory|redis|mongo|... (see §1.3)
 
   execution:
-    max_iterations: 10
     stream: false
-    show_tool_calls: true
-    debug_mode: false
+    debug_mode: false   # set true (or debug_level: 2) to see tool calls; show_tool_calls is NOT an Agno param
 ```
 
 **Parámetros de Session expuestos** (mapeados a Agno `Agent.run()` / `Agent.arun()`):
 
-La tabla lista los parámetros de sesión que efectivamente existen en la API de Agno v2.6.18 (verificados en `agno/agent/agent.py:1336-1361`). **No se inventan parámetros.**
+La tabla lista los parámetros de sesión que efectivamente existen en la API de Agno v2.6.18 (firma real de `run()` verificada en `agno/agent/agent.py:1391-1416`; `arun()` en `1444-1498`). **No se inventan parámetros.**
 
 > **@ai-directive (user_id is runtime-only)**: `user_id` aparece en la API de Agno
 > como `run(user_id=...)`, pero en yaml-agno NO es un campo YAML. Lo inyecta
@@ -200,12 +216,20 @@ La tabla lista los parámetros de sesión que efectivamente existen en la API de
 
 | Parámetro YAML | Agno equivalent | Tipo | Validación |
 |----------------|-----------------|------|------------|
-| `session_id` | `run(session_id=...)` | `str \| None` | Continúa sesión existente (autogenerada si None) |
-| `session_state` | `run(session_state=...)` / Agent attr | `dict` | Estado persistente entre turns |
-| `storage_type` | `db=` (SqliteDb/PostgresDb/RedisDb/...) | `str` | Resuelto vía DependencyManager (§1.3) |
-| `add_history_to_context` | `run(add_history_to_context=...)` | `bool` | Inyecta historial en contexto |
-| `add_session_state_to_context` | `run(add_session_state_to_context=...)` | `bool` | Inyecta session_state en contexto |
-| `max_iterations` | `run(max_iterations=...)` (límite de loop) | `int` | Integer >= 1 |
+| `session_id` | `run(session_id=...)` (agent.py:1398) | `str \| None` | Continúa sesión existente (autogenerada si None) |
+| `session_state` | `run(session_state=...)` / Agent attr (agent.py:394,1399) | `dict` | Estado persistente entre turns |
+| `storage_type` | `db=` (SqliteDb/PostgresDb/RedisDb/...) (agent.py:407) | `str` | Resuelto vía DependencyManager (§1.3) |
+| `add_history_to_context` | `run(add_history_to_context=...)` (agent.py:1407) | `bool` | Inyecta historial en contexto |
+| `add_session_state_to_context` | `run(add_session_state_to_context=...)` (agent.py:1409) | `bool` | Inyecta session_state en contexto |
+| `add_dependencies_to_context` | `run(add_dependencies_to_context=...)` (agent.py:1408) | `bool` | Inyecta dependencies en contexto |
+| `metadata` | `run(metadata=...)` (agent.py:1411) | `dict` | Metadata adjunta al run |
+
+> **`max_iterations` REMOVIDO**: **no existe** como parámetro de `run()`/`arun()` en Agno
+> v2.6.18 (verificado en `agno/agent/agent.py:1391-1416,1444-1498`; cero coincidencias de
+> `max_iterations` en `libs/agno/agno/agent/`). El loop interno del agente se gobierna con
+> `tool_call_limit` (constructor, SPEC_11) y `retries`/`delay_between_retries`
+> (constructor, SPEC_14). Si yaml-agno necesita un budget global de iteraciones por request,
+> será una **extensión propia** sobre Agno (no un mapeo directo). Por ahora no se expone.
 
 > **@ai-directive (retention — FEATURE FUTURA)**: Agno **NO** tiene `retention_days` nativo ni un job de limpieza periódico listo. Hallazgos verificados en Agno v2.6.18:
 > - **`Curator.prune(max_age_days=)`** (parte de `LearningMachine`, `agno/learn/curate.py:36`) solo limpia el store `user_profile`, **no** las memorias generales. Es síncrono y standalone (no requiere agente corriendo).
@@ -240,10 +264,15 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
 }
 
 STORAGE_REGISTRY: dict[str, tuple[str, str]] = {
+    # @ai-directive: module paths verified against Agno v2.6.18 layout:
+    #   agno/db/sqlite/sqlite.py, agno/db/postgres/postgres.py,
+    #   agno/db/redis/redis.py, agno/db/in_memory/in_memory_db.py.
+    # Note: the in-memory module is agno.db.in_memory (NOT agno.db.memory, which
+    # does not exist).
     "sqlite":  ("agno.db.sqlite", "SqliteDb"),
     "postgres":("agno.db.postgres", "PostgresDb"),
     "redis":   ("agno.db.redis", "RedisDb"),
-    "memory":  ("agno.db.memory", "InMemoryDb"),
+    "memory":  ("agno.db.in_memory", "InMemoryDb"),
     # ... extensible via entry_points ...
 }
 
@@ -266,8 +295,9 @@ class DependencyManager:
     @lru_cache(maxsize=128)
     def resolve_class(self, module_path: str, class_name: str):
         """
-        Import module_path and return class_name. Cached.
+        Import module_path and return class_name. Cached. SYNC (not async).
         @ai-directive: module_path must be in an allowlist registry; never user input.
+        Callers invoke this WITHOUT await (it is a regular cached function).
         """
         module = importlib.import_module(module_path)   # raises ImportError if missing
         return getattr(module, class_name)
@@ -555,8 +585,9 @@ agent:
     # Session persistence
     session:
       store_history: true
-      # @ai-directive: num_history_messages is an Agno Agent attribute
-      # (agent.py:138), mutually exclusive with num_history_runs. NOT max_history_messages.
+      # @ai-directive: num_history_messages is an Agno Agent attribute (agent.py:421),
+      # mutually exclusive with num_history_runs (agent.py:420). NOT max_history_messages.
+      # When BOTH are None Agno defaults num_history_runs to 3 (agent.py:572-573).
       # These params are chatbot-oriented (multi-turn). For agentic single-shot flows
       # set add_history_to_context: false and omit them.
       add_history_to_context: true
@@ -782,7 +813,8 @@ class WorkflowFactory:
         self.deps = deps
 
     async def create(self, config: WorkflowConfig, agents: dict, teams: dict) -> "Workflow":
-        Workflow = await self.deps.resolve_class("agno.workflow", "Workflow")  # lazy
+        # resolve_class is SYNC (lru_cache); resolve_workflow_primitive IS async.
+        Workflow = self.deps.resolve_class("agno.workflow", "Workflow")  # lazy, no await
         workflow = Workflow(name=config.name, description=config.description)
 
         for step_config in config.steps:
@@ -795,18 +827,19 @@ class WorkflowFactory:
         step_type = step_config.get("type", "agent")
 
         # Agent/Team are the most common; their classes resolve lazily too.
+        # resolve_class is sync (lru_cache) -> do NOT await.
         if step_type == "agent":
             agent_name = step_config.get("agent")
             if agent_name not in agents:
                 raise ValueError(f"Agent not found: {agent_name}")
-            Step = await self.deps.resolve_class("agno.workflow", "Step")
+            Step = self.deps.resolve_class("agno.workflow", "Step")
             return Step(agent=agents[agent_name], execute=step_config.get("execute", True))
 
         if step_type == "team":
             team_name = step_config.get("team")
             if team_name not in teams:
                 raise ValueError(f"Team not found: {team_name}")
-            Step = await self.deps.resolve_class("agno.workflow", "Step")
+            Step = self.deps.resolve_class("agno.workflow", "Step")
             return Step(team=teams[team_name])
 
         # Parallel / Condition / Router / Loop: only the referenced primitive is imported.
@@ -1022,7 +1055,8 @@ AND the error message contains "Agent not found: nonexistent_agent"
 - **RED**:
   ```python
   async def test_session_manager_validates_unknown_storage():
-      config = SessionConfig(user_id="test", session_id="test", storage_type="unknown_db")
+      # @ai-directive: user_id is NOT a SessionConfig field (runtime-only, SPEC_04/06).
+      config = SessionConfig(session_id="test", storage_type="unknown_db")
       with pytest.raises(ValueError, match="Unknown storage_type"):
           await SessionManager(deps).validate(config)
   ```
