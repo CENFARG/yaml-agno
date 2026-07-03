@@ -6,9 +6,10 @@
 > cuando el proyecto avance a implementación.
 
 **Última actualización**: 2026-07-03
-**HEAD git**: `42a745f` (rama `feature/specs-agno-coverage-10-25`, 86 commits)
+**HEAD git**: `bd9119c` (rama `feature/specs-agno-coverage-10-25`, 90 commits)
 **Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
-**AUDITORÍA 32-SPEC COMPLETA**: 72 hallazgos → Waves 1-6 + verificación adversarial (11 contradicciones RESUELTAS) + SPEC_29 Q3/Q8 resueltas. Sin pendientes abiertos conocidos.
+**ÍNDICE/ORDEN**: specs/INDEX.md agrupa las 33 SPECs en 10 grupos temáticos (G1-G10) + Read_Order en cada frontmatter. Los archivos NO se renombraron (trazabilidad intacta); el orden de lectura se guía por INDEX.md/Read_Order, no por el número de archivo.
+**AUDITORÍA 32-SPEC COMPLETA**: 72 hallazgos → Waves 1-6 + verificación adversarial (11 contradicciones RESUELTAS) + SPEC_29 Q3/Q8. Sin pendientes abiertos conocidos.
 **user_id UNIFICADO**: composite `{tenant_id}:{principal_id}` SIEMPRE; `resolve_user_id()` (SPEC_04) es el único resolver; `TenantContextMiddleware` (SPEC_06) delega. Workflows autónomos también cubiertos por tenant isolation.
 
 ---
