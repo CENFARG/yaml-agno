@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Workflows", "#Teams", "#Coordination", "#ErrorRecovery", "#A2A"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_09"]
+Group: "G6-Orquestacion"
+Read_Order: 15
 Last_Updated: "2026-07-02"
 Revision_Note: "iter2: delegate inter-agent/inter-team wire protocol to Agno native A2A (removed custom message_protocol.py; ACP explicitly unsupported). Consume real core-cenf-py ErrorHandlingManager API (classify/report/handle/handle_errors, ErrorClassification TRANSIENT/PERMANENT/VALIDATION/AUTH/RATE_LIMIT; no CRITICAL, no should_retry, sync report). Scope retry_policy.py to the Agno step-level gap only (model retry owned by Agno Model fields; HITL retry native). Make retry/timeout values configurable YAML examples. Resolve strategic questions [Q1]/[Q2]/[Q3] via Agno evidence. Fix Agno version refs v2.6.14 -> v2.6.18."
 Revision_Note_Iter3: "Iter 3 - Wave 6 hygiene: mermaid edge label 'Critical error' -> 'PERMANENT error' to align with the ErrorClassification vocabulary (no CRITICAL category)."

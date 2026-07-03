@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#WorkflowHITL", "#HumanReview", "#StepRequirement", "#PauseKind", "#OnReject", "#OnTimeout", "#OnError", "#PauseExpiry", "#IterationReview", "#AgnoWorkflowTypes"]
 Dependency_Hashes: ["SPEC_05", "SPEC_16"]
+Group: "G5-Oversight-Seguridad-App"
+Read_Order: 12
 Last_Updated: "2026-07-03"
 Revision_Note: "iter2 - Resolved Q3 and Q8. Q3: on_reject='else' now fail-fast validated (OnRejectElseRequiresRouterError) on non-Router steps, since 'else' routes to an else branch only Router owns. Q8: added pause_expiry (configurable duration, default 24h) that ARCHIVES unresolved pauses for cost control; parsed from a duration string (e.g. '24h'); on-resume archive check is MVP, periodic sweep is post-MVP (SPEC_13). pause_expiry is a yaml-agno orchestrator concern (Agno has no native pause archiving), distinct from HumanReview.timeout+OnTimeout which AUTO-RESOLVES. Archived pauses record to SPEC_09 traces."
 ---

@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Culture", "#CultureManager", "#CulturalKnowledge", "#Experimental", "#CrossSession", "#LLMExtraction", "#Delegation"]
 Dependency_Hashes: ["SPEC_04", "SPEC_14"]
+Group: "G4-Memoria-Aprendizaje"
+Read_Order: 9
 Last_Updated: "2026-07-02"
 Revision_Note: "iter2 (Wave 4 collateral): fixed glued-backtick markdown (**RED`:/GREEN`:/Commit`: -> **RED**:/etc) across the TDD section so the steps render correctly. The DbRegistry import (from yaml_agno.persistence.registry import DbRegistry, attributed to SPEC_03) is now backed by the SPEC_03 iter4 DbRegistry definition. No content/concept changes."
 ---

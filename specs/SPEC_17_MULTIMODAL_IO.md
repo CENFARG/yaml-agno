@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Multimodal", "#Media", "#Images", "#Audio", "#Video", "#Files", "#ToolResult", "#FileStorage"]
 Dependency_Hashes: ["SPEC_02", "SPEC_11"]
+Group: "G3-Capacidades-Agente"
+Read_Order: 13
 Last_Updated: "2026-07-02"
 Revision_Note: "iter4 (Wave 4 contract fixes): run_multimodal_agent signature now passes input_text/run_id/tenant_id explicitly and reads send_media_to_model/store_media from MediaConfig (no AgentRunRequest DTO references remain); process_inputs call now passes run_id in the correct position matching the (media_type, inputs, tenant_id, run_id, session_id, storage_backend) signature; S3Adapter resolves AWS credentials explicitly via SecretManager at bootstrap (no ambient credential chain, aligns §13.3); removed dead _YamlagnoBase.metadata_schema attribute (kept __table_args__ schema); MediaType Literal defined once in models.py and imported in config.py."
 

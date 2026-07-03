@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Reasoning", "#ChainOfThought", "#ReasoningSteps", "#NativeReasoning", "#ReasoningEffort", "#ReasoningConfig", "#Streaming", "#AgnoReasoning"]
 Dependency_Hashes: ["SPEC_14", "SPEC_02"]
+Group: "G4-Memoria-Aprendizaje"
+Read_Order: 10
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 2 - Wave 6 hygiene: marked Q1/Q3 RESUELTA — reasoning_agent is exposed in MVP (name reference, mutually exclusive with reasoning_model); use_json_mode stays passthrough-only in MVP (not in the YAML block)."
 ---

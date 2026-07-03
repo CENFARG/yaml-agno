@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Skills", "#LocalSkills", "#SkillLoader", "#SKILL_md", "#ProgressiveDiscovery", "#Delegation", "#FilesystemSkills"]
 Dependency_Hashes: ["SPEC_11", "SPEC_01"]
+Group: "G3-Capacidades-Agente"
+Read_Order: 14
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 2 - Wave 6 hygiene: documented that the hot-reload snippet reaches into the PRIVATE agent._skills attribute (Agno v2.6.18 has no public reload entrypoint); access is isolated behind the skills_reload.py lifecycle hook with a TODO for a future public API."
 ---

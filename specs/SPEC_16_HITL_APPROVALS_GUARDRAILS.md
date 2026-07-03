@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#HITL", "#Approvals", "#Guardrails", "#PII", "#Secrets", "#Hooks", "#Safety", "#AgnoPreHooks"]
 Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_09"]
+Group: "G5-Oversight-Seguridad-App"
+Read_Order: 11
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 4 - Wave 6 hygiene: replaced fictitious model id 'gpt-5.2' with the real OpenAI model id 'gpt-4o' in the example Agent constructor. No other changes."
 ---
