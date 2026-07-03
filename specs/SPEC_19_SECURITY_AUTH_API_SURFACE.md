@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_19"
 Title: "Security, Auth and API Surface - JWT, RBAC, Per-User Isolation and Endpoint Catalog"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#JWT", "#RBAC", "#Scopes", "#PerUserIsolation", "#BasicAuth", "#
 Dependency_Hashes: ["SPEC_06", "SPEC_03", "SPEC_01"]
 Group: "G7-ControlPlane-API"
 Read_Order: 21
-Last_Updated: "2026-07-02"
-Revision_Note: "iter3 (collateral): updated SPEC_06 cross-references after SPEC_06 iter4 switched to an inheritance layer (class YamlAgentOS(AgentOS)). RateLimitMiddleware now §4.2, readiness/liveness §4.1, mounted via the subclass get_app() (§1-2). Per-user isolation is now NATIVE AgentOS user_isolation enabled by yaml-agno TenantContextMiddleware (composite user_id, §3); RBAC remains owned by yaml-agno. iter1/iter2 stand otherwise: JWTMiddleware imported from agno.os.middleware.jwt (configured, not reimplemented); CORS/SecurityHeaders merged over AgentOS defaults; tenant_id is Core Infra responsibility."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter4 (deep review vs agno v2.6.18). CRITICAL fix: build_jwt_middleware now accepts and forwards the required `app` first positional arg to agno.os.middleware.jwt.JWTMiddleware (BaseHTTPMiddleware subclass, super().__init__(app)); iter3 omitted it and the constructor cannot be instantiated. Added audience_claim passthrough. CRITICAL consistency fix: removed the yaml-agno UserIsolationEnforcer class (§4, TASK_008) — it duplicated NATIVE AgentOS user_isolation (JWTMiddleware(user_isolation=True) + agno.os.middleware.user_scope helpers get_scoped_user_id/resolve_db_and_scope). §4 now documents the native flow and the TenantContextMiddleware composite user_id contract. Clarified that JWT `sub` is resolved to composite {tenant_id}:{principal_id} by TenantContextMiddleware (SPEC_06) before isolation, and that BasicAuth (dev-only) sets a dev marker user_id that must NOT reach production composite-user stores. Added tenant dimension note to RbacConfig.users."
 ---
 
 # SPEC_19_SECURITY_AUTH_API_SURFACE
@@ -58,7 +58,18 @@ AgentOS soporta dos modos. yaml-agno los mapea desde `security.auth_mode` en YAM
 | **Basic Authentication** (`OS_SECURITY_KEY`) | Desarrollo, simple. **Deprecado** para prod. | `Authorization: Bearer <key>` | `OS_SECURITY_KEY` env var |
 | **Authorization (JWT + RBAC)** | Producción, multi-tenant, fine-grained. | `Authorization: Bearer <jwt>` | `authorization=True` + `AuthorizationConfig` |
 
-### 1.2 Basic Authentication (Legacy)
+### 1.2 Basic Authentication (Legacy, dev-only)
+
+> @ai-directive: Basic Auth is DEPRECATED and DEV-ONLY. It MUST NOT be enabled
+> in production. There is no JWT, hence no tenant context, hence NO composite
+> `{tenant_id}:{principal_id}` user_id. To stay consistent with the composite
+> user_id contract (SPEC_04 resolve_user_id, enforced everywhere else), Basic
+> Auth sets a DEV MARKER `user_id = "dev:basic-auth"` (NOT a bare "anonymous"
+> literal and NEVER None). This marker is single-tenant by construction and
+> MUST NOT reach production composite-user stores (sessions/memory persisted
+> under it would be isolated only within a dev tenant). For multi-tenant prod,
+> use JWT (§1.3) where the `sub` is resolved to a composite by
+> TenantContextMiddleware (SPEC_06 §3).
 
 ```python
 # yaml-agno/src/security/basic_auth.py
@@ -66,6 +77,9 @@ AgentOS soporta dos modos. yaml-agno los mapea desde `security.auth_mode` en YAM
 import os
 from fastapi import Request, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+# Dev-only marker. Single tenant; never persisted in prod composite-user stores.
+_DEV_BASIC_AUTH_USER_ID = "dev:basic-auth"
 
 class BasicAuthMiddleware:
     """
@@ -99,7 +113,10 @@ class BasicAuthMiddleware:
                 headers={"WWW-Authenticate": "Bearer"},
             )
         request.state.authenticated = True
-        request.state.user_id = "anonymous"
+        # Dev-only composite-shaped marker. Single tenant; NOT a bare principal
+        # and NOT None. TenantContextMiddleware (SPEC_06) still runs downstream
+        # but cannot derive a real tenant from Basic Auth — confirming dev-only.
+        request.state.user_id = _DEV_BASIC_AUTH_USER_ID
         request.state.scopes = ["agent_os:admin"]   # basic auth = acceso total
 
     @staticmethod
@@ -141,6 +158,7 @@ DEFAULT_EXCLUDED_ROUTES = [
 
 
 def build_jwt_middleware(
+    app,
     verification_keys: Optional[List[str]] = None,
     jwks_file: Optional[str] = None,
     algorithm: str = "RS256",
@@ -152,6 +170,7 @@ def build_jwt_middleware(
     scopes_claim: str = "scopes",
     user_id_claim: str = "sub",
     session_id_claim: str = "session_id",
+    audience_claim: str = "aud",
     audience: Optional[str | Iterable[str]] = None,
     verify_audience: bool = False,
     scope_mappings: Optional[dict[str, List[str]]] = None,
@@ -162,20 +181,28 @@ def build_jwt_middleware(
     """
     Construye el JWTMiddleware nativo de Agno con la configuracion de yaml-agno.
 
+    Args:
+        app: The FastAPI app instance. REQUIRED first positional arg —
+            ``agno.os.middleware.jwt.JWTMiddleware`` subclasses
+            ``BaseHTTPMiddleware`` whose ``__init__`` calls
+            ``super().__init__(app)``. Omitting it raises ``TypeError``.
+
     Lo que aporta Agno (no se reimplementa):
       - Extraccion de token (header/cookie/both)
       - Verificacion de firma contra verification_keys o JWKS (por kid)
       - Verificacion de exp y aud
       - Extraccion de scopes/user_id/session_id en request.state
       - Scope enforcement basico por ruta (authorization=True)
+      - Per-user isolation NATIVA (user_isolation=True wraps DB per-request)
 
     Lo que aporta yaml-agno (propio, sobre el middleware de Agno):
       - Configuracion declarada en el YAML (verification_keys, audience, scopes)
       - DEFAULT_EXCLUDED_ROUTES del catalogo de endpoints de yaml-agno
       - scope_mappings propios + fallback a EndpointRegistry.required_scopes
-      - Per-user isolation: filas por user_id para no-admins (tenant/user scope)
+      - RBAC por endpoint (ScopeEnforcer + EndpointRegistry, §2.3/§6.3)
     """
     return JWTMiddleware(
+        app,
         verification_keys=verification_keys,
         jwks_file=jwks_file,
         algorithm=algorithm,
@@ -187,6 +214,7 @@ def build_jwt_middleware(
         scopes_claim=scopes_claim,
         user_id_claim=user_id_claim,
         session_id_claim=session_id_claim,
+        audience_claim=audience_claim,
         audience=audience,
         verify_audience=verify_audience,
         scope_mappings=scope_mappings,
@@ -263,7 +291,7 @@ def extract_accessible_resource_ids(scopes: List[str]) -> set[str]:
 | Atributo | Tipo | Descripción |
 |----------|------|-------------|
 | `authenticated` | `bool` | Si el usuario está autenticado |
-| `user_id` | `Optional[str]` | User ID del claim `sub` |
+| `user_id` | `Optional[str]` | Composite `{tenant_id}:{principal_id}` (resolved by TenantContextMiddleware, SPEC_06, from the JWT `sub` + tenant context); NEVER a bare principal, NEVER None, NEVER "anonymous" |
 | `session_id` | `Optional[str]` | Session ID del claim |
 | `scopes` | `List[str]` | Scopes del token |
 | `audience` | `Optional[str]` | Claim `aud` |
@@ -608,65 +636,82 @@ security:
 
 ---
 
-## 4. PER-USER DATA ISOLATION
+## 4. PER-USER DATA ISOLATION (NATIVE AgentOS)
 
-### 4.1 Concepto
+> @ai-directive BUILD ON TOP: Per-user data isolation is OWNED by AgentOS, NOT
+> reimplemented by yaml-agno. Verified in `agno/os/middleware/jwt.py` and
+> `agno/os/middleware/user_scope.py` (agno v2.6.18):
+>   - `JWTMiddleware(user_isolation=True)` sets `request.state.user_isolation_enabled`.
+>   - `agno.os.middleware.user_scope` provides the helpers every scoped endpoint
+>     MUST call: `get_scoped_user_id(request)`, `resolve_db_and_scope(...)`,
+>     `enforce_owner_on_entity(...)`.
+> yaml-agno does NOT define its own `UserIsolationEnforcer` (removed in iter4 —
+> it duplicated the native flow). The earlier `request.state.user_id` coercion
+> is performed by the native helpers, not by a yaml-agno class.
 
-La autorización controla **qué operaciones** puede hacer un caller. El aislamiento per-user controla **qué filas** puede ver y escribir. Se activa con `user_isolation=True`.
+### 4.1 Concepto y flujo nativo
+
+La autorización controla **qué operaciones** puede hacer un caller. El
+aislamiento per-user controla **qué filas** puede ver y escribir. En yaml-agno
+se activa declarando `security.jwt.user_isolation: true` (§8.1), lo que
+`build_jwt_middleware` reenvía como `user_isolation=True` al `JWTMiddleware`
+nativo de Agno.
+
+Flujo nativo (verified, `agno/os/middleware/user_scope.py`):
+
+1. `JWTMiddleware` extrae el claim `sub` (configurable vía `user_id_claim`) y
+   lo deja en `request.state.user_id`.
+2. **TenantContextMiddleware (SPEC_06 §3)** corre después y resuelve el
+   `user_id` al formato composite `{tenant_id}:{principal_id}` requerido por
+   SPEC_04 (resolve_user_id). El `sub` del JWT NO se usa bare como user_id de
+   persistencia — siempre el composite.
+3. Cuando `user_isolation=True`, cada endpoint user-scoped llama a
+   `get_scoped_user_id(request)` (devuelve el composite para no-admins, o
+   `None` para admins / cuando el flag está off) y a
+   `resolve_db_and_scope(...)` para threadear el `user_id` en cada DB read.
+4. Los writes pasan por `enforce_owner_on_entity(...)` que coacciona/valida
+   `user_id` al composite del caller (no-admin no puede atribuir filas a otro).
 
 ```python
-# yaml-agno/src/security/user_isolation.py
+# Example of a yaml-agno endpoint using the NATIVE AgentOS helpers
+# (NOT a reimplemented enforcer):
+from agno.os.middleware.user_scope import get_scoped_user_id, resolve_db_and_scope
 
-from fastapi import Request
-
-class UserIsolationEnforcer:
-    """
-    Cuando user_isolation=True, los callers no-admin solo ven/escriben
-    filas asociadas a su JWT sub (user_id).
-
-    Operaciones afectadas:
-    - Reads (sessions, memories, traces): scoped a caller.user_id
-    - Writes: user_id se coacciona al sub del caller
-    - Cancel/resume/continue: requieren session_id y verifican ownership
-    - WebSocket reconnect: requiere session_id para no-admins
-    """
-
-    def __init__(self, admin_scope: str = "agent_os:admin"):
-        self.admin_scope = admin_scope
-
-    def effective_user_id(self, request: Request, requested_user_id: str | None) -> str:
-        """Coacciona user_id: no-admin no puede atribuir filas a otro usuario."""
-        if getattr(request.state, "is_admin", False):
-            return requested_user_id or request.state.user_id
-        return request.state.user_id   # SIEMPRE el sub del caller
-
-    def can_access_resource(self, request: Request, resource_user_id: str) -> bool:
-        if getattr(request.state, "is_admin", False):
-            return True
-        return resource_user_id == request.state.user_id
-
-    def owns_session(self, request: Request, session_user_id: str) -> bool:
-        if getattr(request.state, "is_admin", False):
-            return True
-        return session_user_id == request.state.user_id
+@router.get("/sessions")
+async def list_sessions(request: Request, db = Depends(...)):
+    scoped_user_id = get_scoped_user_id(request)   # None for admins / when off
+    return await db.get_sessions(user_id=scoped_user_id)
 ```
 
-### 4.2 Comportamiento por Operación
+### 4.2 Comportamiento por Operación (native)
 
 | Operación | Comportamiento con `user_isolation=True` |
 |-----------|------------------------------------------|
-| Reads (sessions, memory, traces) | Scoped al `user_id` del caller. Filas de otros usuarios no se retornan |
-| Writes (sessions, memories, traces) | `user_id` se coacciona al `sub` del caller. No puede atribuir filas a otro |
-| Cancel / resume / continue | Requiere `session_id` y verifica ownership del run |
+| Reads (sessions, memory, traces) | `get_scoped_user_id` devuelve el composite del caller; filas de otros no se retornan |
+| Writes (sessions, memories, traces) | `enforce_owner_on_entity` coacciona el composite del caller; no se puede atribuir a otro |
+| Cancel / resume / continue | Requiere `session_id` y `resolve_db_and_scope` verifica ownership del run |
 | WebSocket reconnect | Requiere `session_id` (y `workflow_id`) para no-admins |
 
-### 4.3 Admin Bypass
+### 4.3 Admin Bypass (native)
 
-Un caller con `admin_scope` (default `agent_os:admin`) **bypassa** el aislamiento y ve todos los datos. Customizable con `admin_scope="ops:admin"`.
+`get_scoped_user_id` devuelve `None` cuando el caller tiene `admin_scope`
+(default `agent_os:admin`, configurable vía `JWTMiddleware(admin_scope=...)`).
+Con `None`, la query no se filtra por `user_id` y el admin ve todo.
+Customizable con `admin_scope="ops:admin"`.
 
 ### 4.4 Requisito de DB
 
-El aislamiento requiere una DB que registre `user_id`. PostgreSQL recomendado para producción (ver SPEC_03). Sin `user_id` en filas, el aislamiento no tiene efecto.
+El aislamiento requiere una DB que registre `user_id` composite en filas.
+PostgreSQL recomendado para producción (ver SPEC_03). Sin `user_id` en filas,
+el aislamiento no tiene efecto.
+
+### 4.5 Origen del composite user_id
+
+> @ai-directive: el `user_id` que el aislamiento native usa SIEMPRE proviene del
+> composite `{tenant_id}:{principal_id}`. El `sub` del JWT es el `principal_id`
+> bruto; TenantContextMiddleware (SPEC_06) lo combina con el `tenant_id`
+> resuelto por TenantResolver (SPEC_03). yaml-agno nunca persiste un `sub` bare
+> ni un "anonymous". Esto es consistente con SPEC_04 resolve_user_id.
 
 ---
 
@@ -1034,9 +1079,9 @@ class AuditLogger:
 sequenceDiagram
     participant C as Client
     participant R as RateLimiter (SPEC_06)
-    participant J as JWTMiddleware
+    participant J as JWTMiddleware (Agno native)
+    participant T as TenantContextMiddleware (SPEC_06)
     participant E as ScopeEnforcer
-    participant I as UserIsolation
     participant H as Handler
     participant A as AuditLogger
 
@@ -1044,14 +1089,17 @@ sequenceDiagram
     R->>R: check tenant/IP buckets
     R->>J: pass
     J->>J: decode + verify sig/exp/aud
-    J->>J: extract scopes, user_id
-    J->>E: enforce required scopes
+    J->>J: extract scopes, sub
+    J->>T: request.state.user_id = sub
+    T->>T: resolve composite {tenant}:{principal}
+    T->>E: request.state.user_id = composite
+    E->>E: enforce required scopes (EndpointRegistry)
     alt scopes insuficientes
         E-->>C: 403 Forbidden
         E->>A: log authz.denied
     else ok
-        E->>I: apply user_isolation
-        I->>H: handler(coerced user_id)
+        E->>H: handler
+        H->>H: get_scoped_user_id (Agno native user_scope)
         H-->>C: 200 result
         H->>A: log auth.success
     end
@@ -1137,7 +1185,10 @@ rbac:
       description: "Solo observabilidad"
 
   users:
-    - user_id: alice@corp.com
+    # user_id is the principal_id; tenant dimension is resolved at request time
+    # by TenantContextMiddleware (SPEC_06) -> composite {tenant_id}:{principal_id}.
+    # The same principal may map to different roles across tenants.
+    - user_id: alice@corp.com      # principal
       roles: [administrator]
     - user_id: bob@corp.com
       roles: [developer, data_scientist]
@@ -1223,6 +1274,11 @@ class RoleDef(BaseModel):
     description: str = ""
 
 class UserDef(BaseModel):
+    # principal_id; the effective key is composite {tenant_id}:{principal_id}
+    # resolved by TenantContextMiddleware (SPEC_06). The tenant dimension lives
+    # on the tenant registry (SPEC_03 TenantResolver), NOT duplicated here —
+    # UserDef binds a principal to roles WITHIN a tenant scope established at
+    # request time. A principal may hold different roles in different tenants.
     user_id: str
     roles: List[str] = Field(default_factory=list)
 
@@ -1468,7 +1524,7 @@ Strict TDD RED/GREEN/REFACTOR.
       resp = await app_with_jwt(headers={"Authorization": f"Bearer {token}"}, expect=401)
       assert resp.status_code == 401
   ```
-- **GREEN**: Implement `build_jwt_middleware(app, jwt_config)` that configures Agno's `JWTMiddleware` (passing `app` as the required first positional arg). Do NOT define a local JWTMiddleware class.
+- **GREEN**: Implement `build_jwt_middleware(app, jwt_config)` that configures Agno's `JWTMiddleware`. The function MUST accept `app` (FastAPI) as the required first positional arg and forward it to `JWTMiddleware(app, ...)` — `JWTMiddleware` subclasses `BaseHTTPMiddleware` whose `__init__` calls `super().__init__(app)`, so omitting `app` raises `TypeError`. Do NOT define a local JWTMiddleware class.
 - **Commit**: `feat(security): wire yaml-agno config to Agno JWTMiddleware`
 
 ### TASK_003: JWT token sources (header/cookie/both) via Agno config
@@ -1590,34 +1646,34 @@ Strict TDD RED/GREEN/REFACTOR.
 - **GREEN**: Implementar `RBACManager` con roles default y custom.
 - **Commit**: `feat(security): add rbac manager`
 
-### TASK_008: UserIsolationEnforcer
-- **File**: `yaml-agno/src/security/user_isolation.py`
-- **Test**: `tests/unit/security/test_user_isolation.py`
+### TASK_008: Native AgentOS user_isolation integration (no enforcer class)
+- **@ai-directive**: yaml-agno does NOT implement its own isolation enforcer (removed in iter4). `user_isolation` is NATIVE to AgentOS via `JWTMiddleware(user_isolation=True)` + `agno.os.middleware.user_scope` helpers. This task verifies the INTEGRATION: that `build_jwt_middleware` forwards `user_isolation=True`, and that yaml-agno endpoints delegate to the native `get_scoped_user_id` / `resolve_db_and_scope` instead of a local enforcer.
+- **File**: `yaml-agno/src/security/jwt_config.py` (wiring) + `yaml-agno/src/api/` (endpoint delegates)
+- **Test**: `tests/unit/security/test_user_isolation_integration.py`
 - **RED**:
   ```python
-  def test_coerce_user_id_non_admin():
-      enforcer = UserIsolationEnforcer()
-      req = FakeRequest(state=State(user_id="alice", is_admin=False))
-      assert enforcer.effective_user_id(req, requested_user_id="bob") == "alice"
+  def test_build_jwt_middleware_forwards_user_isolation(app):
+      mw = build_jwt_middleware(app, verification_keys=[KEY], algorithm="HS256",
+                                user_isolation=True)
+      # The native JWTMiddleware stores the flag; verify it propagates.
+      assert mw.user_isolation is True
 
-  def test_coerce_user_id_admin_passes_through():
-      enforcer = UserIsolationEnforcer()
-      req = FakeRequest(state=State(user_id="admin", is_admin=True))
-      assert enforcer.effective_user_id(req, requested_user_id="bob") == "bob"
+  def test_no_local_enforcer_class_exists():
+      # Regression: ensure the iter3 UserIsolationEnforcer was removed.
+      import importlib, pathlib
+      pkg = pathlib.Path("yaml-agno/src/security")
+      assert not (pkg / "user_isolation.py").exists(), \
+          "UserIsolationEnforcer must not exist; isolation is native AgentOS"
 
-  def test_can_access_resource_owner():
-      enforcer = UserIsolationEnforcer()
-      req = FakeRequest(state=State(user_id="alice", is_admin=False))
-      assert enforcer.can_access_resource(req, "alice") is True
-      assert enforcer.can_access_resource(req, "bob") is False
-
-  def test_can_access_resource_admin():
-      enforcer = UserIsolationEnforcer()
-      req = FakeRequest(state=State(user_id="admin", is_admin=True))
-      assert enforcer.can_access_resource(req, "bob") is True
+  async def test_endpoint_uses_native_get_scoped_user_id(mocker):
+      # A yaml-agno session-listing endpoint calls get_scoped_user_id, not a local class.
+      scoped = mocker.patch("agno.os.middleware.user_scope.get_scoped_user_id",
+                            return_value="acme:alice")
+      ...
+      assert scoped.called
   ```
-- **GREEN**: Implementar `UserIsolationEnforcer`.
-- **Commit**: `feat(security): add user isolation enforcer`
+- **GREEN**: Wire `user_isolation` through `build_jwt_middleware`; ensure endpoints call the native helpers. Delete any stale `user_isolation.py` enforcer.
+- **Commit**: `feat(security): delegate user_isolation to native AgentOS user_scope`
 
 ### TASK_009: CorsConfigurator
 - **File**: `yaml-agno/src/security/cors.py`
@@ -1744,8 +1800,8 @@ Strict TDD RED/GREEN/REFACTOR.
 ### [Decisión 2] Scopes jerárquicos con wildcard solo en agents/teams/workflows
 El scoping per-recurso (`resource:<id>:action`) es poderoso pero complejo. Limitarlo a los tres recursos "runneables" mantiene el modelo manejable. Sessions/memories/knowledge/traces usan scopes globales + aislamiento per-user.
 
-### [Decisión 3] user_isolation opt-in
-Off por defecto porque requiere DB con `user_id` en filas. On en producción multi-tenant. El `sub` del JWT es la fuente de verdad del `user_id`.
+### [Decisión 3] user_isolation opt-in (NATIVE AgentOS)
+Off por defecto porque requiere DB con `user_id` composite en filas. On en producción multi-tenant. La fuente de verdad del `user_id` es el composite `{tenant_id}:{principal_id}` derivado por TenantContextMiddleware (SPEC_06) a partir del `sub` del JWT — nunca el `sub` bare. El mecanismo de scoping (read/write coercion, ownership) es NATIVO de AgentOS (`agno.os.middleware.user_scope`); yaml-agno solo lo activa y cablea.
 
 ### [Decisión 4] Admin bypass explicito
 `agent_os:admin` bypassa scopes Y isolation. Es deliberado: los ops necesitan ver todo para debugging. Customizable via `admin_scope`.
