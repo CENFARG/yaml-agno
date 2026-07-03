@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_28"
 Title: "Reasoning Architecture - Declarative Step-based and Native Model Reasoning"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Reasoning", "#ChainOfThought", "#ReasoningSteps", "#NativeReaso
 Dependency_Hashes: ["SPEC_14", "SPEC_02"]
 Group: "G4-Memoria-Aprendizaje"
 Read_Order: 10
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 2 - Wave 6 hygiene: marked Q1/Q3 RESUELTA — reasoning_agent is exposed in MVP (name reference, mutually exclusive with reasoning_model); use_json_mode stays passthrough-only in MVP (not in the YAML block)."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter3 (deep adversarial review vs Agno v2.6.18 source). CRITICAL fix: the native-detection method on agno.reasoning.ReasoningManager is `is_native_reasoning_model()`, NOT `detect_native_reasoning()` (verified manager.py:187-192) — corrected all 3 occurrences (section 2.4, mermaid 5.2, Scenario 6). ReasoningConfig documented fields completed with the 3 additional dataclass fields present in source (debug_level, run_context, run_metrics) — these remain out-of-MVP YAML surface but are now accurately listed so the spec does not understate the Agno type. ReasoningStep documented with its real `reasoning` field. ReasoningSteps confirmed as pydantic BaseModel (already correct)."
 ---
 
 # SPEC_28_REASONING_ARCHITECTURE
@@ -99,9 +99,14 @@ class ReasoningConfig:
     use_json_mode: bool = False
     telemetry: bool = True
     debug_mode: bool = False
+    # additional fields present in Agno source (manager.py:78-93), NOT exposed
+    # in the yaml-agno YAML block in MVP — they take Agno defaults:
+    debug_level: Optional[LogLevel] = None
+    run_context: Optional[RunContext] = None
+    run_metrics: Optional[RunMetrics] = None
 ```
 
-`ReasoningConfig` is the structured config Agno's `ReasoningManager` consumes. Note the ABSENCE of any `reasoning_effort` field — confirmation that effort is NOT a reasoning concern.
+`ReasoningConfig` is the structured config Agno's `ReasoningManager` consumes. Note the ABSENCE of any `reasoning_effort` field — confirmation that effort is NOT a reasoning concern. The three trailing fields (`debug_level`, `run_context`, `run_metrics`) exist on the Agno type; yaml-agno does NOT expose them in the YAML block in MVP (they default to `None`) but lists them here so the spec faithfully reflects the imported type rather than understating it.
 
 ### 2.3 ReasoningStep, ReasoningSteps, NextAction
 
@@ -118,13 +123,15 @@ class ReasoningStep:
     title: str
     action: str
     result: str
+    reasoning: Optional[str] = None   # the thinking/thought text (Agno source: step.py:22)
     confidence: Optional[float] = None
     next_action: NextAction = NextAction.continue
 
-@dataclass
-class ReasoningSteps(BaseModel):
-    steps: List[ReasoningStep]
+class ReasoningSteps(BaseModel):      # pydantic BaseModel (NOT a dataclass), step.py:30-32
+    reasoning_steps: List[ReasoningStep]
 ```
+
+> **Verified against Agno source**: `ReasoningStep` carries an optional `reasoning` field holding the model's thinking text; `ReasoningSteps` is a pydantic `BaseModel` whose list attribute is named `reasoning_steps` (yaml-agno imports it verbatim and does not rename).
 
 ### 2.4 ReasoningManager (native detection)
 
@@ -132,12 +139,14 @@ class ReasoningSteps(BaseModel):
 # agno/reasoning/manager.py (IMPORTED)
 class ReasoningManager:
     def __init__(self, config: ReasoningConfig, ...): ...
-    def detect_native_reasoning(self) -> bool: ...
+    def is_native_reasoning_model(self) -> bool: ...   # REAL method name (manager.py:187-192)
     # uses helpers: is_openai_reasoning_model, is_anthropic_reasoning_model,
     #               is_deepseek_reasoning_model, etc.
 ```
 
 When `reasoning=True` and the primary (or `reasoning_model`) provider exposes native reasoning, the manager delegates to the provider's thinking channel and surfaces those tokens as `ReasoningStep`s. Otherwise it drives the step-based loop.
+
+> @ai-directive (naming SSOT): the detection method is `is_native_reasoning_model()`. An earlier draft referenced `detect_native_reasoning()` — that method does NOT exist in Agno v2.6.18 and must not appear in yaml-agno code or docs.
 
 ---
 
@@ -250,7 +259,7 @@ agent:
 | `google`, `mistral`, `cohere`, `xai`, `meta`, etc. | no | n/a | step-based only |
 | `ollama`, `llamacpp`, `lm_studio`, `vllm` | conditional | model-dependent | step-based fallback |
 
-> @ai-directive: yaml-agno does NOT replicate `is_*_reasoning_model` helpers. It reads the boolean result from Agno's `ReasoningManager.detect_native_reasoning()` and reports it in the resolved agent's capabilities for telemetry. The detection logic is Agno's SSOT.
+> @ai-directive: yaml-agno does NOT replicate `is_*_reasoning_model` helpers. It reads the boolean result from Agno's `ReasoningManager.is_native_reasoning_model()` and reports it in the resolved agent's capabilities for telemetry. The detection logic is Agno's SSOT.
 
 ### 5.2 Detection flow
 
@@ -261,7 +270,7 @@ graph TD
     RCFG --> AGENT["Agent(reasoning=True)"]
     AGENT --> RUN["agent.arun()"]
     RUN --> MGR["ReasoningManager"]
-    MGR --> DETECT{"detect_native_reasoning()"}
+    MGR --> DETECT{"is_native_reasoning_model()"}
     DETECT -->|yes| NATIVE["Native reasoning tokens via provider"]
     DETECT -->|no| LOOP["Step-based loop (min..max_steps)"]
     NATIVE --> STEPS["ReasoningSteps surface"]
@@ -511,7 +520,7 @@ AND SPEC_14's ModelCapabilitiesValidator raises a capability error
 ```gherkin
 GIVEN an agent with reasoning=True and model provider=openai_responses id=o3
 WHEN the agent runs
-THEN ReasoningManager.detect_native_reasoning() returns True
+THEN ReasoningManager.is_native_reasoning_model() returns True
 AND reasoning tokens are surfaced as ReasoningSteps from the native channel
 AND the step-based loop is not the primary driver
 ```
@@ -520,7 +529,7 @@ AND the step-based loop is not the primary driver
 ```gherkin
 GIVEN an agent with reasoning=True and model provider=mistral
 WHEN the agent runs
-THEN detect_native_reasoning() returns False
+THEN is_native_reasoning_model() returns False
 AND Agno drives the step-based loop bounded by min_steps..max_steps
 ```
 
@@ -618,7 +627,7 @@ def test_disabled_reasoning_does_not_resolve_model(monkeypatch):
 
 ### TASK_005: Native detection passthrough (telemetry)
 - **Test**: `test_native_detection_reported_from_agno`
-- **RED**: build an agent, run, assert the resolved capabilities report `native_reasoning` matching `ReasoningManager.detect_native_reasoning()` (use a fake model Agno classifies as openai reasoning).
+- **RED**: build an agent, run, assert the resolved capabilities report `native_reasoning` matching `ReasoningManager.is_native_reasoning_model()` (use a fake model Agno classifies as openai reasoning).
 - **GREEN**: read Agno's detector result and store on capabilities; do NOT reimplement detection.
 - **Commit**: `feat(reasoning): report native detection from Agno ReasoningManager`
 
@@ -647,7 +656,7 @@ async def test_probe_reasoning_models_concurrent():
 3. **IMPORTED enums/types**: `ReasoningStep`, `ReasoningSteps`, `NextAction`, `ReasoningConfig`, `ReasoningManager` are IMPORTED from Agno. No yaml-agno mirror enum.
 4. **Lazy resolution**: the `reasoning_model` is materialized via DependencyManager only when reasoning is enabled, avoiding cost (and API key reads) for disabled blocks.
 5. **Multi-tenant**: `tenant_id` is passed by Core Infra to the factory but NEVER embedded in `ReasoningConfig` (which is Agno-owned and tenant-agnostic).
-6. **Native detection SSOT**: Agno's `detect_native_reasoning()` is the single source. yaml-agno reports its result; it does not maintain its own provider matrix for detection (it does maintain a documentation matrix in section 5.1 only).
+6. **Native detection SSOT**: Agno's `is_native_reasoning_model()` is the single source. yaml-agno reports its result; it does not maintain its own provider matrix for detection (it does maintain a documentation matrix in section 5.1 only).
 7. **Streaming**: `ReasoningEvent` is Agno's event; yaml-agno forwards it without a custom type.
 8. **Bounds cap**: a global `max_steps` ceiling of 50 (Core Infra configurable) prevents runaway loops.
 
