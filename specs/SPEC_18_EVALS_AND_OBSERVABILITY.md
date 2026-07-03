@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_18"
 Title: "Evals and Observability Integrations - Agno Evals and OTel Provider Catalog"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Evals", "#AccuracyEval", "#PerformanceEval", "#ReliabilityEval"
 Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_01", "SPEC_27"]
 Group: "G8-Ops-Observabilidad"
 Read_Order: 24
-Last_Updated: "2026-07-02"
-Revision_Note: "iter3 (Wave 4): eval_runs is now a yamlagno.* config-store table (yamlagno_eval_runs, schema yamlagno, tenant_id NOT NULL, explicit WHERE) — NOT Agno agno_* (no such Agno eval_runs table exists and agno_* cannot carry tenant_id per A.9/A.11); added EvalRunRecord DeclarativeBase provisioned by ConfigStoreProvisioner; documented _persist as a NO-OP when db is None so TASK_005/TASK_012 (db=None) pass without a fake db while persistence-asserting tests must pass one."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter4 - Deep adversarial review vs agno/eval real source. (1) ReliabilityEvalAdapter fixed: run()/arun() take ONLY print_results; the response is a CONSTRUCTOR field, so build() now accepts the response and evaluate() constructs a fresh eval per response (reliability.py:216,302). (2) Removed false 'pip install memory_profiler' claim — Agno PerformanceEval uses stdlib tracemalloc (performance.py:2). (3) Resolved two internal contradictions with section 2.3: Mermaid section 7.1 node M and BDD Scenario 1 now reference yamlagno_eval_runs (schema yamlagno) instead of agno_* tables. Eval constructors (AccuracyEval, AgentAsJudgeEval, PerformanceEval, ReliabilityEval), run/arun pairs, run_with_output, AccuracyResult.avg_score, assert_passed, and AgnoInstrumentor.instrument all verified against real source."
 ---
 
 # SPEC_18_EVALS_AND_OBSERVABILITY
@@ -247,7 +247,7 @@ class PerformanceEvalAdapter:
         )
 ```
 
-**Requiere**: `pip install memory_profiler`. El `func_ref` resuelve a una callable registrada (factory de agente o función `run_agent`).
+**Requiere**: Agno's `PerformanceEval` mide memoria con la stdlib `tracemalloc` (`agno/eval/performance.py`) — NO requiere `pip install memory_profiler`. El `func_ref` resuelve a una callable registrada (factory de agente o función `run_agent`).
 
 ### 1.5 ReliabilityEval - Tool Calls y Errores
 
@@ -264,6 +264,11 @@ class ReliabilityEvalAdapter:
     Verifica que el agente/team haga los tool calls esperados.
     Acepta agent_response (RunOutput) o team_response (TeamRunOutput).
     expected_tool_calls: lista de nombres de tools que debieron invocarse.
+
+    @ai-directive (real API): ReliabilityEval.run()/arun() take ONLY ``print_results``
+    (reliability.py:216, :302). The agent/team response is a CONSTRUCTOR field, NOT a
+    run() kwarg. So the response must be passed to build() and a fresh ReliabilityEval
+    is constructed per response (the eval is a dataclass, cheap to build).
     """
 
     def __init__(
@@ -274,18 +279,53 @@ class ReliabilityEvalAdapter:
         self.name = name
         self.expected_tool_calls = expected_tool_calls
 
-    def build(self) -> ReliabilityEval:
-        return ReliabilityEval(
-            name=self.name,
-            expected_tool_calls=self.expected_tool_calls,
-        )
+    def build(
+        self,
+        response: Optional[RunOutput | TeamRunOutput] = None,
+    ) -> ReliabilityEval:
+        """Build a ReliabilityEval wired with the response to score.
 
-    def evaluate(self, eval_obj: ReliabilityEval, response: RunOutput | TeamRunOutput) -> Optional[ReliabilityResult]:
-        # Distinguir agent vs team por tipo
+        Args:
+            response: the RunOutput (agent) or TeamRunOutput (team) to evaluate.
+                Required before run()/arun(); ReliabilityEval enforces exactly one of
+                agent_response / team_response at run time.
+
+        Returns:
+            A ReliabilityEval with expected_tool_calls and the response set.
+        """
+        kwargs: dict = {
+            "name": self.name,
+            "expected_tool_calls": self.expected_tool_calls,
+        }
         if isinstance(response, TeamRunOutput):
-            result = eval_obj.run(team_response=response, print_results=False)
-        else:
-            result = eval_obj.run(agent_response=response, print_results=False)
+            kwargs["team_response"] = response
+        elif isinstance(response, RunOutput):
+            kwargs["agent_response"] = response
+        return ReliabilityEval(**kwargs)
+
+    def evaluate(
+        self,
+        response: RunOutput | TeamRunOutput,
+    ) -> Optional[ReliabilityResult]:
+        """Build a fresh eval wired to ``response`` and run it synchronously.
+
+        Args:
+            response: the RunOutput (agent) or TeamRunOutput (team) to evaluate.
+
+        Returns:
+            The ReliabilityResult, or None if the underlying eval returned None.
+        """
+        eval_obj = self.build(response=response)
+        result = eval_obj.run(print_results=False)
+        return result
+
+    async def arun_evaluate(
+        self,
+        response: RunOutput | TeamRunOutput,
+    ) -> Optional[ReliabilityResult]:
+        """Async variant of evaluate()."""
+        eval_obj = self.build(response=response)
+        result = await eval_obj.arun(print_results=False)
         return result
 ```
 
@@ -1494,7 +1534,7 @@ flowchart TD
     I --> J{mean >= threshold?}
     J -- yes --> K[status=passed]
     J -- no --> L[status=failed\nthreshold_breached=true]
-    K --> M[Persist to operational db\nagno_* tables]
+    K --> M["Persist to yamlagno config store\nyamlagno_eval_runs (schema yamlagno)"]
     L --> M
     M --> N["obs.increment_counter\neval_run_total{status}"]
     N --> O[Return EvalRunResult\n+ eval_run_id]
@@ -1532,7 +1572,7 @@ Scenario 1: Golden Path - AccuracyEval pasa sobre dataset
   AND el evaluator model puntúa cada respuesta contra expected_output
   AND el aggregate.mean_score >= 8.0
   AND el eval_run.status pasa a "passed"
-  AND el resultado se persiste en el db operativo (tablas agno_*)
+  AND el resultado se persiste en la tabla yamlagno_eval_runs (schema yamlagno)
   AND la métrica eval_run_total{status=passed} se incrementa
 ```
 
