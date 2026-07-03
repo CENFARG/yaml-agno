@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PodSecurityStandards", "#NetworkPolicies", "#RBAC", "#SupplyChain", "#Cosign", "#Kyverno", "#Falco", "#OWASP", "#GDPR", "#SOC2", "#ZeroTrust", "#CloudRun", "#IAM"]
 Dependency_Hashes: ["SPEC_19", "SPEC_21"]
+Group: "G9-Deploy-UI-Periferica"
+Read_Order: 31
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 4 - Wave 6 hygiene: removed the @ai-directive tag from a plain prose note (the Cloud Run vs K8s contextual paragraph); @ai-directive is now kept only on pseudo-code/instructions. No behavioral change."
 ---

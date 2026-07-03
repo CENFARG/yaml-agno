@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Docker", "#Build", "#MultiStage", "#Buildx", "#MultiArch", "#Distroless", "#OCI", "#HealthCheck", "#Compose", "#ConfigManager", "#SecretManager", "#CloudRun", "#Kubernetes"]
 Dependency_Hashes: ["SPEC_12", "SPEC_06", "SPEC_09"]
+Group: "G9-Deploy-UI-Periferica"
+Read_Order: 27
 Last_Updated: "2026-06-17"
 Revision_Note: "iter1 — dual deployment target (Cloud Run primary, Kubernetes future); clarified main:app wrapper over AgentOS.get_app(); moved sllim typo to a separate test fixture; removed leaked absolute Windows path."
 ---

@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#CICD", "#GitHubActions", "#TDD", "#SecurityScans", "#SBOM", "#GitOps", "#ArgoCD", "#Helm", "#GHCR", "#QualityGates", "#ReleaseAutomation", "#CoverageGate", "#CloudRun", "#uv"]
 Dependency_Hashes: ["SPEC_20", "SPEC_21"]
+Group: "G9-Deploy-UI-Periferica"
+Read_Order: 28
 Last_Updated: "2026-06-17"
 Revision_Note: "Wave-5 artefact-location SSOT: Dockerfile + docker-compose.yml live at repo root per SPEC_20; fixed all deploy/docker/Dockerfile and deploy/compose/agentos-smoke.yml refs to repo root. Fixed cross-ref ArgoCD/Argo Rollouts SPEC_20 -> SPEC_21 (SPEC_20 is Docker-only). Fixed e2e smoke probe GET /health -> /healthz (decided endpoints are /healthz and /readyz only)."
 ---

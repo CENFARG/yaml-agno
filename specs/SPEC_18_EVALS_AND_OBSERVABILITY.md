@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Evals", "#AccuracyEval", "#PerformanceEval", "#ReliabilityEval", "#AgentAsJudge", "#OpenTelemetry", "#Langfuse", "#Langsmith", "#Tracing", "#ObservabilityManager"]
 Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_01", "SPEC_27"]
+Group: "G8-Ops-Observabilidad"
+Read_Order: 24
 Last_Updated: "2026-07-02"
 Revision_Note: "iter3 (Wave 4): eval_runs is now a yamlagno.* config-store table (yamlagno_eval_runs, schema yamlagno, tenant_id NOT NULL, explicit WHERE) — NOT Agno agno_* (no such Agno eval_runs table exists and agno_* cannot carry tenant_id per A.9/A.11); added EvalRunRecord DeclarativeBase provisioned by ConfigStoreProvisioner; documented _persist as a NO-OP when db is None so TASK_005/TASK_012 (db=None) pass without a fake db while persistence-asserting tests must pass one."
 ---

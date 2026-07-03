@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#ConfigManager", "#SecretManager", "#ZeroTrust", "#FeatureFlags", "#HotReload", "#MultiTenant", "#Vault", "#PydanticV2", "#Rotation", "#AuditLog", "#ConfigDB", "#CoreConsumer"]
 Dependency_Hashes: ["SPEC_03", "SPEC_00", "SPEC_02"]
+Group: "G8-Ops-Observabilidad"
+Read_Order: 25
 Last_Updated: "2026-06-17"
 Revision_Note: "Wave-5 alignment: Env enum SSOT resolved to dev|staging|prod (§2.2 pattern + §2.3 get_env() contract aligned; local is treated as dev and documented, test removed from the Env pattern). actor/updated_by columns now specified as composite user_id form {tenant}:{principal} per SPEC_04 A.1. Fixed BDD §2.7 wording: get_secret is async, await get_secret()."
 ---

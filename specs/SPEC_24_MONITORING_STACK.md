@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Prometheus", "#Grafana", "#Loki", "#Alertmanager", "#Tempo", "#OpenTelemetry", "#SRE", "#SLI", "#SLO", "#MonitoringAsCode", "#CloudRun", "#CloudMonitoring"]
 Dependency_Hashes: ["SPEC_09", "SPEC_21", "SPEC_27"]
+Group: "G9-Deploy-UI-Periferica"
+Read_Order: 30
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 3 - Wave 6 hygiene: added a one-line note at the first metric-table use clarifying tenant_id is telemetry-only (label/log field), NOT a column on agno_* tables (tenant scoping on persistence is the composite user_id). No other changes."
 ---

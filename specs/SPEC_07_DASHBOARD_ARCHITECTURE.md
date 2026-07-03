@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#UI", "#Playground", "#agent-ui", "#Strategy"]
 Dependency_Hashes: ["SPEC_00", "SPEC_06"]
+Group: "G9-Deploy-UI-Periferica"
+Read_Order: 26
 Last_Updated: "2026-07-02"
 Revision_Note: "iter3 (user corrections 1/3 + agent-platform-railway). Added §2.2 'Despliegue seguro' (obligatory practices: no-root container, JWT refuse-to-start, SecretManager for secrets, .env/.env.production split, network isolation, backend sanitization, image scanning) — Docker alone is NOT enough. Added §2.3 cherry-pick of agent-platform-railway (Apache-2.0, official Agno): reuse its Docker/JWT/Postgres/Railway infra but REJECT its chat-centric model because yaml-agno targets autonomous agents/teams/workflows. §3.2 added versioning directive: follow agent-ui upstream versions (Next 15 line); do not pin below upstream. iter2 content stands otherwise."
 ---

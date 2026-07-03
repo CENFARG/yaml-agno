@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
+Group: "G10-Meta"
+Read_Order: 32
 Last_Updated: "2026-07-02"
 Revision_Note: "Iter 8 - Wave 6 hygiene: Q2 wording aligned to the SPEC_04 reformulation (port/adapter -> memory config builders). No task changes."
 ---

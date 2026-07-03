@@ -7,6 +7,8 @@ Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Kubernetes", "#Deployment", "#Helm", "#Kustomize", "#HPA", "#PDB", "#Probes", "#ExternalSecrets", "#ConfigManager", "#SecretManager", "#RollingUpdate", "#MultiTenant", "#MultiCloud", "#CloudRun"]
 Dependency_Hashes: ["SPEC_12", "SPEC_20", "SPEC_06", "SPEC_09"]
+Group: "G9-Deploy-UI-Periferica"
+Read_Order: 29
 Last_Updated: "2026-06-17"
 Revision_Note: "Wave-5 secrets contract alignment: wait-for-db no longer reads a separate database_host secret (not in the SPEC_20 §8.2 contract); host is derived from database_url via a lightweight URL parse. Documented that connection params come from database_url only unless a separate database_host secret is explicitly added."
 ---
