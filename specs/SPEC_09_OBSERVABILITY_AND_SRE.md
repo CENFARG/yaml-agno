@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_09"
 Title: "Observability and SRE - Metrics, Tracing and Resilience"
-Version: "0.2.0-iter4"
+Version: "0.2.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#OpenTelemetry", "#SRE", "#CircuitBreaker", "#Resilience"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
 Group: "G8-Ops-Observabilidad"
 Read_Order: 22
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 4 - Wave 6 hygiene: upgraded CircuitBreaker and RetryConfig public-method docstrings to Google style (Args/Returns/Raises). ResilientExecutor was already Google-styled. No behavioral change."
+Last_Updated: "2026-07-03"
+Revision_Note: "Iter 5 - Deep adversarial review vs core-cenf real source. Fixed import path bug: core_infrastructure.logging -> core_infrastructure.logger (real package name, lines in §1.1). Fixed LoggerManager.error() signature: parameter is 'exc' not 'error' (ports.py:67), updated @ai-directive surface contract and the ContextAwareLogger/AgentExecutor usage. No behavioral change to CircuitBreaker/Retry/Tracing contracts."
 ---
 
 # SPEC_09_OBSERVABILITY_AND_SRE
@@ -23,9 +23,10 @@ Revision_Note: "Iter 4 - Wave 6 hygiene: upgraded CircuitBreaker and RetryConfig
 
 ### 1.1 LoggerManager Integration (core-cenf owned)
 
-> **@ai-directive**: `LoggerManager` is OWNED by core-cenf (`core_infrastructure.logging.LoggerManager`).
+> **@ai-directive**: `LoggerManager` is OWNED by core-cenf (`core_infrastructure.logger.LoggerManager`).
 > yaml-agno CONSUMES it; this SPEC does NOT redefine the Port. The API surface consumed
-> here is `debug`/`info`/`warn`/`error(message, error=None)`. The only yaml-agno-owned
+> here is `debug`/`info`/`warn`/`error(message, exc=None)` (real core-cenf signatures —
+> the error parameter is named `exc`, not `error`). The only yaml-agno-owned
 > logging artifact is the `ContextAwareLogger` wrapper below.
 
 **Responsabilidad**: Registro de eventos base con control de verbosidad (dev/test/prod).
@@ -40,7 +41,7 @@ Revision_Note: "Iter 4 - Wave 6 hygiene: upgraded CircuitBreaker and RetryConfig
 **Uso en yaml-agno**:
 ```python
 # yaml-agno/src/agents/agent_executor.py
-from core_infrastructure.logging import LoggerManager  # core-cenf owns it
+from core_infrastructure.logger import LoggerManager  # core-cenf owns it
 
 class AgentExecutor:
     def __init__(self, logger_manager: LoggerManager):
@@ -57,7 +58,7 @@ class AgentExecutor:
         except Exception as e:
             self.logger.error(
                 f"Agent failed: {agent.name}",
-                error=e
+                exc=e
             )
             raise
 ```
@@ -71,7 +72,7 @@ class AgentExecutor:
 # only — they do NOT scope DB queries (DB isolation is an explicit WHERE filter,
 # see SPEC_03 §5.3).
 from core_infrastructure.common.context import get_tenant_id, get_correlation_id
-from core_infrastructure.logging import LoggerManager
+from core_infrastructure.logger import LoggerManager
 
 class ContextAwareLogger:
     """Enriches log lines with the core-cenf tenant/correlation contextvars.
