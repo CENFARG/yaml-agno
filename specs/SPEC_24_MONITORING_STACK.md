@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_24"
 Title: "Monitoring Stack - Prometheus, Grafana, Loki, Alertmanager y Tracing"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Prometheus", "#Grafana", "#Loki", "#Alertmanager", "#Tempo", "#
 Dependency_Hashes: ["SPEC_09", "SPEC_21", "SPEC_27"]
 Group: "G9-Deploy-UI-Periferica"
 Read_Order: 30
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 3 - Wave 6 hygiene: added a one-line note at the first metric-table use clarifying tenant_id is telemetry-only (label/log field), NOT a column on agno_* tables (tenant scoping on persistence is the composite user_id). No other changes."
+Last_Updated: "2026-07-04"
+Revision_Note: "Iter 4 - Deep adversarial review. Two fixes: (1) §2.1.1 ServiceMonitor metricRelabelings was action: labeldrop on __name__ regex debug_.* — incorrect, labeldrop strips a label not series; changed to action: drop so debug_* series are actually filtered. (2) §2.7 increment_counter docstring documents an OPEN cross-SPEC divergence: SPEC_09 Port still declares labels= for increment_counter while record_metric uses attributes= (Wave 2 normalized only record_metric); this adapter uses attributes= for both and flags SPEC_09 for rename. No structural changes: set_tracer_provider NOT called (attaches processor to SPEC_27 global), tenant_id telemetry-only note intact, subgraph IDs do not shadow nodes, SPEC_09 Port consumed not redefined."
 ---
 
 # SPEC_24_MONITORING_STACK
@@ -158,10 +158,11 @@ spec:
         - sourceLabels: [__meta_kubernetes_namespace]
           targetLabel: namespace
       metricRelabelings:
-        # Drop high-cardinality debug metrics in prod
+        # Drop high-cardinality debug_* series in prod (action: drop filters
+        # series whose __name__ matches; labeldrop would only strip a label).
         - sourceLabels: [__name__]
           regex: 'debug_.*'
-          action: labeldrop
+          action: drop
 ```
 
 #### 2.1.2 Grafana — Dashboards
@@ -665,7 +666,20 @@ class PrometheusOtelObservabilityManager:
         self._tracer = trace.get_tracer("yaml-agno")
 
     def increment_counter(self, name: str, value: float = 1.0, attributes: dict[str, Any] | None = None) -> None:
-        """Counter increment. `attributes` matches the SPEC_09 Port signature."""
+        """Counter increment. `attributes` matches the SPEC_09 Port signature
+        (Wave 2 normalization: `record_metric` uses `attributes=`; this adapter
+        aligns `increment_counter` to the same `attributes=` convention for a
+        consistent Port surface).
+
+        @ai-directive (cross-SPEC, OPEN): SPEC_09 §1.2 Port still declares
+        `increment_counter(..., labels=...)` while `record_metric(..., attributes=...)`.
+        This adapter uses `attributes=` for BOTH (the intended post-Wave-2 contract).
+        When SPEC_09 is next revised, `increment_counter`'s `labels=` parameter
+        should be renamed to `attributes=` to close the divergence. Until then,
+        callers passing `attributes=` to this adapter are correct against this
+        implementation; a thin shim at the Port boundary maps `labels=`→`attributes=`
+        if a caller uses the SPEC_09 literal signature.
+        """
         attributes = attributes or {}
         getattr(self, f"_{name}").labels(**attributes).inc(value)
 

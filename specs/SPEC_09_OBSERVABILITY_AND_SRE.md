@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_09"
 Title: "Observability and SRE - Metrics, Tracing and Resilience"
-Version: "0.2.0-iter5"
+Version: "0.2.0-iter6"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#OpenTelemetry", "#SRE", "#CircuitBreaker", "#Resilience"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01"]
 Group: "G8-Ops-Observabilidad"
 Read_Order: 22
-Last_Updated: "2026-07-03"
-Revision_Note: "Iter 5 - Deep adversarial review vs core-cenf real source. Fixed import path bug: core_infrastructure.logging -> core_infrastructure.logger (real package name, lines in §1.1). Fixed LoggerManager.error() signature: parameter is 'exc' not 'error' (ports.py:67), updated @ai-directive surface contract and the ContextAwareLogger/AgentExecutor usage. No behavioral change to CircuitBreaker/Retry/Tracing contracts."
+Last_Updated: "2026-07-04"
+Revision_Note: "Iter 6 - Normalized the ObservabilityManager Port: increment_counter now uses 'attributes=' (was 'labels='), matching record_metric so both methods share one kwarg name. Removes the Port divergence that SPEC_24 (adapter) had already adopted. Iter 5 stood otherwise (core_infrastructure.logger import, error(exc=) signature)."
 ---
 
 # SPEC_09_OBSERVABILITY_AND_SRE
@@ -104,7 +104,7 @@ class ContextAwareLogger:
 from typing import Protocol, Any
 
 class ObservabilityManager(Protocol):
-    def increment_counter(self, name: str, value: float = 1.0, labels: dict[str, Any] | None = None) -> None: ...
+    def increment_counter(self, name: str, value: float = 1.0, attributes: dict[str, Any] | None = None) -> None: ...
     def record_metric(self, name: str, value: float, attributes: dict[str, str] | None = None) -> None: ...
     def start_span[T](self, name: str) -> T: ...
 ```
@@ -143,7 +143,7 @@ class AgentExecutor:
                 self.obs.increment_counter(
                     "agent_execution_total",
                     value=1.0,
-                    labels={
+                    attributes={
                         "agent_name": agent.name,
                         "tenant_id": tenant_id,
                         "status": "success"
@@ -166,7 +166,7 @@ class AgentExecutor:
                 self.obs.increment_counter(
                     "agent_execution_errors_total",
                     value=1.0,
-                    labels={
+                    attributes={
                         "agent_name": agent.name,
                         "tenant_id": tenant_id,
                         "error_type": type(e).__name__

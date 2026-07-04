@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_21"
 Title: "Kubernetes Deployment"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Kubernetes", "#Deployment", "#Helm", "#Kustomize", "#HPA", "#PD
 Dependency_Hashes: ["SPEC_12", "SPEC_20", "SPEC_06", "SPEC_09"]
 Group: "G9-Deploy-UI-Periferica"
 Read_Order: 29
-Last_Updated: "2026-06-17"
-Revision_Note: "Wave-5 secrets contract alignment: wait-for-db no longer reads a separate database_host secret (not in the SPEC_20 §8.2 contract); host is derived from database_url via a lightweight URL parse. Documented that connection params come from database_url only unless a separate database_host secret is explicitly added."
+Last_Updated: "2026-07-04"
+Revision_Note: "Iter 3 - Deep adversarial review. Corrected namespace framing: namespace is the DEPLOY boundary (ambiente), NOT the tenant boundary (tenant isolation is the composite user_id on the shared DB, SPEC_03/SPEC_06). Rewrote §1.3 title/table/directive, fixed §1.2 principle 6, §15 line, and replaced yaml-agno-acme namespace examples in §12.1/§3 BDD with yaml-agno-prod. No UID/secret/mermaid changes: runAsUser 65532 (SPEC_20-aligned), database_url-only init container, FUTURO marker, and mermaid blocks already conformant."
 ---
 
 # SPEC_21_KUBERNETES_DEPLOYMENT
@@ -62,18 +62,28 @@ flowchart TB
 3. **Probes triples**: startup (no matar durante boot largo), liveness (reinicio si colgado), readiness (tráfico solo si listo).
 4. **Graceful shutdown**: `preStop` duerme + `terminationGracePeriodSeconds` alto; FastAPI lifespan drena.
 5. **Config como ConfigMap YAML** (ConfigManager), **secrets como ExternalSecrets** (SecretManager) — nunca env vars sensibles.
-6. **Multi-tenant por namespace** con aislamiento (NetworkPolicy opcional), un ConfigMap por tenant.
+6. **Namespace = boundary de deploy** (ambiente), no de tenant. Aislamiento de tenant en capa de datos (`user_id` composite, SPEC_03). Un ConfigMap por ambiente; `--set tenant` solo parametriza defaults de config.
 7. **GitOps-first**: manifests via Helm/Kustomize; sync por ArgoCD/Flux opcional.
 8. **Multi-cloud**: todo es k8s estándar + ExternalSecrets (AWS/GCP/Azure/Vault backends).
 
-### 1.3 Topología de namespaces (multi-tenant)
+### 1.3 Topología de namespaces (boundary de DEPLOY, NO de tenant)
+
+> @ai-directive El namespace es **boundary de DEPLOYMENT** (aislamiento de ambiente / cuotas de infra /
+> blast-radius de rollout), **NO** boundary de tenant. El aislamiento de tenant se hace en la capa de
+> datos: una sola base `yaml-agno` con `user_id` composite (`{tenant_id}:{principal_id}`, SPEC_03/SPEC_06)
+> y cláusulas `WHERE user_id` en cada acceso a `yamlagno_*`. No se asume que un namespace por tenant dé
+> aislamiento de persistencia — todos los pods comparten la misma DB y el mismo schema. Nombrar un
+> namespace `yaml-agno-<tenant>` es válido como separación operativa/ RBAC, pero **no** reemplaza el
+> `user_id` composite como control de aislamiento de datos.
 
 | Estrategia | Pros | Contras | Decisión |
 |------------|------|---------|----------|
-| 1 namespace por tenant | aislamiento fuerte, RBAC simple, cuotas por ns | más manifests, overhead | **Default producción** |
-| Shared namespace + labels | menos overhead | aislamiento débil, ruido entre tenants | Solo dev/small |
+| 1 namespace por ambiente (dev/staging/prod) | separación de rollout, RBAC de ops, cuotas por ns | — | **Default producción** |
+| Namespace compartido por ambiente + labels de tenant | menos manifests | menor blast-radius isolation | Solo dev/small |
 
-> En este spec se modela el namespace `yaml-agno-<tenant>` con Helm `--set tenant=<id>` generando el ConfigMap adecuado.
+> El chart soporta `--set tenant=<id>` para parametrizar el ConfigMap (override de `agentosConfig`),
+> pero esto NO crea un namespace por tenant: el namespace proviene de `--namespace` / `.Release.Namespace`
+> (ambiente). El `tenant` value inyecta defaults de configuración, no un boundary de datos.
 
 ---
 
@@ -591,15 +601,15 @@ Default `minAvailable: 2` sobre `replicas: 3` → tolera 1 voluntary disruption.
 ### 12.1 kubectl nativo
 
 ```bash
-# rollback al revision anterior
-kubectl rollout undo deployment/yaml-agno -n yaml-agno-acme
+# rollback al revision anterior (namespace = ambiente, NO tenant)
+kubectl rollout undo deployment/yaml-agno -n yaml-agno-prod
 
 # rollback a revision específica
-kubectl rollout undo deployment/yaml-agno -n yaml-agno-acme --to-revision=3
+kubectl rollout undo deployment/yaml-agno -n yaml-agno-prod --to-revision=3
 
 # estado
-kubectl rollout status deployment/yaml-agno -n yaml-agno-acme
-kubectl rollout history deployment/yaml-agno -n yaml-agno-acme
+kubectl rollout status deployment/yaml-agno -n yaml-agno-prod
+kubectl rollout history deployment/yaml-agno -n yaml-agno-prod
 ```
 
 `revisionHistoryLimit: 10` retiene history suficiente. Cada rollout = 1 revision (cambio de imagen o checksum config).
@@ -781,7 +791,7 @@ Dev/Staging son overlays análogos variando `namespace`, `replicas`, `resources`
 - `ConfigManager` lee `/app/config/agentos.yaml` (mount del ConfigMap).
 - Cambio de ConfigMap → `checksum/config` cambia → rollout automático.
 - Hot-reload SIN rollout: el pod watchea el archivo (inotify) y dispara `AgentOS.resync()` (SPEC_12).
-- Multi-tenant: cada namespace tiene su ConfigMap; el chart genera el YAML desde `values.yaml:agentosConfig` parametrizado por `tenant`.
+- Multi-ambiente: cada namespace (ambiente) tiene su ConfigMap; el chart genera el YAML desde `values.yaml:agentosConfig`, parametrizable por `tenant` para defaults de config (no para aislamiento de datos — ese es el `user_id` composite de SPEC_03).
 
 ---
 
@@ -930,7 +940,7 @@ Feature: Deployment reaches Ready state
   So that traffic can be served
 
   Scenario: Rolling deploy with 3 replicas
-    Given a namespace "yaml-agno-acme"
+    Given a namespace "yaml-agno-prod"
     When I run "helm upgrade --install yaml-agno ./deploy/helm/yaml-agno"
     Then within 180s all pods are "Running" and ready
     And the Deployment "yaml-agno" shows "Available=True"
