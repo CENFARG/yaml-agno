@@ -5,12 +5,12 @@
 > Mantener actualizado mientras se siga corrigiendo/iterando SPECs. Borrar
 > cuando el proyecto avance a implementación.
 
-**Última actualización**: 2026-07-03
-**HEAD git**: `bd9119c` (rama `feature/specs-agno-coverage-10-25`, 90 commits)
+**Última actualización**: 2026-07-04
+**HEAD git**: `531fec5` (rama `feature/specs-agno-coverage-10-25`, 116 commits)
 **Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
 **ÍNDICE/ORDEN**: specs/INDEX.md agrupa las 33 SPECs en 10 grupos temáticos (G1-G10) + Read_Order en cada frontmatter. Los archivos NO se renombraron (trazabilidad intacta); el orden de lectura se guía por INDEX.md/Read_Order, no por el número de archivo.
 **AUDITORÍA 32-SPEC COMPLETA**: 72 hallazgos → Waves 1-6 + verificación adversarial (11 contradicciones RESUELTAS) + SPEC_29 Q3/Q8.
-**REVISIÓN PROFUNDA SPEC por SPEC**: 27/33 hechas (G2-G8 + las previas 00,04,05,06,07,08,16,29). **FALTA G9 (deploy): SPEC_20, 22, 21, 24, 25** — retomar cuando se resetee la cuota (sub-agente topó 429, reset 2026-07-04 02:47). Es el grupo más periférico (G9 Deploy-UI-Periférica).
+**REVISIÓN PROFUNDA SPEC por SPEC: 33/33 COMPLETA** ✅. Todas verificadas contra Agno v2.6.18 + core-cenf-py reales (no APIs inventadas). Patrón cazado: el defecto #1 era APIs inventadas (firmas/métodos que no existen). Deudas menores abiertas: JWT_VERIFICATION_KEY vs jwt_signing_key naming (SPEC_07/19/20/21).
 **user_id UNIFICADO**: composite `{tenant_id}:{principal_id}` SIEMPRE; `resolve_user_id()` (SPEC_04) es el único resolver; `TenantContextMiddleware` (SPEC_06) delega. Workflows autónomos también cubiertos por tenant isolation.
 
 ---
