@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_20"
 Title: "Docker Build"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_12", "SPEC_06", "SPEC_09"]
 Group: "G9-Deploy-UI-Periferica"
 Read_Order: 27
 Last_Updated: "2026-07-04"
-Revision_Note: "iter2 — deep adversarial review: added agent-platform-railway (Apache-2.0) reference to §14 per SPEC_07 §2.3 cherry-pick contract; documented JWT_VERIFICATION_KEY vs jwt_signing_key naming debt (SSOT owns SPEC_07, SPEC_21 drifts too)."
+Revision_Note: "iter3 — RESOLVED the JWT naming debt: jwt_signing_key -> JWT_VERIFICATION_KEY everywhere (secret path §8.2, deploy command §10, §14.1). AgentOS reads JWT_VERIFICATION_KEY via getenv (app.py:1072, jwt.py:109); jwt_signing_key never existed in Agno. Verified against Agno source. iter2 (railway ref) stands."
 ---
 
 # SPEC_20_DOCKER_BUILD
@@ -475,7 +475,7 @@ agentos:
 |---------------------------|-----------|------------|
 | `/run/secrets/database_url` | `postgresql+asyncpg://...` | DatabaseManager (SPEC_03) |
 | `/run/secrets/openai_api_key` | `sk-...` | ModelRegistry (SPEC_14) |
-| `/run/secrets/jwt_signing_key` | base64 | AuthorizationAdapter (SPEC_12) |
+| `/run/secrets/JWT_VERIFICATION_KEY` | base64 public key (PEM) | AgentOS JWT middleware (SPEC_12/SPEC_19; Agno reads `JWT_VERIFICATION_KEY` env, app.py:1072, jwt.py:109) |
 | `/run/secrets/redis_url` | `redis://...` | Cache/Sessions (SPEC_04) |
 
 `SecretManager` expone `get("database_url")` que lee el archivo y cachea en memoria. Nunca loguea el valor.
@@ -734,9 +734,11 @@ Patrones tomados de agent-platform-railway (revalidados) y de la documentación 
 - **Non-root UID 65532** y **distroless runtime** (sin shell, sin package manager) revalidados contra agent-platform-railway; superficie de ataque mínima.
 - **Trivy scan gate HIGH/CRITICAL** previo al push al registry (bloqueo de release) alineado con la práctica de agent-platform-railway de fail-closed en supply chain.
 
-### 14.1 Deuda de naming: `jwt_signing_key` vs `JWT_VERIFICATION_KEY`
+### 14.1 Naming JWT unificado — `JWT_VERIFICATION_KEY` (RESUELTO)
 
-SPEC_07 §2.2 establece el contrato SSOT de refuse-to-start sobre `JWT_VERIFICATION_KEY` (o `JWT_JWKS_FILE`). Este SPEC y SPEC_21 montan el secret como `jwt_signing_key` (contract de `SecretManager`, §8.2). La dirección de la corrección (renombrar a `JWT_VERIFICATION_KEY` en SPEC_20+SPEC_21, o documentar el alias en SPEC_07) queda como **deuda explícita** que debe resolverse al corregir SPEC_19/SPEC_07 en conjunto, NO aislada en un único SPEC (rompería la consistencia SPEC_20↔SPEC_21).
+**Resuelto**: el secret de JWT se nombra `JWT_VERIFICATION_KEY` en TODO yaml-agno (consistente con SPEC_07 §2.2 y SPEC_19). AgentOS lo lee directo del entorno (`getenv("JWT_VERIFICATION_KEY")`, agno/os/app.py:1072, agno/os/middleware/jwt.py:109) — NO existe `jwt_signing_key` en Agno. Era un nombre inventado en iteraciones previas de SPEC_20/SPEC_21; se normalizó a `JWT_VERIFICATION_KEY` (montado como secret y expuesto como env var para que AgentOS lo lea vía `getenv`). `JWT_JWKS_FILE` es la alternativa para JWKS.
+
+> @ai-directive: el secret se monta en `/run/secrets/JWT_VERIFICATION_KEY` y se expone al contenedor como la env var `JWT_VERIFICATION_KEY` (Agno la lee con `getenv`). No uses `jwt_signing_key` ni `JWT_SIGNING_KEY` en ningún SPEC — no existen en Agno.
 
 ---
 
@@ -823,7 +825,7 @@ gcloud run deploy "${SERVICE}" \
   --no-allow-unauthenticated \
   --port "${PORT:-8080}" \
   --set-env-vars "YAML_AGNO_ENV=prod,YAML_AGNO_CONFIG_PATH=/app/config/agentos.yaml,YAML_AGNO_SECRETS_DIR=/run/secrets" \
-  --set-secrets "database_url=ya-db-url:latest,openai_api_key=ya-openai-key:latest,redis_url=ya-redis-url:latest,jwt_signing_key=ya-jwt-key:latest" \
+  --set-secrets "database_url=ya-db-url:latest,openai_api_key=ya-openai-key:latest,redis_url=ya-redis-url:latest,JWT_VERIFICATION_KEY=ya-jwt-key:latest" \
   --set-cloudsql-instances "${PROJECT}:${REGION}:ya-pg-prod" \
   --min-instances 0 \
   --max-instances 20 \

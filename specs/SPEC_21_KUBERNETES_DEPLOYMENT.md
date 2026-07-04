@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_21"
 Title: "Kubernetes Deployment"
-Version: "0.2.0-iter3"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_12", "SPEC_20", "SPEC_06", "SPEC_09"]
 Group: "G9-Deploy-UI-Periferica"
 Read_Order: 29
 Last_Updated: "2026-07-04"
-Revision_Note: "Iter 3 - Deep adversarial review. Corrected namespace framing: namespace is the DEPLOY boundary (ambiente), NOT the tenant boundary (tenant isolation is the composite user_id on the shared DB, SPEC_03/SPEC_06). Rewrote §1.3 title/table/directive, fixed §1.2 principle 6, §15 line, and replaced yaml-agno-acme namespace examples in §12.1/§3 BDD with yaml-agno-prod. No UID/secret/mermaid changes: runAsUser 65532 (SPEC_20-aligned), database_url-only init container, FUTURO marker, and mermaid blocks already conformant."
+Revision_Note: "Iter 4 - RESOLVED JWT naming: ExternalSecret jwt_signing_key -> JWT_VERIFICATION_KEY (3 sites §9). Consistent with SPEC_07/19/20 SSOT; AgentOS reads it via getenv (agno/os/app.py:1072). iter3 stands otherwise (namespace=deploy boundary, runAsUser 65532, database_url-only, FUTURO)."
 ---
 
 # SPEC_21_KUBERNETES_DEPLOYMENT
@@ -467,7 +467,7 @@ spec:
       data:
         database_url: "{{`{{ .database_url }}`}}"
         openai_api_key: "{{`{{ .openai_api_key }}`}}"
-        jwt_signing_key: "{{`{{ .jwt_signing_key }}`}}"
+        JWT_VERIFICATION_KEY: "{{`{{ .JWT_VERIFICATION_KEY }}`}}"
         redis_url: "{{`{{ .redis_url }}`}}"
   data:
     - secretKey: database_url
@@ -476,9 +476,9 @@ spec:
     - secretKey: openai_api_key
       remoteRef:
         key: {{ .Values.externalSecret.path }}/openai_api_key
-    - secretKey: jwt_signing_key
+    - secretKey: JWT_VERIFICATION_KEY
       remoteRef:
-        key: {{ .Values.externalSecret.path }}/jwt_signing_key
+        key: {{ .Values.externalSecret.path }}/JWT_VERIFICATION_KEY
     - secretKey: redis_url
       remoteRef:
         key: {{ .Values.externalSecret.path }}/redis_url
