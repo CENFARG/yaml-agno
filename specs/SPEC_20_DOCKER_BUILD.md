@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_20"
 Title: "Docker Build"
-Version: "0.2.0-iter1"
+Version: "0.2.0-iter2"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#Docker", "#Build", "#MultiStage", "#Buildx", "#MultiArch", "#Di
 Dependency_Hashes: ["SPEC_12", "SPEC_06", "SPEC_09"]
 Group: "G9-Deploy-UI-Periferica"
 Read_Order: 27
-Last_Updated: "2026-06-17"
-Revision_Note: "iter1 — dual deployment target (Cloud Run primary, Kubernetes future); clarified main:app wrapper over AgentOS.get_app(); moved sllim typo to a separate test fixture; removed leaked absolute Windows path."
+Last_Updated: "2026-07-04"
+Revision_Note: "iter2 — deep adversarial review: added agent-platform-railway (Apache-2.0) reference to §14 per SPEC_07 §2.3 cherry-pick contract; documented JWT_VERIFICATION_KEY vs jwt_signing_key naming debt (SSOT owns SPEC_07, SPEC_21 drifts too)."
 ---
 
 # SPEC_20_DOCKER_BUILD
@@ -722,13 +722,21 @@ Validable con `docker buildx imagetools inspect <img> --format '{{json .}}'` (TA
 
 ## 14. REFERENCIA AGNO DEPLOY (PATRONES OFICIALES)
 
-Consulta la documentación oficial de Agno (sección "deploy" / "production"):
+> @ai-directive **Cherry-pick from `agent-platform-railway` (Apache-2.0)** per SPEC_07 §2.3: `agno-agi/agent-platform-railway` es la **plataforma de referencia oficial de Agno** para levantar AgentOS en producción segura. yaml-agno toma **selectivamente** los patrones de deploy/Docker que aplican a este SPEC y descarta el resto. Cada pieza tomada se revalida aquí. La licencia Apache-2.0 permite reusar los scripts/Dockerfile con atribución. Esta es **referencia de prácticas seguras**, NO una dependencia que se adopta completa.
+
+Patrones tomados de agent-platform-railway (revalidados) y de la documentación oficial de Agno (sección "deploy" / "production"):
 
 - Agno recomienda servir vía `AgentOS.serve()` o exponiendo `get_app()` detrás de un ASGI server (uvicorn/gunicorn).
 - Producción: `gunicorn -k uvicorn.workers.UvicornWorker` para multi-worker. En k8s se prefiere 1 worker/pod + HPA (SPEC_21) sobre multi-worker/pod (simplifica drain y tracing).
 - Health: Agno expone endpoints de play/playground; yaml-agno añade `/healthz`, `/readyz` (SPEC_06) para probes estándar.
 - Secrets: Agno soporta `AGNO_API_KEY` etc.; yaml-agno los canaliza por `SecretManager` (mounted files), no env vars.
 - DB: Agno `auto_provision_dbs=True` crea tablas al arranque; en prod se desactiva y se migra vía job (SPEC_21).
+- **Non-root UID 65532** y **distroless runtime** (sin shell, sin package manager) revalidados contra agent-platform-railway; superficie de ataque mínima.
+- **Trivy scan gate HIGH/CRITICAL** previo al push al registry (bloqueo de release) alineado con la práctica de agent-platform-railway de fail-closed en supply chain.
+
+### 14.1 Deuda de naming: `jwt_signing_key` vs `JWT_VERIFICATION_KEY`
+
+SPEC_07 §2.2 establece el contrato SSOT de refuse-to-start sobre `JWT_VERIFICATION_KEY` (o `JWT_JWKS_FILE`). Este SPEC y SPEC_21 montan el secret como `jwt_signing_key` (contract de `SecretManager`, §8.2). La dirección de la corrección (renombrar a `JWT_VERIFICATION_KEY` en SPEC_20+SPEC_21, o documentar el alias en SPEC_07) queda como **deuda explícita** que debe resolverse al corregir SPEC_19/SPEC_07 en conjunto, NO aislada en un único SPEC (rompería la consistencia SPEC_20↔SPEC_21).
 
 ---
 
