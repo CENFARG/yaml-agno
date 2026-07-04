@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_25"
 Title: "Security Hardening - Pod Security, Network Policies, RBAC, Supply Chain y Compliance"
-Version: "0.2.0-iter4"
+Version: "0.2.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#PodSecurityStandards", "#NetworkPolicies", "#RBAC", "#SupplyCha
 Dependency_Hashes: ["SPEC_19", "SPEC_21"]
 Group: "G9-Deploy-UI-Periferica"
 Read_Order: 31
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 4 - Wave 6 hygiene: removed the @ai-directive tag from a plain prose note (the Cloud Run vs K8s contextual paragraph); @ai-directive is now kept only on pseudo-code/instructions. No behavioral change."
+Last_Updated: "2026-07-04"
+Revision_Note: "Iter 5 - deep adversarial review: fixed Trivy §2.4.1 to block on HIGH+CRITICAL (was fail-on-severity: CRITICAL only), aligning with SPEC_22 §2.2 and the SSOT decision. Verified intact: runAsUser 65532 (no 10001), namespace=deploy-boundary-not-tenant directives, @ai-directive scoped to pseudo-code/instructions only."
 ---
 
 # SPEC_25_SECURITY_HARDENING
@@ -403,12 +403,12 @@ roleRef:
   uses: aquasecurity/trivy-action@master
   with:
     image-ref: registry.yaml-agno.internal/agentos:${{ github.sha }}
-    severity: CRITICAL,HIGH
-    fail-on-severity: CRITICAL
+    severity: HIGH,CRITICAL
     exit-code: 1
+    ignore-unfixed: true
 ```
 
-Gate: pipeline **falla** si hay CRITICAL no fijado (`.trivyignore` auditable).
+Gate: pipeline **falla** si hay HIGH o CRITICAL no fijado (`.trivyignore` auditable). Coherente con SPEC_22 §2.2 (container-scan gate) y la decisión SSOT de bloquear push en HIGH/CRITICAL.
 
 #### 2.4.2 Sigstore Cosign — firma de imágenes
 
