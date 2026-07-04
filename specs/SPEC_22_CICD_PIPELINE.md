@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_22"
 Title: "CI/CD Pipeline - GitHub Actions, Security Gates, SBOM and GitOps Deploy"
-Version: "0.2.0-iter2"
+Version: "0.2.0-iter3"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#CICD", "#GitHubActions", "#TDD", "#SecurityScans", "#SBOM", "#G
 Dependency_Hashes: ["SPEC_20", "SPEC_21"]
 Group: "G9-Deploy-UI-Periferica"
 Read_Order: 28
-Last_Updated: "2026-06-17"
-Revision_Note: "Wave-5 artefact-location SSOT: Dockerfile + docker-compose.yml live at repo root per SPEC_20; fixed all deploy/docker/Dockerfile and deploy/compose/agentos-smoke.yml refs to repo root. Fixed cross-ref ArgoCD/Argo Rollouts SPEC_20 -> SPEC_21 (SPEC_20 is Docker-only). Fixed e2e smoke probe GET /health -> /healthz (decided endpoints are /healthz and /readyz only)."
+Last_Updated: "2026-07-04"
+Revision_Note: "iter3 — deep adversarial review: fixed branch-protection required check case mismatch ('container scan' -> 'Container scan (trivy)' to match job name; GitHub status checks are case-sensitive). Wave-5 positions verified intact: /healthz probe, repo-root Dockerfile/compose, ArgoCD->SPEC_21, Trivy HIGH/CRITICAL gate, GITOPS_PAT debt."
 ---
 
 # SPEC_22_CICD_PIPELINE
@@ -959,7 +959,7 @@ Branch: main
     - "Type-check (mypy --strict + Pydantic V2)"
     - "Unit tests (coverage gate)"
     - "TDD RED→GREEN verification"
-    - "container scan (trivy)"   # branch-protection antes del merge
+    - "Container scan (trivy)"   # branch-protection antes del merge (case-sensitive: match job name)
   Require branches up-to-date before merge: yes
   Require signed commits: yes
   Require linear history: yes
