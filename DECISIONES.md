@@ -5,7 +5,7 @@
 > resume para que no tengas que releerlos. Si necesitás detalle de una decisión,
 > el topic_key de Engram o el SPEC está citado.
 >
-> **Última actualización**: 2026-07-04 · **HEAD git**: `cb27e5f` · **Rama**: `feature/specs-agno-coverage-10-25` · **Commits**: 118
+> **Última actualización**: 2026-07-06 · **HEAD git**: `ea177f1` · **Rama**: `feature/specs-agno-coverage-10-25` · **Commits**: 121
 
 ---
 
@@ -64,7 +64,7 @@ app.py:1072). NO `jwt_signing_key`.
 
 ## 3. ESTADO (2026-07-04)
 
-- **33 SPECs** en `specs/`, gate verde 33/33 (`python scripts/spec_gate.py all`).
+- **34 SPECs** en `specs/` (SPEC_00–SPEC_33), gate verde 34/34 (`python scripts/spec_gate.py all`).
 - **Índice**: `specs/INDEX.md` agrupa en 10 grupos temáticos (G1-G10) + campo
   `Read_Order` en cada frontmatter. Los archivos **NO se renombraron**
   (trazabilidad intacta).
@@ -74,7 +74,7 @@ app.py:1072). NO `jwt_signing_key`.
 - git LOCAL (sin GitHub todavía — decisión del usuario).
 
 ### Grupos temáticos (mapa rápido)
-- **G1 Fundaciones**: SPEC_00 · **G2 Runtime-Core**: 01,02,03
+- **G1 Fundaciones**: SPEC_00 · **G2 Runtime-Core**: 01,02,03,33(templates)
 - **G3 Capacidades-Agente**: 14,11,10,15,17,30
 - **G4 Memoria-Aprendizaje**: 04,31,28 · **G5 Oversight**: 16,29
 - **G6 Orquestación**: 05,13,32 · **G7 ControlPlane-API**: 06,12,26,19
