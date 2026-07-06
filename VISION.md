@@ -127,7 +127,7 @@ Cada vez que CENF arma un equipo agéntico para un cliente:
    - **Qué espera recibir** (input schema)
    - **Qué devuelve** (output schema)
    - **De qué depende** (otros teams a los que necesita llamar)
-   - **Cómo se comunica** (MCP / A2A / ACP)
+   - **Cómo se comunica** (MCP para herramientas / A2A nativo de Agno para inter-agente)
 
 4. **Composición por interconexión**. Las cajas negras se interconectan entre sí
    o con el usuario directamente. Esa red se apoya sobre equipos agénticos
@@ -320,11 +320,27 @@ Un equipo agéntico en Ambots-Hs expone: **la misma metadata, pero con
 capacidades ejecutables reales y contrato de input/output**.
 
 ### 7.3 Protocolos soportados
-- **MCP** (Model Context Protocol): exposición de capacidades como herramientas
-- **A2A** (Agent-to-Agent): comunicación directa entre agentes
-- **ACP** (Agentic Communication Protocol): mensajes estructurados entre agentes
+- **MCP** (Model Context Protocol): exposición de capacidades como herramientas.
+- **A2A** (Agent-to-Agent): comunicación directa entre agentes — **estándar nativo
+  de Agno** (`agno/os/interfaces/a2a/`), expone `agent-card.json` + `message:send`/
+  `message:stream`; consumible vía `A2AClient` y `RemoteAgent/Team/Workflow`.
+
+> **ACP eliminado del alcance.** En la evolución de la arquitectura se descartaron
+> protocolos experimentales no soportados por el runtime: **ACP no existe en Agno**
+> (verificado en código fuente). La comunicación inter-agente y la exposición de
+> capacidades se realiza exclusivamente mediante **A2A nativo de Agno**
+> (inter-agente) complementado por **MCP** (herramientas). Ver SPEC_26
+> (A2A Interface) y SPEC_05 (workflows/teams).
 
 ### 7.4 Metadatos cognitivos (lo que yaml-agno debe poder declarar)
+
+> **`cognitive_profile` NO es un protocolo de transporte.** Es el **contrato
+> declarativo** de entrada/salida y dependencias que un equipo expone en su
+> `AgentCard` (a través de A2A) y en su esquema de Pydantic V2 (SPEC_02). Es la
+> metainformación que permite a Gus/Cloud (el agente programador) **interconectar
+> cajas negras** y validar que encajen los contratos input/output. Vive como
+> slots opacos en `AgentConfig` (SSOT SPEC_02), no como una API de mensajería.
+
 ```yaml
 cognitive_profile:
   mission: "Generate invoices for CENF clients via AFIP"
@@ -395,7 +411,7 @@ team de Facturas, team de Emails, team de Meetings).
 1. Ambots-Hs como open-source
 2. Cualquier usuario final, hablando con su Ambots, puede generar sus propios
    equipos agénticos de forma autónoma
-3. Red de nodos de agentes interconectados vía MCP/A2A/ACP
+3. Red de nodos de agentes interconectados vía A2A (nativo Agno) + MCP (tools)
 4. El equipo agéntico se crea a través del agente de programación + la arquitectura
    (yaml-agno es el DSL que el agente de programación usa)
 
@@ -414,8 +430,8 @@ team de Facturas, team de Emails, team de Meetings).
 | **CodeGraph** | Repo externo con grafo semántico del código Agno (https://github.com/colbymchenry/codegraph) |
 | **MCP** | Model Context Protocol — para exposición de capacidades (tools de teams al orquestador) |
 | **MSP** | NO es typo de MCP. Es la forma de incrustar el team al orquestador (vía MCP/skill/etc) |
-| **A2A** | Agent-to-Agent — comunicación directa entre agentes |
-| **ACP** | Agentic Communication Protocol — mensajes estructurados |
+| **A2A** | Agent-to-Agent — estándar nativo de Agno para comunicación inter-agente (AgentCard + message:send/stream) |
+| **ACP** | ~~Agentic Communication Protocol~~ — **ELIMINADO del alcance**. No existe en Agno (verificado). Reemplazado por A2A nativo + MCP. |
 | **CEL** | Common Expression Language (Google) — strings de lógica runtime |
 | **Callable** | Función Python referenciable vía `ref://` |
 | **ref://** | URI scheme de yaml-agno para referenciar entradas del registry |
