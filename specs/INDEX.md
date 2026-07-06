@@ -1,6 +1,6 @@
 # SPEC Index — Thematic Grouping & Reading Order
 
-This index groups the 33 SPECs by theme and gives a recommended reading order. SPECs are NOT renamed (filenames stable); use Read_Order to sequence.
+This index groups the 34 SPECs by theme and gives a recommended reading order. SPECs are NOT renamed (filenames stable); use Read_Order to sequence.
 
 ---
 
@@ -20,6 +20,7 @@ Within each group, SPECs are sorted by Read_Order ascending.
 |---|---|---|---|---|---|
 | SPEC_01_AGNO_RUNTIME_ARCHITECTURE.md | Agno Runtime Architecture | 2 | no | A | Runtime architecture, session management, workflow primitives. |
 | SPEC_02_DOMAIN_MODEL.md | Domain Model - YAML Configuration Schemas (Pydantic V2) | 3 | yes | M | Pydantic V2 YAML config schemas (Agent/Team/Workflow/Step). |
+| SPEC_33_TEMPLATES.md | Templates - Heritable YAML Templates, Registry and Resolution Pipeline | 3.5 | no | A | Heritable templates, registry (FS+DB), resolution pipeline over *Config. |
 | SPEC_03_PERSISTENCE_ARCHITECTURE.md | Persistence Architecture - Config Store on core-cenf DatabaseManager | 4 | no | A | Config store on core-cenf DatabaseManager. |
 | SPEC_14_MODEL_RESILIENCE_AND_CONFIG.md | Model Resilience & Configuration | 4 | no | A | Model fallback, retry, circuit breaker, providers. |
 
@@ -96,7 +97,7 @@ Within each group, SPECs are sorted by Read_Order ascending.
 
 ---
 
-## Recommended Reading Order (flat, 1..33)
+## Recommended Reading Order (flat, 1..34)
 
 Sequence by Read_Order. This is a reading guide; the real dependency structure is the DAG in each SPEC's `Dependency_Hashes`.
 
@@ -105,38 +106,39 @@ Sequence by Read_Order. This is a reading guide; the real dependency structure i
 | 1 | 1 | SPEC_00_SYSTEM_STRATEGY.md | System Strategy |
 | 2 | 2 | SPEC_01_AGNO_RUNTIME_ARCHITECTURE.md | Agno Runtime Architecture |
 | 3 | 3 | SPEC_02_DOMAIN_MODEL.md | Domain Model (Pydantic V2) |
-| 4 | 4 | SPEC_03_PERSISTENCE_ARCHITECTURE.md | Persistence Architecture |
-| 5 | 4 | SPEC_14_MODEL_RESILIENCE_AND_CONFIG.md | Model Resilience & Configuration |
-| 6 | 5 | SPEC_11_TOOLS_AND_MCP.md | Tools & MCP Architecture |
-| 7 | 6 | SPEC_10_KNOWLEDGE_AND_RAG.md | Knowledge & RAG |
-| 8 | 7 | SPEC_15_CONTEXT_ENGINEERING_AND_COMPRESSION.md | Context Engineering & Compression |
-| 9 | 8 | SPEC_04_MEMORY_ARCHITECTURE.md | Memory Architecture |
-| 10 | 9 | SPEC_31_CULTURE_MANAGER.md | Culture Manager |
-| 11 | 10 | SPEC_28_REASONING_ARCHITECTURE.md | Reasoning Architecture |
-| 12 | 11 | SPEC_16_HITL_APPROVALS_GUARDRAILS.md | HITL, Approvals & Guardrails |
-| 13 | 12 | SPEC_29_WORKFLOW_HITL.md | Workflow-level HITL |
-| 14 | 13 | SPEC_17_MULTIMODAL_IO.md | Multimodal I/O |
-| 15 | 14 | SPEC_30_SKILLS_MANAGEMENT.md | Skills Management |
-| 16 | 15 | SPEC_05_WORKFLOWS_AND_TEAMS.md | Workflows and Teams |
-| 17 | 16 | SPEC_13_SCHEDULER_BACKGROUND_LIFECYCLE.md | Scheduler & Background Lifecycle |
-| 18 | 17 | SPEC_32_REGISTRY_AND_COMPONENTS.md | Registry & Components |
-| 19 | 18 | SPEC_06_API_AND_AX.md | API and AX |
-| 20 | 19 | SPEC_12_AGENTOS_CONTROL_PLANE.md | AgentOS Control Plane |
-| 21 | 20 | SPEC_26_A2A_INTERFACE.md | A2A Interface |
-| 22 | 21 | SPEC_19_SECURITY_AUTH_API_SURFACE.md | Security, Auth and API Surface |
-| 23 | 22 | SPEC_09_OBSERVABILITY_AND_SRE.md | Observability and SRE |
-| 24 | 23 | SPEC_27_TRACING_ARCHITECTURE.md | Tracing Architecture |
-| 25 | 24 | SPEC_18_EVALS_AND_OBSERVABILITY.md | Evals and Observability |
-| 26 | 25 | SPEC_23_CONFIG_AND_SECRETS.md | Config & Secrets |
-| 27 | 26 | SPEC_07_DASHBOARD_ARCHITECTURE.md | Dashboard Architecture |
-| 28 | 27 | SPEC_20_DOCKER_BUILD.md | Docker Build |
-| 29 | 28 | SPEC_22_CICD_PIPELINE.md | CI/CD Pipeline |
-| 30 | 29 | SPEC_21_KUBERNETES_DEPLOYMENT.md | Kubernetes Deployment |
-| 31 | 30 | SPEC_24_MONITORING_STACK.md | Monitoring Stack |
-| 32 | 31 | SPEC_25_SECURITY_HARDENING.md | Security Hardening |
-| 33 | 32 | SPEC_08_TDD_MICROTASKS.md | TDD Microtasks |
+| 4 | 3.5 | SPEC_33_TEMPLATES.md | Templates |
+| 5 | 4 | SPEC_03_PERSISTENCE_ARCHITECTURE.md | Persistence Architecture |
+| 6 | 4 | SPEC_14_MODEL_RESILIENCE_AND_CONFIG.md | Model Resilience & Configuration |
+| 7 | 5 | SPEC_11_TOOLS_AND_MCP.md | Tools & MCP Architecture |
+| 8 | 6 | SPEC_10_KNOWLEDGE_AND_RAG.md | Knowledge & RAG |
+| 9 | 7 | SPEC_15_CONTEXT_ENGINEERING_AND_COMPRESSION.md | Context Engineering & Compression |
+| 10 | 8 | SPEC_04_MEMORY_ARCHITECTURE.md | Memory Architecture |
+| 11 | 9 | SPEC_31_CULTURE_MANAGER.md | Culture Manager |
+| 12 | 10 | SPEC_28_REASONING_ARCHITECTURE.md | Reasoning Architecture |
+| 13 | 11 | SPEC_16_HITL_APPROVALS_GUARDRAILS.md | HITL, Approvals & Guardrails |
+| 14 | 12 | SPEC_29_WORKFLOW_HITL.md | Workflow-level HITL |
+| 15 | 13 | SPEC_17_MULTIMODAL_IO.md | Multimodal I/O |
+| 16 | 14 | SPEC_30_SKILLS_MANAGEMENT.md | Skills Management |
+| 17 | 15 | SPEC_05_WORKFLOWS_AND_TEAMS.md | Workflows and Teams |
+| 18 | 16 | SPEC_13_SCHEDULER_BACKGROUND_LIFECYCLE.md | Scheduler & Background Lifecycle |
+| 19 | 17 | SPEC_32_REGISTRY_AND_COMPONENTS.md | Registry & Components |
+| 20 | 18 | SPEC_06_API_AND_AX.md | API and AX |
+| 21 | 19 | SPEC_12_AGENTOS_CONTROL_PLANE.md | AgentOS Control Plane |
+| 22 | 20 | SPEC_26_A2A_INTERFACE.md | A2A Interface |
+| 23 | 21 | SPEC_19_SECURITY_AUTH_API_SURFACE.md | Security, Auth and API Surface |
+| 24 | 22 | SPEC_09_OBSERVABILITY_AND_SRE.md | Observability and SRE |
+| 25 | 23 | SPEC_27_TRACING_ARCHITECTURE.md | Tracing Architecture |
+| 26 | 24 | SPEC_18_EVALS_AND_OBSERVABILITY.md | Evals and Observability |
+| 27 | 25 | SPEC_23_CONFIG_AND_SECRETS.md | Config & Secrets |
+| 28 | 26 | SPEC_07_DASHBOARD_ARCHITECTURE.md | Dashboard Architecture |
+| 29 | 27 | SPEC_20_DOCKER_BUILD.md | Docker Build |
+| 30 | 28 | SPEC_22_CICD_PIPELINE.md | CI/CD Pipeline |
+| 31 | 29 | SPEC_21_KUBERNETES_DEPLOYMENT.md | Kubernetes Deployment |
+| 32 | 30 | SPEC_24_MONITORING_STACK.md | Monitoring Stack |
+| 33 | 31 | SPEC_25_SECURITY_HARDENING.md | Security Hardening |
+| 34 | 32 | SPEC_08_TDD_MICROTASKS.md | TDD Microtasks |
 
-> Read_Order 4 is shared by SPEC_03 and SPEC_14 (both foundational, independent reads). All other Read_Orders are unique.
+> Read_Order 3.5 places SPEC_33 (Templates) between the Domain Model (SPEC_02, the SSOT it generates) and the rest of the runtime core; Templates resolves/generates *Config and hands off to factories (SPEC_01). Read_Order 4 is shared by SPEC_03 and SPEC_14 (both foundational, independent reads). All other Read_Orders are unique.
 
 ---
 
