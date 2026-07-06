@@ -102,6 +102,61 @@ app.py:1072). NO `jwt_signing_key`.
 
 ---
 
+## 4bis. ESTRUCTURA `src/` CANÓNICA (anti-inconsistencia F6)
+
+> @ai-directive: este es el ÁRBOL OFICIAL de carpetas de `yaml-agno/src/`. Los
+> SPECs referencian paths con prefijo `src/` (NO `yaml-agno/src/` — el prefijo
+> del repo va implícito). Al implementar, este árbol es la fuente de verdad.
+> `core_infrastructure` (core-cenf-py) es una DEPENDENCIA PIP (se importa con
+> `from core_infrastructure... import ...`) — **NO se copia ni se replica** bajo
+> `src/`. Si un SPEC escribió `src/core_infrastructure/...` es un error de
+> tipeo: corregir a `from core_infrastructure... import`.
+
+```
+yaml-agno/src/
+├── yaml_agno/                    # package root (pip-installable: `import yaml_agno`)
+│   ├── __init__.py
+│   ├── api/                      # SPEC_06: YamlAgentOS, health, middleware
+│   │   ├── app.py                # YamlAgentOS(AgentOS) subclass
+│   │   ├── health.py             # readiness/liveness routers
+│   │   └── middleware/           # rate_limit.py, tenant_context.py
+│   ├── factories/                # SPEC_01: YAML → Agno objects
+│   │   ├── agent_factory.py
+│   │   ├── team_factory.py
+│   │   └── workflow_factory.py
+│   ├── models/                   # SPEC_02 (SSOT): *Config Pydantic schemas
+│   │   └── config/               # agent_config.py, team_config.py, workflow_config.py
+│   ├── di/                       # SPEC_01: DependencyManager (lazy importlib)
+│   │   └── dependency_manager.py
+│   ├── persistence/              # SPEC_03: yamlagno_* config store + DbRegistry
+│   │   ├── registry.py           # DbRegistry (get/get_vector_db)
+│   │   └── models/               # ORM records (AgentConfigRecord, etc.)
+│   ├── memory/                   # SPEC_04: agno_memory_config, user_identity, autosave, scope_mapping
+│   ├── workflows/                # SPEC_05/29: retry_policy, step_executor, a2a_config, human_review
+│   ├── tools/                    # SPEC_11: tool loaders, MCP resolver, security whitelist
+│   ├── knowledge/                # SPEC_10: KnowledgeConfig, chunker/vector resolver
+│   ├── media/                    # SPEC_17: MediaInput, converter, MediaArtifact
+│   ├── hitl/                     # SPEC_16: guardrails, confirmation, approval manager
+│   ├── guardrails/               # SPEC_16: PII/secret sanitizers (BaseGuardrail impls)
+│   ├── skills/                   # SPEC_30: SkillsConfig → agno.skills delegation
+│   ├── culture/                  # SPEC_31: CultureConfig → agno.culture delegation
+│   ├── reasoning/                # SPEC_28: reasoning_effort passthrough (under model:)
+│   ├── evals/                    # SPEC_18: eval adapters (yamlagno_eval_runs table)
+│   ├── scheduler/                # SPEC_13: schedule adapters, background executor
+│   ├── config/                   # SPEC_23: loader (consumes core-cenf ConfigManager)
+│   ├── tracing/                  # SPEC_27: tracing config factory (delegates setup_tracing)
+│   ├── templates/                # SPEC_33: YAML template registry + inheritance resolver
+│   └── runtime/                  # server.py (serve YamlAgentOS on :7777)
+└── (NO core_infrastructure/ — es dependencia pip, se importa, no se replica)
+```
+
+**Reglas**: (a) todo bajo `yaml_agno/` (underscore, nombre pip); (b) una
+carpeta por SPEC dueño; (c) `core_infrastructure` se IMPORTA nunca se copia;
+(d) los adapters delgados (no reimplementan Agno); (e) SSOT: schemas solo en
+`models/`.
+
+---
+
 ## 5. CÓMO SEGUIR (próximos pasos)
 
 1. **Fase actual**: especificaciones COHERENTES y COMPLETAS. Listo para
