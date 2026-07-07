@@ -1,0 +1,119 @@
+[project]
+name = "yaml-agno"
+version = "0.1.0"
+description = "yaml-agno — Declarative YAML-driven agent orchestration on top of Agno"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12,<3.14"
+authors = [
+    {name = "CENF", email = "gonzalo@cenf.tech"},
+]
+keywords = ["agno", "yaml", "agents", "orchestration", "clean-architecture", "sdd", "tdd"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+dependencies = [
+    "agno==2.6.22",
+    # NOTE: the repo is CENFARG/core-cenf-py, but the distribution NAME published
+    # at tag v0.1.0 is "core-cenf" (the local working copy was renamed to
+    # core-cenf-py AFTER the tag was cut). pip validates that the direct
+    # reference name matches the built distribution name, so the requirement
+    # name must be "core-cenf", not "core-cenf-py". The git+https URL still
+    # points at the CENFARG/core-cenf-py repo.
+    "core-cenf @ git+https://github.com/CENFARG/core-cenf-py.git@v0.1.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=7.0",
+    "ruff>=0.15",
+    "mypy>=1.20",
+    "types-pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yaml_agno"]
+
+# core-cenf-py is declared as a PEP 508 direct reference (git+https).
+# hatchling refuses direct references in [project.dependencies] unless this flag
+# is explicitly set. See https://hatch.pypa.io/latest/config/metadata/#allow-direct-references
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "ASYNC", # flake8-async
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501", # line-too-long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+"**/__init__.py" = ["F401"]  # allow unused imports in __init__.py (future re-exports)
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+warn_unreachable = true
+warn_unused_ignores = false
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "agno",
+    "agno.*",
+    "core_infrastructure",
+    "core_infrastructure.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "-v",
+]
+markers = [
+    "unit: Unit tests (no external I/O)",
+    "integration: Integration tests (requires external services)",
+    "e2e: End-to-end tests (full lifecycle)",
+    "slow: Tests that take longer than 2 seconds",
+]
