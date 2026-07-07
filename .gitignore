@@ -73,3 +73,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Build artifacts (hatchling src-layout)
+*.whl
+src/*.egg-info/
+src/yaml_agno.egg-info/
