@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      # core-cenf-py is a PRIVATE GitHub repo (CENFARG/core-cenf-py, isPrivate:true).
+      # pip install resolves it via git+https, which needs authenticated git access.
+      # The GIT_AUTH_TOKEN secret (PAT with read access to CENFARG/core-cenf-py)
+      # MUST be configured on this repo (Settings -> Secrets and variables -> Actions).
+      # Without it, this job FAILS at the pip install step. Expected on first run
+      # until the secret is added — see openspec/changes/bootstrap-pip-package/tasks.md
+      # Open Items.
+      - name: Inject git credentials for private dependency
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.GIT_AUTH_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install package (editable, with dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Type-check with mypy
+        run: mypy src/yaml_agno
+
+      - name: Run tests
+        run: pytest
