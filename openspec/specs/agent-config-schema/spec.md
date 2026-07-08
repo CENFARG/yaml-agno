@@ -107,28 +107,31 @@ contenga caracteres `[A-Za-z0-9_-]` y sea no-vacío.
 - THEN se lanza `ValidationError`
 - AND el mensaje menciona "Invalid agent name"
 
-### Requirement: Validador de formato de model (provider/id)
+### Requirement: Validador de formato de model (provider:id)
 
-`AgentConfig` MUST validar que `model` siga el formato `provider/id` con ambos
+`AgentConfig` MUST validar que `model` siga el formato `provider:id` con ambos
 segmentos no-vacíos (sintaxis solamente; la resolución del provider es del
-DependencyManager, SPEC_01).
+DependencyManager, SPEC_01). El formato `provider:id` es el formato nativo que
+exige `_parse_model_string` de Agno (`agno.models.utils`): cualquier string sin
+`:` lanza `ValueError`. yaml-agno NO implementa capa de traducción (`/`→`:`);
+el YAML usa el formato nativo `:` directamente.
 
-#### Scenario: GREEN — Formato provider/id aceptado
+#### Scenario: GREEN — Formato provider:id aceptado
 
-- GIVEN `model="openai/gpt-4o"`
+- GIVEN `model="openai:gpt-4o"`
 - WHEN se valida AgentConfig
 - THEN el modelo se acepta sin error
 
-#### Scenario: RED — Formato sin slash rechazado
+#### Scenario: RED — Formato sin colon rechazado
 
 - GIVEN `model="invalid-format"`
 - WHEN se valida AgentConfig
 - THEN se lanza `ValidationError`
-- AND el mensaje menciona "Invalid model format"
+- AND el mensaje menciona "Invalid model format" y "Expected 'provider:id'"
 
 #### Scenario: RED — Provider o id vacío rechazado
 
-- GIVEN `model="/gpt-4o"` o `model="openai/"`
+- GIVEN `model=":gpt-4o"` o `model="openai:"`
 - WHEN se valida AgentConfig
 - THEN se lanza `ValidationError`
 
