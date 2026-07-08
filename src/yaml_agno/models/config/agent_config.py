@@ -24,7 +24,7 @@ class AgentConfig(BaseModel):
 
     Invariants enforced at the boundary:
         - ``name`` is non-empty and uses only safe characters [A-Za-z0-9_-].
-        - ``model`` follows the ``provider/id`` string format (Agno model-as-string).
+        - ``model`` follows the ``provider:id`` string format (Agno model-as-string).
 
     Note:
         - Provider/model resolution delegated to DependencyManager (SPEC_01 §1.3)
@@ -40,7 +40,7 @@ class AgentConfig(BaseModel):
 
     # --- Identity (2 fields) ---
     name: str = Field(..., min_length=1, max_length=100, description="Unique agent name.")
-    model: ModelReference = Field(..., description="Model as string 'provider/id' (e.g. openai/gpt-4o). See SPEC_14.")
+    model: ModelReference = Field(..., description="Model as string 'provider:id' (e.g. openai:gpt-4o). See SPEC_14.")
 
     # --- Behavior (2 fields) ---
     instructions: Instructions | None = Field(None, max_length=50000, description="System prompt.")
@@ -79,14 +79,14 @@ class AgentConfig(BaseModel):
     @field_validator("model")
     @classmethod
     def validate_model_format(cls, v: str) -> str:
-        """Ensure model follows 'provider/id' string format.
+        """Ensure model follows 'provider:id' string format.
 
         Only SYNTAX is validated; whether the provider is known is resolved
         later by the DependencyManager against the Agno registry.
         """
-        if "/" not in v:
-            raise ValueError(f"Invalid model format: {v}. Expected 'provider/id'.")
-        provider, _, model_id = v.partition("/")
+        if ":" not in v:
+            raise ValueError(f"Invalid model format: {v}. Expected 'provider:id'.")
+        provider, _, model_id = v.partition(":")
         if not provider or not model_id:
-            raise ValueError(f"Invalid model format: {v}. Expected 'provider/id'.")
+            raise ValueError(f"Invalid model format: {v}. Expected 'provider:id'.")
         return v
