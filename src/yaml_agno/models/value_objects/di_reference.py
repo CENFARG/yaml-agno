@@ -55,8 +55,8 @@ class DIReference(BaseModel):
 
         Returns:
             A list of (provider, full_key) tuples, in order of appearance.
-            Example: ``"Hello ${user_db.name} ${env.API_KEY}"`` ->
-                     ``[("user_db", "name"), ("env", "API_KEY")]``
+            Example: ``"Hello ${user_db.name} ${env.api_key}"`` ->
+                     ``[("user_db", "name"), ("env", "api_key")]``
         """
         return [
             (m.group(1), m.group(2))
