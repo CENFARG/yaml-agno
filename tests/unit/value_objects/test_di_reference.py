@@ -26,10 +26,10 @@ class TestDIReferenceGoldenPaths:
         assert ref.template == "${db.user}"
 
     def test_di_reference_valid_multiple_tokens(self) -> None:
-        """A template with multiple tokens is accepted."""
-        ref = DIReference(template="Hello ${db.name} ${env.ID}")
+        """A template with multiple tokens is accepted (lowercase keys per spec regex)."""
+        ref = DIReference(template="Hello ${db.name} ${env.api_key}")
         assert "db.name" in ref.template
-        assert "env.ID" in ref.template
+        assert "env.api_key" in ref.template
 
     def test_di_reference_tokens_extraction_single(self) -> None:
         """tokens returns a list of (provider, key) tuples in order."""
@@ -37,9 +37,13 @@ class TestDIReferenceGoldenPaths:
         assert ref.tokens == [("db", "name")]
 
     def test_di_reference_tokens_extraction_multiple(self) -> None:
-        """tokens returns every token in order of appearance."""
-        ref = DIReference(template="Hello ${user_db.name} ${env.API_KEY}")
-        assert ref.tokens == [("user_db", "name"), ("env", "API_KEY")]
+        """tokens returns every token in order of appearance.
+
+        Note: the spec regex is lowercase-only (uppercase is rejected by
+        validate_format), so keys must be lowercase.
+        """
+        ref = DIReference(template="Hello ${user_db.name} ${env.api_key}")
+        assert ref.tokens == [("user_db", "name"), ("env", "api_key")]
 
     def test_di_reference_resolve_basic(self) -> None:
         """resolve replaces a bare token with its value."""
