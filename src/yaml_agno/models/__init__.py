@@ -12,9 +12,9 @@ from yaml_agno.models.value_objects.di_reference import DIReference
 
 __all__ = [
     "AgentConfig",
+    "DIReference",
+    "StepConfig",
     "TeamConfig",
     "TeamMemberConfig",
     "WorkflowConfig",
-    "StepConfig",
-    "DIReference",
 ]

@@ -4,10 +4,9 @@ evolves with Agno."""
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
 # IMPORTED from Agno — never redefined. 4 members: coordinate/route/broadcast/tasks.
 from agno.team.mode import TeamMode
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TeamMemberConfig(BaseModel):

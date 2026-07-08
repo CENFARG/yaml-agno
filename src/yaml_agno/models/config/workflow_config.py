@@ -3,11 +3,10 @@ for the workflow YAML shape. StepType is imported from Agno (not redefined)."""
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 # IMPORTED from Agno — never redefined. 8 members, Capitalized values:
 # Function/Step/Steps/Loop/Parallel/Condition/Router/Workflow.
 from agno.workflow.types import StepType
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StepConfig(BaseModel):
