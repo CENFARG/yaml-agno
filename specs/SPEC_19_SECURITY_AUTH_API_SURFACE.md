@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_06", "SPEC_03", "SPEC_01"]
 Group: "G7-ControlPlane-API"
 Read_Order: 21
 Last_Updated: "2026-07-03"
-Revision_Note: "iter4 (deep review vs agno v2.6.18). CRITICAL fix: build_jwt_middleware now accepts and forwards the required `app` first positional arg to agno.os.middleware.jwt.JWTMiddleware (BaseHTTPMiddleware subclass, super().__init__(app)); iter3 omitted it and the constructor cannot be instantiated. Added audience_claim passthrough. CRITICAL consistency fix: removed the yaml-agno UserIsolationEnforcer class (§4, TASK_008) — it duplicated NATIVE AgentOS user_isolation (JWTMiddleware(user_isolation=True) + agno.os.middleware.user_scope helpers get_scoped_user_id/resolve_db_and_scope). §4 now documents the native flow and the TenantContextMiddleware composite user_id contract. Clarified that JWT `sub` is resolved to composite {tenant_id}:{principal_id} by TenantContextMiddleware (SPEC_06) before isolation, and that BasicAuth (dev-only) sets a dev marker user_id that must NOT reach production composite-user stores. Added tenant dimension note to RbacConfig.users."
+Revision_Note: "iter4 (deep review vs agno v2.6.22). CRITICAL fix: build_jwt_middleware now accepts and forwards the required `app` first positional arg to agno.os.middleware.jwt.JWTMiddleware (BaseHTTPMiddleware subclass, super().__init__(app)); iter3 omitted it and the constructor cannot be instantiated. Added audience_claim passthrough. CRITICAL consistency fix: removed the yaml-agno UserIsolationEnforcer class (§4, TASK_008) — it duplicated NATIVE AgentOS user_isolation (JWTMiddleware(user_isolation=True) + agno.os.middleware.user_scope helpers get_scoped_user_id/resolve_db_and_scope). §4 now documents the native flow and the TenantContextMiddleware composite user_id contract. Clarified that JWT `sub` is resolved to composite {tenant_id}:{principal_id} by TenantContextMiddleware (SPEC_06) before isolation, and that BasicAuth (dev-only) sets a dev marker user_id that must NOT reach production composite-user stores. Added tenant dimension note to RbacConfig.users."
 ---
 
 # SPEC_19_SECURITY_AUTH_API_SURFACE
@@ -640,7 +640,7 @@ security:
 
 > @ai-directive BUILD ON TOP: Per-user data isolation is OWNED by AgentOS, NOT
 > reimplemented by yaml-agno. Verified in `agno/os/middleware/jwt.py` and
-> `agno/os/middleware/user_scope.py` (agno v2.6.18):
+> `agno/os/middleware/user_scope.py` (agno v2.6.22):
 >   - `JWTMiddleware(user_isolation=True)` sets `request.state.user_isolation_enabled`.
 >   - `agno.os.middleware.user_scope` provides the helpers every scoped endpoint
 >     MUST call: `get_scoped_user_id(request)`, `resolve_db_and_scope(...)`,

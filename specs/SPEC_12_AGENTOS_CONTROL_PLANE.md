@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_06", "SPEC_09", "SPEC_13"]
 Group: "G7-ControlPlane-API"
 Read_Order: 19
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 3 (deep review vs agno v2.6.18). Reconciled the parameter table with the REAL agno.os.AgentOS.__init__ signature: added a2a_interface, mcp_config (MCPServerConfig, not just the enable bool), on_route_conflict, telemetry, registry, scheduler_base_url, internal_service_token, checkpoint, id/description/version; the table is now an explicit subset (not a hard 18-count claim) and flags which kwargs AgentOSFactory forwards vs which are native-only. Fixed AgentOSConfig.to_agno_kwargs to exclude None so unresolved refs do not override AgentOS defaults. Wave 3 fixes from iter2 verified intact (ResyncSettings ordering, injected ConfigManager, rate-based CircuitBreaker, plain-prose sequence Note)."
+Revision_Note: "Iter 3 (deep review vs agno v2.6.22). Reconciled the parameter table with the REAL agno.os.AgentOS.__init__ signature: added a2a_interface, mcp_config (MCPServerConfig, not just the enable bool), on_route_conflict, telemetry, registry, scheduler_base_url, internal_service_token, checkpoint, id/description/version; the table is now an explicit subset (not a hard 18-count claim) and flags which kwargs AgentOSFactory forwards vs which are native-only. Fixed AgentOSConfig.to_agno_kwargs to exclude None so unresolved refs do not override AgentOS defaults. Wave 3 fixes from iter2 verified intact (ResyncSettings ordering, injected ConfigManager, rate-based CircuitBreaker, plain-prose sequence Note)."
 ---
 
 # SPEC_12_AGENTOS_CONTROL_PLANE
@@ -62,7 +62,7 @@ flowchart LR
 
 ## 2. AGENTOS CONSTRUCTOR - PARÁMETROS
 
-> @ai-directive: The `agno.os.AgentOS.__init__` (verified against agno v2.6.18,
+> @ai-directive: The `agno.os.AgentOS.__init__` (verified against agno v2.6.22,
 > `libs/agno/agno/os/app.py`) exposes ~32 parameters. yaml-agno does NOT forward
 > all of them. The table below is the EXPLICIT SUBSET that the `AgentOSFactory`
 > resolves from YAML. Native-only parameters (auto-managed by AgentOS, not

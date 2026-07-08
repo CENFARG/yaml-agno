@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_02", "SPEC_11"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 13
 Last_Updated: "2026-07-03"
-Revision_Note: "iter5 (deep adversarial review vs Agno v2.6.18): CRITICAL fix — ToolResult field is `audios` (plural), not `audio` (agno/tools/function.py:1352); CRITICAL fix — send_media_to_model/store_media are Agent CONSTRUCTOR params (agent.py:218-220,423,450), NOT run()/arun() params, so they MUST be set on the Agent via MultimodalAgentBuilder.apply_to_agent (already exists) and removed from the agent.arun() call in run_multimodal_agent; fixed broken frontmatter (missing closing ---); documented the real extra fields on agno.media Image/Audio/Video/File (mime_type, format, detail, duration, width/height, etc.) and that yaml-agno populates a documented subset. Wave 4 fixes retained (no AgentRunRequest, process_inputs arg order, SecretManager S3 creds, MediaType SSOT)."
+Revision_Note: "iter5 (deep adversarial review vs Agno v2.6.22): CRITICAL fix — ToolResult field is `audios` (plural), not `audio` (agno/tools/function.py:1352); CRITICAL fix — send_media_to_model/store_media are Agent CONSTRUCTOR params (agent.py:218-220,423,450), NOT run()/arun() params, so they MUST be set on the Agent via MultimodalAgentBuilder.apply_to_agent (already exists) and removed from the agent.arun() call in run_multimodal_agent; fixed broken frontmatter (missing closing ---); documented the real extra fields on agno.media Image/Audio/Video/File (mime_type, format, detail, duration, width/height, etc.) and that yaml-agno populates a documented subset. Wave 4 fixes retained (no AgentRunRequest, process_inputs arg order, SecretManager S3 creds, MediaType SSOT)."
 ---
 
 # SPEC_17_MULTIMODAL_IO
@@ -1168,7 +1168,7 @@ async def run_multimodal_agent(
 
     Precondition: ``agent`` MUST already have ``send_media_to_model`` and
     ``store_media`` set via ``MultimodalAgentBuilder.apply_to_agent`` (§12.1).
-    In Agno v2.6.18 these are Agent CONSTRUCTOR params (agent.py:218-220,423,450),
+    In Agno v2.6.22 these are Agent CONSTRUCTOR params (agent.py:218-220,423,450),
     NOT run()/arun() params, so they cannot be passed in this helper's arun() call.
     The ``config`` arg is kept for the storage backend and future per-run overrides.
 

@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_00", "SPEC_01"]
 Group: "G2-Runtime-Core"
 Read_Order: 3
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 3 - deep adversarial review against Agno v2.6.18. Clarified that StepConfig fields (execute/finally_/condition/if_true/if_false/expression/cases/function) are yaml-agno YAML abstractions translated by the WorkflowFactory, NOT native Agno params (Agno Condition uses evaluator/steps/else_steps; Router uses selector/choices; Step has no execute/finally). Strengthened validate_type_specific_fields to cover all step types. Fixed DIReference docstring example (removed non-existent provider/keys attributes). Tightened model validator to reject empty provider/id segments."
+Revision_Note: "Iter 3 - deep adversarial review against Agno v2.6.22. Clarified that StepConfig fields (execute/finally_/condition/if_true/if_false/expression/cases/function) are yaml-agno YAML abstractions translated by the WorkflowFactory, NOT native Agno params (Agno Condition uses evaluator/steps/else_steps; Router uses selector/choices; Step has no execute/finally). Strengthened validate_type_specific_fields to cover all step types. Fixed DIReference docstring example (removed non-existent provider/keys attributes). Tightened model validator to reject empty provider/id segments."
 ---
 
 # SPEC_02_DOMAIN_MODEL
