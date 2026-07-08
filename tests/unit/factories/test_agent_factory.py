@@ -139,6 +139,13 @@ class TestAgentFactoryBuild:
         )
         result = AgentFactory.build(cfg)
         assert isinstance(result, Agent)
+        # Non-forwarding: the factory MUST NOT pass opaque slots/tags/metadata
+        # to Agent(). For attributes Agent exposes, assert they hold Agno's
+        # DEFAULTS, not the populated cfg values (proves they were ignored).
+        assert result.tools == []  # cfg had [{"name": "tool1"}] -> ignored
+        assert result.knowledge is None  # cfg had {"db": "pg"} -> ignored
+        assert result.skills is None  # cfg had {"list": ["s1"]} -> ignored
+        assert result.metadata is None  # cfg had {"owner": "team-foo"} -> ignored
 
     def test_build_does_not_invoke_run_or_arun(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Scenario: GREEN — ``build()`` no invoca ``run()`` ni ``arun()``.
