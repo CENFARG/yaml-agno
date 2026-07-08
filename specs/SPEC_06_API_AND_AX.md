@@ -15,7 +15,7 @@ Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared reso
 
 # SPEC_06_API_AND_AX
 
-> **Purpose**: yaml-agno is a THIN INHERITANCE LAYER over AgentOS (Agno v2.6.18). It does NOT build a parallel FastAPI app, does NOT ship its own `/run`, `/sessions`, `/agents` config, `/health`, or middleware classes that duplicate AgentOS. Instead yaml-agno defines **`class YamlAgentOS(AgentOS)`** — a subclass — and overrides `get_app()` to register the few extensions AgentOS genuinely lacks. Everything yaml-agno adds is mounted on the app returned by `super().get_app()`, preserving AgentOS lifespan, exception handlers, DB auto-discovery, JWT/RBAC, and the full native router set.
+> **Purpose**: yaml-agno is a THIN INHERITANCE LAYER over AgentOS (Agno v2.6.22). It does NOT build a parallel FastAPI app, does NOT ship its own `/run`, `/sessions`, `/agents` config, `/health`, or middleware classes that duplicate AgentOS. Instead yaml-agno defines **`class YamlAgentOS(AgentOS)`** — a subclass — and overrides `get_app()` to register the few extensions AgentOS genuinely lacks. Everything yaml-agno adds is mounted on the app returned by `super().get_app()`, preserving AgentOS lifespan, exception handlers, DB auto-discovery, JWT/RBAC, and the full native router set.
 >
 > yaml-agno adds ONLY what AgentOS lacks:
 >
@@ -34,7 +34,7 @@ Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared reso
 
 ### 1.1 Native run / session / config / health endpoints
 
-| yaml-agno role | AgentOS native endpoint | file:line (v2.6.18) |
+| yaml-agno role | AgentOS native endpoint | file:line (v2.6.22) |
 |---|---|---|
 | Mount, do NOT reimplement | `POST /agents/{agent_id}/runs` | `agents/router.py:551` |
 | Mount, do NOT reimplement | `GET /agents/{agent_id}`, `GET /agents`, `GET /config` | `agents/router.py:1320`, `agents/router.py:1216`, `os/router.py:79` |

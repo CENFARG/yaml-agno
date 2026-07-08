@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_02", "SPEC_03"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 6
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 3 - Deep adversarial review vs Agno v2.6.18: fixed 12 incorrect VectorDb class names (Weaviate not WeaviateDb, Milvus not MilvusDb, RedisDB not RedisDb, CouchbaseSearch not CouchbaseDb, Cassandra not CassandraDb, UpstashVectorDb not UpstashDb, SingleStore not SingleStoreDb, Clickhouse not ClickHouseDb, LlamaIndexVectorDb not LlamaIndexVectorStore) and 3 module paths (mongodb not mongo, langchaindb not langchain, upstashdb not upstash). Removed INVENTED azure_cosmos/AzureCosmosMongoDb backend (no such module in Agno). Fixed PgVector params: hybrid_search_ratio -> vector_score_weight (real Agno param); removed invented hybrid_search_config. Fixed Knowledge constructor: reader/chunker/embedder/reranker are NOT Knowledge params (they live in vector_db/readers); search() is the real method (search_knowledge is the agent tool name). Fixed embedder class names (HuggingfaceCustomEmbedder, VLLMEmbedder, LangDBEmbedder, FastEmbedEmbedder) and OpenAIEmbedder default id (text-embedding-3-small, not ada-002); added OpenAILikeEmbedder (18 total, not 17). Fixed chunker CSVRowChunking -> RowChunking. Fixed readers: PDFPasswordReader is a PDFReader(password=) param (not a class); YoutubeReader -> YouTubeReader; LLMSReader -> LLMsTxtReader; added DocxReader, ExcelReader, S3Reader, TavilyReader, TextReader, PDFImageReader."
+Revision_Note: "Iter 3 - Deep adversarial review vs Agno v2.6.22: fixed 12 incorrect VectorDb class names (Weaviate not WeaviateDb, Milvus not MilvusDb, RedisDB not RedisDb, CouchbaseSearch not CouchbaseDb, Cassandra not CassandraDb, UpstashVectorDb not UpstashDb, SingleStore not SingleStoreDb, Clickhouse not ClickHouseDb, LlamaIndexVectorDb not LlamaIndexVectorStore) and 3 module paths (mongodb not mongo, langchaindb not langchain, upstashdb not upstash). Removed INVENTED azure_cosmos/AzureCosmosMongoDb backend (no such module in Agno). Fixed PgVector params: hybrid_search_ratio -> vector_score_weight (real Agno param); removed invented hybrid_search_config. Fixed Knowledge constructor: reader/chunker/embedder/reranker are NOT Knowledge params (they live in vector_db/readers); search() is the real method (search_knowledge is the agent tool name). Fixed embedder class names (HuggingfaceCustomEmbedder, VLLMEmbedder, LangDBEmbedder, FastEmbedEmbedder) and OpenAIEmbedder default id (text-embedding-3-small, not ada-002); added OpenAILikeEmbedder (18 total, not 17). Fixed chunker CSVRowChunking -> RowChunking. Fixed readers: PDFPasswordReader is a PDFReader(password=) param (not a class); YoutubeReader -> YouTubeReader; LLMSReader -> LLMsTxtReader; added DocxReader, ExcelReader, S3Reader, TavilyReader, TextReader, PDFImageReader."
 ---
 
 # SPEC_10_KNOWLEDGE_AND_RAG
@@ -182,7 +182,7 @@ type VectorDbConfig = Annotated[
 | `llamaindex` | `agno.vectordb.llamaindex.LlamaIndexVectorDb` | segun provider | si | wrapper | Cualquier VS de LI |
 
 > **Nota sobre backends removidos**: `azure_cosmos`/`AzureCosmosMongoDb` figuraba en
-> iteraciones previas pero NO existe como backend en Agno v2.6.18 (no hay módulo
+> iteraciones previas pero NO existe como backend en Agno v2.6.22 (no hay módulo
 > `agno.vectordb.azure_cosmos_mongodb`). Removido. Para Cosmos DB vCore, usar el
 > wrapper `type: mongo` con un URI de Cosmos o `type: langchain` con el vectorstore
 > de LangChain correspondiente.
@@ -504,7 +504,7 @@ type EmbedderConfig = Annotated[
 | `nebius` | `NebiusEmbedder` | - | - | si | api_key |
 | `fastembed` | `FastEmbedEmbedder` | - | - | no | local |
 
-> **Nota**: agno v2.6.18 expone 18 embedders (no 17). `OpenAILikeEmbedder` y
+> **Nota**: agno v2.6.22 expone 18 embedders (no 17). `OpenAILikeEmbedder` y
 > `FastEmbedEmbedder` (antes referido como `QdrantFastEmbedEmbedder`) son los
 > ajustes de nombre; `OpenAIEmbedder.id` defaultea a `text-embedding-3-small`
 > (no `text-embedding-ada-002`); las dimensiones se infieren en runtime
@@ -810,7 +810,7 @@ knowledge:
 | PDF con imágenes | PDFImageReader | si |
 
 > **Nota**: el soporte de PDF con password NO es una clase separada — es el
-> argumento `password=` del `PDFReader` (BasePDFReader). Agno v2.6.18 expone
+> argumento `password=` del `PDFReader` (BasePDFReader). Agno v2.6.22 expone
 > ~20 readers; la lista cubre los más usados.
 
 ```yaml

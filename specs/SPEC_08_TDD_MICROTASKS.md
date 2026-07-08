@@ -107,7 +107,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 
 ### 2.4 Owner SPEC_04 - Agno Native Memory Configuration
 
-> @ai-directive: yaml-agno does NOT own a session runtime, a memory FIFO, a `LongTermMemoryPort`, or any adapter. Long-term memory is 100% Agno native; yaml-agno only CONFIGURES it from YAML (Agent constructor flags + `learning:` block) and drives the REAL Agno v2.6.18 APIs. The rich path (`learning.enabled=true`) uses `LearningMachine` (recall via `arecall`, writes via `decision_log_store.asave(DecisionLog)` / `learned_knowledge_store.asave(...)`); the simple path uses `MemoryManager` (`aget_user_memories` for recall, the SYNCHRONOUS `add_user_memory(UserMemory, user_id)` for writes). Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
+> @ai-directive: yaml-agno does NOT own a session runtime, a memory FIFO, a `LongTermMemoryPort`, or any adapter. Long-term memory is 100% Agno native; yaml-agno only CONFIGURES it from YAML (Agent constructor flags + `learning:` block) and drives the REAL Agno v2.6.22 APIs. The rich path (`learning.enabled=true`) uses `LearningMachine` (recall via `arecall`, writes via `decision_log_store.asave(DecisionLog)` / `learned_knowledge_store.asave(...)`); the simple path uses `MemoryManager` (`aget_user_memories` for recall, the SYNCHRONOUS `add_user_memory(UserMemory, user_id)` for writes). Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
 
 | Catalog ID | Owner SPEC task | Component | File | Test |
 |------------|-----------------|-----------|------|------|

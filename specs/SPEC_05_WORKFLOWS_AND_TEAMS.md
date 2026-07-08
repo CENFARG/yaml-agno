@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_09"]
 Group: "G6-Orquestacion"
 Read_Order: 15
 Last_Updated: "2026-07-02"
-Revision_Note: "iter2: delegate inter-agent/inter-team wire protocol to Agno native A2A (removed custom message_protocol.py; ACP explicitly unsupported). Consume real core-cenf-py ErrorHandlingManager API (classify/report/handle/handle_errors, ErrorClassification TRANSIENT/PERMANENT/VALIDATION/AUTH/RATE_LIMIT; no CRITICAL, no should_retry, sync report). Scope retry_policy.py to the Agno step-level gap only (model retry owned by Agno Model fields; HITL retry native). Make retry/timeout values configurable YAML examples. Resolve strategic questions [Q1]/[Q2]/[Q3] via Agno evidence. Fix Agno version refs v2.6.14 -> v2.6.18."
+Revision_Note: "iter2: delegate inter-agent/inter-team wire protocol to Agno native A2A (removed custom message_protocol.py; ACP explicitly unsupported). Consume real core-cenf-py ErrorHandlingManager API (classify/report/handle/handle_errors, ErrorClassification TRANSIENT/PERMANENT/VALIDATION/AUTH/RATE_LIMIT; no CRITICAL, no should_retry, sync report). Scope retry_policy.py to the Agno step-level gap only (model retry owned by Agno Model fields; HITL retry native). Make retry/timeout values configurable YAML examples. Resolve strategic questions [Q1]/[Q2]/[Q3] via Agno evidence. Fix Agno version refs v2.6.14 -> v2.6.22."
 Revision_Note_Iter3: "Iter 3 - Wave 6 hygiene: mermaid edge label 'Critical error' -> 'PERMANENT error' to align with the ErrorClassification vocabulary (no CRITICAL category)."
 ---
 
@@ -206,7 +206,7 @@ a2a:
 
 ## 3. ERROR HANDLING COMPOSITION AT THE WORKFLOW LEVEL
 
-> @ai-directive: yaml-agno does NOT reimplement error classification, ExceptionGroup handling, or single-call retry. Agno v2.6.18 already provides retry/error handling in its runtime:
+> @ai-directive: yaml-agno does NOT reimplement error classification, ExceptionGroup handling, or single-call retry. Agno v2.6.22 already provides retry/error handling in its runtime:
 > - **Model layer (mature, owned by Agno)**: `agno/models/base.py` exposes `retries`, `delay_between_retries`, `exponential_backoff`, `retry_with_guidance`, `retry_with_guidance_limit`. yaml-agno MAPS YAML onto these `Model.*` fields and does NOT reimplement model-level retry.
 > - **Step layer (naive — THE REAL GAP)**: `agno/workflow/step.py` `Step.max_retries=3` uses a bare `except Exception` loop with immediate re-run — no backoff, no delay, no jitter, no per-exception classification. yaml-agno's `RetryPolicy` FILLS THIS GAP at the step layer only.
 > - **HITL retry (native, do not rebuild)**: Agno owns `OnReject(skip|retry)`, `OnError(fail|skip|pause)`, `ErrorRequirement`, `hitl_max_retries`, and the `OnReject.retry` path.
@@ -767,7 +767,7 @@ AND no custom TeamMessage / MessageType envelope is used
 
 ## 8. RESOLVED STRATEGIC QUESTIONS
 
-> @ai-directive: All three questions are RESOLVED against verified Agno v2.6.18 evidence. They are kept as documented decisions, not open trade-off lists.
+> @ai-directive: All three questions are RESOLVED against verified Agno v2.6.22 evidence. They are kept as documented decisions, not open trade-off lists.
 
 ### [Question 1] Per-Workflow-Step Timeout — RESOLVED (configurable per step)
 
