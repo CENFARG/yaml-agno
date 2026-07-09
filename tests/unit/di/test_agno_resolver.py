@@ -12,17 +12,14 @@ allowlist strict-mode rejection, and register idempotency.
 from __future__ import annotations
 
 import pytest
-
 from core_infrastructure.common.errors import ValidationError
 from core_infrastructure.dependency import InMemoryDependencyAdapter
 
 from yaml_agno.di.agno_resolver import AgnoResolver
 from yaml_agno.di.registries import (
-    AGNO_ALLOWLIST_PREFIXES,
     MODEL_REGISTRY,
     STORAGE_REGISTRY,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stub Agno classes — stand-ins for real agno models/dbs. They record how they

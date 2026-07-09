@@ -15,7 +15,6 @@ import pytest
 from yaml_agno.di.value_resolver import ValueResolver
 from yaml_agno.models.value_objects.di_reference import DIReference
 
-
 # ---------------------------------------------------------------------------
 # Helper: construct an InMemoryConfigAdapter (the config adapter __init__ in
 # the installed core-cenf v0.1.0 does not re-export the class).

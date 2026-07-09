@@ -14,13 +14,11 @@ Covers 4 scenarios from SPEC_01 §build_agno_resolver:
 from __future__ import annotations
 
 import pytest
-
 from core_infrastructure.common.errors import ValidationError
 from core_infrastructure.dependency import InMemoryDependencyAdapter
 
 from yaml_agno.di.agno_resolver import AgnoResolver, build_agno_resolver
 from yaml_agno.di.registries import AGNO_ALLOWLIST_PREFIXES
-
 
 # ---------------------------------------------------------------------------
 # Lazy imports of in-memory adapters (installed core-cenf v0.1.0 does not
@@ -125,7 +123,5 @@ def test_build_graph_order_config_logger_observability_errors_dependency() -> No
     assert handler is not None
 
     # And the factory wiring that uses this 3-arg constructor must succeed.
-    resolver = build_agno_resolver(
-        cfg, logger=logger, observability=obs
-    )
+    resolver = build_agno_resolver(cfg, logger=logger, observability=obs)
     assert isinstance(resolver, AgnoResolver)

@@ -92,6 +92,5 @@ class ValueResolver:
             # ConfigManager.get_string: KeyError → ValidationError si no existe.
             return self._config.get_string(key)
         raise NotImplementedError(
-            f"ValueResolver MVP supports only {_SUPPORTED_PROVIDERS}; "
-            f"provider {provider!r} is deferred to SPEC_23"
+            f"ValueResolver MVP supports only {_SUPPORTED_PROVIDERS}; provider {provider!r} is deferred to SPEC_23"
         )

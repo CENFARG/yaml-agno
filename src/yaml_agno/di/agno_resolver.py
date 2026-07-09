@@ -233,16 +233,10 @@ def build_agno_resolver(
         )
 
     resolved_logger: LoggerManager = logger if logger is not None else StructlogAdapter(resolved_config)
-    resolved_obs: ObservabilityManager = (
-        observability if observability is not None else NoopObservabilityAdapter()
-    )
+    resolved_obs: ObservabilityManager = observability if observability is not None else NoopObservabilityAdapter()
     resolved_errors: ErrorHandlingManager = (
-        errors
-        if errors is not None
-        else ClassificationAdapter(resolved_config, resolved_logger, resolved_obs)
+        errors if errors is not None else ClassificationAdapter(resolved_config, resolved_logger, resolved_obs)
     )
-    dep_adapter: DependencyManager = ImportlibDependencyAdapter(
-        resolved_config, resolved_logger, resolved_errors
-    )
+    dep_adapter: DependencyManager = ImportlibDependencyAdapter(resolved_config, resolved_logger, resolved_errors)
 
     return AgnoResolver(dep_adapter)

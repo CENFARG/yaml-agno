@@ -24,10 +24,10 @@ from yaml_agno.di.value_resolver import ValueResolver
 
 __all__ = [
     "AGNO_ALLOWLIST_PREFIXES",
-    "AgnoResolver",
     "MODEL_REGISTRY",
     "STORAGE_REGISTRY",
-    "ValueResolver",
     "WORKFLOW_REGISTRY",
+    "AgnoResolver",
+    "ValueResolver",
     "build_agno_resolver",
 ]
