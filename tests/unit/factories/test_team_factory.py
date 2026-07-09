@@ -177,19 +177,28 @@ class TestTeamFactoryBuild:
         """Scenario: Workflows presentes, sin error.
 
         A populated ``cfg.workflows`` does NOT raise; nothing derived from
-        workflows reaches ``agno.Team``.
+        workflows reaches ``agno.Team``. Opaque slots that DO map to valid
+        Team kwargs (description, metadata) are ALSO NOT forwarded — the
+        result holds Agno's defaults, proving the factory ignored them.
         """
         cfg = TeamConfig(
             name="t",
             mode=TeamMode.coordinate,
             members=[TeamMemberConfig(member="m1", agent="a1")],
             workflows=[{"workflow": "x", "steps": [{"name": "s1"}]}],
+            description="should-not-forward",
+            tags=["prod"],
+            metadata={"owner": "team-foo"},
         )
         agents = {"a1": _agent("a1")}
 
         result = TeamFactory.build(cfg, agents)
 
         assert isinstance(result, Team)
+        # Non-forwarding: opaque slots MUST NOT reach the Team. These map to
+        # valid Team params, so assert they hold Agno's defaults, not cfg's.
+        assert result.description != cfg.description
+        assert result.metadata != cfg.metadata
 
     def test_build_constructs_all_four_team_modes(self) -> None:
         """Scenario: coordinate/route/broadcast/tasks construyen.
