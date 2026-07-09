@@ -19,7 +19,20 @@ from __future__ import annotations
 from typing import Any
 
 from core_infrastructure.common.errors import ValidationError
-from core_infrastructure.dependency import DependencyManager
+from core_infrastructure.config.adapters.pydantic_config_adapter import (
+    PydanticConfigAdapter,
+)
+from core_infrastructure.config.ports import ConfigManager
+from core_infrastructure.dependency import (
+    DependencyManager,
+    ImportlibDependencyAdapter,
+)
+from core_infrastructure.errors.adapters import ClassificationAdapter
+from core_infrastructure.errors.ports import ErrorHandlingManager
+from core_infrastructure.logger.adapters import StructlogAdapter
+from core_infrastructure.logger.ports import LoggerManager
+from core_infrastructure.observability.adapters import NoopObservabilityAdapter
+from core_infrastructure.observability.ports import ObservabilityManager
 
 from yaml_agno.di.registries import (
     MODEL_REGISTRY,
@@ -166,8 +179,70 @@ class AgnoResolver:
         return self._adapter.resolve_class(module_path, class_name)  # type: ignore[no-any-return]
 
 
-# build_agno_resolver factory is added in Phase 6 (imported lazily to keep the
-# AgnoResolver class usable standalone). The stub below is overwritten then.
-def build_agno_resolver(*args: Any, **kwargs: Any) -> AgnoResolver:  # pragma: no cover
-    """Placeholder — implemented fully in Phase 6."""
-    raise NotImplementedError("build_agno_resolver is implemented in Phase 6")
+def build_agno_resolver(
+    config: ConfigManager | None = None,
+    *,
+    logger: LoggerManager | None = None,
+    errors: ErrorHandlingManager | None = None,
+    observability: ObservabilityManager | None = None,
+    adapter: DependencyManager | None = None,
+) -> AgnoResolver:
+    """Fábrica síncrona que ensambla los managers de core-cenf y el AgnoResolver.
+
+    Orden del grafo (A3, A4): Config → Logger → Observability → Errors →
+    Dependency → AgnoResolver. Los 4 adapters concretos son síncronos (verificado
+    en source core-cenf v0.1.0).
+
+    Conveniencia: si ``config`` es None, se construye ``PydanticConfigAdapter()``
+    con defaults (env-only). Si ``adapter`` ya viene inyectado (tests), se omite
+    el wiring de los 3 managers.
+
+    Args:
+        config: ConfigManager con ``dependency.allowlist_paths`` ya sembrados
+            (A4). Si None, se crea ``PydanticConfigAdapter()`` — el host DEBE
+            entonces exponer ``CENF_dependency__allowlist_paths`` o un YAML.
+        logger: LoggerManager. Si None, ``StructlogAdapter(config)``.
+        errors: ErrorHandlingManager. Si None,
+            ``ClassificationAdapter(config, logger, observability)``.
+        observability: ObservabilityManager. Si None, ``NoopObservabilityAdapter()``.
+        adapter: DependencyManager ya construido. Si se pasa, se usa directo y
+            ``config/logger/errors/observability`` se ignoran.
+
+    Returns:
+        Un ``AgnoResolver`` listo para resolver providers Agno.
+
+    Raises:
+        ValidationError: Si el allowlist está vacío y el adapter está en strict
+            mode (mala siembra de ``dependency.allowlist_paths``).
+    """
+    if adapter is not None:
+        return AgnoResolver(adapter)
+
+    # Config: ya debe traer dependency.allowlist_paths sembrado (A4). Si el
+    # caller no proveyó uno, PydanticConfigAdapter lee YAML+CENF_ env.
+    resolved_config: ConfigManager = config if config is not None else PydanticConfigAdapter()
+
+    # Guard de siembra: si la sección no tiene allowlist_paths, fallar ruidosamente
+    # en lugar de devolver un resolver que rechaza todo en strict mode.
+    dep_section = resolved_config.get_section("dependency")
+    if not dep_section.get("allowlist_paths"):
+        raise ValidationError(
+            "dependency.allowlist_paths is empty — seed AGNO_ALLOWLIST_PREFIXES "
+            "in the config before calling build_agno_resolver()",
+            details={"section": "dependency"},
+        )
+
+    resolved_logger: LoggerManager = logger if logger is not None else StructlogAdapter(resolved_config)
+    resolved_obs: ObservabilityManager = (
+        observability if observability is not None else NoopObservabilityAdapter()
+    )
+    resolved_errors: ErrorHandlingManager = (
+        errors
+        if errors is not None
+        else ClassificationAdapter(resolved_config, resolved_logger, resolved_obs)
+    )
+    dep_adapter: DependencyManager = ImportlibDependencyAdapter(
+        resolved_config, resolved_logger, resolved_errors
+    )
+
+    return AgnoResolver(dep_adapter)
