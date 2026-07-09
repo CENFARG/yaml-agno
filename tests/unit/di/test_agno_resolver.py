@@ -152,7 +152,9 @@ def test_resolve_class_non_allowlisted_rejected() -> None:
     Uses the REAL ImportlibDependencyAdapter (not the in-memory double) so the
     strict allowlist prefix-match is exercised against an empty allowlist.
     """
-    from core_infrastructure.config.adapters import InMemoryConfigAdapter
+    from core_infrastructure.config.adapters.in_memory_config_adapter import (
+        InMemoryConfigAdapter,
+    )
     from core_infrastructure.dependency import ImportlibDependencyAdapter
     from core_infrastructure.errors.adapters import CapturingErrorAdapter
     from core_infrastructure.logger.adapters import InMemoryLoggerAdapter
