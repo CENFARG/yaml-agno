@@ -199,3 +199,26 @@ def test_registries_module_imports_without_optional_deps() -> None:
     assert hasattr(mod, "PROVIDER_ALIASES")
     # mistral entry is present even though mistralai is NOT installed in this env.
     assert "mistral" in mod.MODEL_REGISTRY
+
+
+@pytest.mark.unit
+def test_openai_alias_lockstep_in_sync() -> None:
+    """Lock-step guard: the openai back-compat alias MUST stay identical to openai_chat.
+
+    The ``openai`` shorthand is represented in THREE places (coherence audit obs
+    #1978): a direct ``MODEL_REGISTRY`` key, a direct ``PROVIDER_REGISTRY`` key,
+    AND the ``PROVIDER_ALIASES`` map. If a future edit changes one without the
+    others, raw ``MODEL_REGISTRY["openai"]`` lookups and alias-aware resolution
+    silently diverge. This test enforces their equality so drift fails loudly.
+    """
+    from yaml_agno.di.provider_capabilities import PROVIDER_REGISTRY
+    from yaml_agno.di.registries import MODEL_REGISTRY, PROVIDER_ALIASES
+
+    # 1. Alias map points openai -> openai_chat (the canonical id).
+    assert PROVIDER_ALIASES.get("openai") == "openai_chat"
+
+    # 2. The direct MODEL_REGISTRY key equals the canonical openai_chat tuple.
+    assert MODEL_REGISTRY["openai"] == MODEL_REGISTRY["openai_chat"]
+
+    # 3. The direct PROVIDER_REGISTRY entry equals the canonical one too.
+    assert PROVIDER_REGISTRY["openai"] == PROVIDER_REGISTRY["openai_chat"]
