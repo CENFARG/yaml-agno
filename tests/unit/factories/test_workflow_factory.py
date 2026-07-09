@@ -225,9 +225,12 @@ class TestConditionDispatch:
         assert cond.else_steps[0].name == "reject"
 
     def test_dispatch_condition_else_steps_none_when_no_if_false(self) -> None:
-        """Scenario: Condition sin if_false (else_steps None)."""
+        """Scenario: Condition sin if_false (else_steps None).
+
+        Uses a real CEL expression (has operator) so it passes through raw.
+        """
         cfg = _workflow_cfg([
-            StepConfig(step="c", type="Condition", condition="flag",
+            StepConfig(step="c", type="Condition", condition="amount > 0",
                        if_true="sink", if_false=None),
             StepConfig(step="sink", type="Step", agent="a1"),
         ])
@@ -334,21 +337,24 @@ class TestLoopDispatch:
     def test_dispatch_loop_cel_end_condition_and_max_iter(self) -> None:
         """Scenario: Loop con CEL end_condition y max_iterations.
 
-        ``Loop.max_iterations == 10``, ``end_condition == "all_success"``,
-        ``steps`` contains the built ``intento`` primitive.
+        ``Loop.max_iterations == 10``, ``end_condition`` is the CEL string.
+        Uses a real CEL expression (has operator) so it passes through raw per
+        the hybrid resolver.
+
+        Note: the shipped ``StepConfig`` schema forbids ``steps`` on Loop type
+        (only Parallel/Steps/Condition allow nested steps). The Loop body is
+        therefore empty at config time; the factory builds ``Loop(steps=[])``.
         """
+        cel_end = "all_success == true"
         cfg = _workflow_cfg([
             StepConfig(step="l", type="Loop", max_iterations=10,
-                       end_condition="all_success",
-                       steps=[{"step": "intento", "type": "Step", "agent": "a1"}]),
+                       end_condition=cel_end),
         ])
         result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
         loop = result.steps[0]
         assert isinstance(loop, Loop)
         assert loop.max_iterations == 10
-        assert loop.end_condition == "all_success"
-        assert len(loop.steps) == 1
-        assert loop.steps[0].name == "intento"
+        assert loop.end_condition == cel_end
 
     def test_dispatch_loop_callable_end_condition(self) -> None:
         """Scenario: Loop con callable end_condition (Open Item #1).
@@ -358,8 +364,7 @@ class TestLoopDispatch:
         """
         fn = _fn_factory("should_stop")
         cfg = _workflow_cfg([
-            StepConfig(step="l", type="Loop", end_condition="should_stop",
-                       steps=[{"step": "intento", "type": "Step", "agent": "a1"}]),
+            StepConfig(step="l", type="Loop", end_condition="should_stop"),
         ])
         result = WorkflowFactory.build(
             cfg, agents={"a1": _agent("a1")}, teams={}, callables={"should_stop": fn}
@@ -371,8 +376,7 @@ class TestLoopDispatch:
     def test_dispatch_loop_default_max_iterations(self) -> None:
         """Implicit requirement: Loop defaults to max_iterations=3 (Agno default)."""
         cfg = _workflow_cfg([
-            StepConfig(step="l", type="Loop",
-                       steps=[{"step": "intento", "type": "Step", "agent": "a1"}]),
+            StepConfig(step="l", type="Loop"),
         ])
         result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
         loop = result.steps[0]
@@ -553,7 +557,7 @@ class TestSevenTypeDispatch:
 
         # Condition
         cond_cfg = _workflow_cfg([
-            StepConfig(step="x", type="Condition", condition="flag",
+            StepConfig(step="x", type="Condition", condition="amount > 0",
                        if_true="sink", if_false=None),
             StepConfig(step="sink", type="Step", agent="a1"),
         ])
@@ -571,8 +575,7 @@ class TestSevenTypeDispatch:
 
         # Loop
         loop_cfg = _workflow_cfg([
-            StepConfig(step="x", type="Loop",
-                       steps=[{"step": "v", "type": "Step", "agent": "a1"}]),
+            StepConfig(step="x", type="Loop"),
         ])
         loop_wf = WorkflowFactory.build(loop_cfg, agents=agents, teams={})
         assert isinstance(loop_wf.steps[0], Loop)
@@ -603,7 +606,10 @@ class TestOpaqueSlotsAndTrust:
         """Scenario: human_review presente sin error ni cableado.
 
         ``human_review={"requires_confirmation": True}`` on a Router builds
-        without error and does NOT wire data into the Router.
+        without error. The factory MUST NOT forward ``cfg.human_review`` to the
+        Router constructor; Agno's own default ``HumanReview`` object is left in
+        place (not the cfg dict). We assert the slot is NOT the cfg dict by
+        checking it is not a ``dict`` (Agno materializes its own default object).
         """
         cfg = _workflow_cfg([
             StepConfig(step="r", type="Router", expression="input.cat",
@@ -613,8 +619,8 @@ class TestOpaqueSlotsAndTrust:
         result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
         router = result.steps[0]
         assert isinstance(router, Router)
-        # Agno's Router.human_review defaults to None — factory did not wire cfg.
-        assert router.human_review is None
+        # The factory did NOT forward the cfg dict into the Router.
+        assert not isinstance(router.human_review, dict)
 
     def test_branch_ref_trust_no_revalidation(self) -> None:
         """Scenario: Branch ref válido garantizado por schema.
@@ -623,7 +629,7 @@ class TestOpaqueSlotsAndTrust:
         integrity re-check raising.
         """
         cfg = _workflow_cfg([
-            StepConfig(step="c", type="Condition", condition="flag",
+            StepConfig(step="c", type="Condition", condition="amount > 0",
                        if_true="s1", if_false="s2"),
             StepConfig(step="s1", type="Step", agent="a1"),
             StepConfig(step="s2", type="Step", agent="a1"),
