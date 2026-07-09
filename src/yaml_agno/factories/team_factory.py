@@ -115,7 +115,11 @@ class TeamFactory:
                 before ``agno.Team`` is constructed, so no partial Team is
                 ever produced.
         """
-        resolved_members: list[Agent] = []
+        # Annotated as ``list[Agent | Team]`` (not ``list[Agent]``) to satisfy
+        # mypy strict invariance: ``Team.__init__`` expects
+        # ``list[Agent | Team]``. The list holds only ``Agent`` instances at
+        # runtime — this is a variance-safe annotation, not a logic change.
+        resolved_members: list[Agent | Team] = []
         for member in cfg.members:
             agent_name = member.agent
             if agent_name not in agents:
