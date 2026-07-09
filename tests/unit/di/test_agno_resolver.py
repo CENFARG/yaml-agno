@@ -285,7 +285,6 @@ def test_resolve_model_integration_real_openai_chat_is_model_instance() -> None:
     the C1 fix (old code returned the class, not an instance).
     """
     from agno.models.base import Model
-
     from core_infrastructure.config.adapters.in_memory_config_adapter import (
         InMemoryConfigAdapter,
     )

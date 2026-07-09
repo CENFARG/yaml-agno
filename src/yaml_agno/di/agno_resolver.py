@@ -62,9 +62,9 @@ class AgnoResolver:
 
     Example:
         >>> resolver = build_agno_resolver(config)
-        >>> cls = resolver.resolve_model("openai")
-        >>> cls.__name__
-        'OpenAIChat'
+        >>> model = resolver.resolve_model("openai:gpt-4o")
+        >>> model.id
+        'gpt-4o'
     """
 
     def __init__(
@@ -92,23 +92,35 @@ class AgnoResolver:
     # Resolución de clases nativas Agno
     # ------------------------------------------------------------------
 
-    def resolve_model(self, provider: str) -> type:
-        """Resolver el provider de modelo lógico a su clase Agno.
+    def resolve_model(self, spec: str) -> Any:
+        """Resolver un string 'provider:id' a un Model Agno instanciado.
+
+        Formato nativo Agno (COLON): parte ``spec`` en ``(provider, model_id)``
+        buscando el primer ':'``, lookup en ``MODEL_REGISTRY[provider]``, resuelve
+        la clase vía el adapter y la INSTANCIA con ``id=model_id``.
 
         Args:
-            provider: Clave lógica ("openai", "anthropic", ...). Debe existir
-                en MODEL_REGISTRY.
+            spec: String 'provider:id' (e.g. ``"openai:gpt-4o"``). El segmento
+                provider debe existir en MODEL_REGISTRY.
 
         Returns:
-            La clase Agno correspondiente (e.g. ``OpenAIChat``).
+            Una INSTANCIA de Model (e.g. ``OpenAIChat(id="gpt-4o")``), no la
+            clase.
 
         Raises:
-            KeyError: Si ``provider`` no está en MODEL_REGISTRY.
+            ValueError: Si ``spec`` no contiene ':' (formato inválido).
+            KeyError: Si el provider no está en MODEL_REGISTRY.
             ValidationError: Si el module_path no está en el allowlist (strict).
             ModuleNotFoundError/AttributeError: propagados por el adapter.
         """
+        if ":" not in spec:
+            raise ValueError(f"Invalid model spec: {spec!r}. Expected 'provider:id'.")
+        provider, model_id = spec.split(":", 1)
+        if provider not in self._models:
+            raise KeyError(f"Unknown model provider: {provider!r}")
         module_path, class_name, _packages = self._models[provider]
-        return self._adapter.resolve_class(module_path, class_name)  # type: ignore[no-any-return]
+        cls = self._adapter.resolve_class(module_path, class_name)
+        return cls(id=model_id)
 
     def build_db(self, provider: str, conn_str: str | None = None) -> Any:
         """Construir una instancia de storage Agno.
@@ -143,7 +155,10 @@ class AgnoResolver:
 
         if provider in _NO_CONN_STR_PROVIDERS:
             return cls()
-        return cls(conn_str)
+        # db_url= kwarg (NOT positional): RedisDb's first positional is `id`,
+        # PostgresDb's first positional happens to be `db_url` but we use the
+        # kwarg uniformly for clarity and to avoid the redis positional bug.
+        return cls(db_url=conn_str)
 
     def resolve_workflow_primitive(self, name: str) -> type:
         """Resolver el nombre de primitiva workflow a su clase Agno.
