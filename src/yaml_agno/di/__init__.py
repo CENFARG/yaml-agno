@@ -20,15 +20,14 @@ from yaml_agno.di.registries import (
     STORAGE_REGISTRY,
     WORKFLOW_REGISTRY,
 )
+from yaml_agno.di.value_resolver import ValueResolver
 
 __all__ = [
     "AGNO_ALLOWLIST_PREFIXES",
     "AgnoResolver",
     "MODEL_REGISTRY",
     "STORAGE_REGISTRY",
+    "ValueResolver",
     "WORKFLOW_REGISTRY",
     "build_agno_resolver",
 ]
-
-# ValueResolver is added in Phase 8 (value_resolver.py). The import + __all__
-# entry are appended there to avoid a broken partial import here.
