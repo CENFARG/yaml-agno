@@ -7,10 +7,10 @@
 
 **Última actualización**: 2026-07-04
 **HEAD git**: `531fec5` (rama `feature/specs-agno-coverage-10-25`, 116 commits)
-**Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.18 (corregido en todos).
+**Estado SPECs**: 33 SPECs (SPEC_00–SPEC_32), gate verde 0 violations. Agno real es v2.6.22 (corregido en todos).
 **ÍNDICE/ORDEN**: specs/INDEX.md agrupa las 33 SPECs en 10 grupos temáticos (G1-G10) + Read_Order en cada frontmatter. Los archivos NO se renombraron (trazabilidad intacta); el orden de lectura se guía por INDEX.md/Read_Order, no por el número de archivo.
 **AUDITORÍA 32-SPEC COMPLETA**: 72 hallazgos → Waves 1-6 + verificación adversarial (11 contradicciones RESUELTAS) + SPEC_29 Q3/Q8.
-**REVISIÓN PROFUNDA SPEC por SPEC: 33/33 COMPLETA** ✅. Todas verificadas contra Agno v2.6.18 + core-cenf-py reales (no APIs inventadas). Patrón cazado: el defecto #1 era APIs inventadas (firmas/métodos que no existen). Deudas menores abiertas: JWT_VERIFICATION_KEY vs jwt_signing_key naming (SPEC_07/19/20/21).
+**REVISIÓN PROFUNDA SPEC por SPEC: 33/33 COMPLETA** ✅. Todas verificadas contra Agno v2.6.22 + core-cenf-py reales (no APIs inventadas). Patrón cazado: el defecto #1 era APIs inventadas (firmas/métodos que no existen). Deudas menores abiertas: JWT_VERIFICATION_KEY vs jwt_signing_key naming (SPEC_07/19/20/21).
 **user_id UNIFICADO**: composite `{tenant_id}:{principal_id}` SIEMPRE; `resolve_user_id()` (SPEC_04) es el único resolver; `TenantContextMiddleware` (SPEC_06) delega. Workflows autónomos también cubiertos por tenant isolation.
 
 ---
@@ -60,7 +60,7 @@ Agno enteramente en YAML, con templates heredables y DI System. Se construye
 - **Schemas *Config** (AgentConfig, TeamConfig, WorkflowConfig, StepConfig, DIReference) = SSOT en **SPEC_02**. Otras SPECs los IMPORTAN, no redefinen.
 - **Enums de Agno IMPORTADOS** (no duplicados): TeamMode (4: coordinate/route/broadcast/tasks, NO coroutine), StepType (capitalizado: Step/Parallel/Condition/Router/Loop), RunStatus/RunContext (de `agno.run.base`).
 - **DependencyManager**: mecanismo en **Core Infra** (core-cenf `core_infrastructure.dependency`), registrios de Agno en yaml-agno. Carga perezosa (importlib + allowlist + cache + entry_points).
-- **Stack heredado** de Agno v2.6.14 (FastAPI/SQLAlchemy/Pydantic). yaml-agno NO reimplementa FastAPI (delega serving a `AgentOS.get_app()`).
+- **Stack heredado** de Agno v2.6.22 (FastAPI/SQLAlchemy/Pydantic). yaml-agno NO reimplementa FastAPI (delega serving a `AgentOS.get_app()`).
 - **Engram NO es de Agno** (MCP externo nuestro). NO forma parte del modelo de memoria de yaml-agno. Long-term memory = Agno nativo (LearningMachine/MemoryManager).
 - **retention_days / ACID** = feature futura (no nativos de Agno).
 - **Multi-tenant** = Core Infra (TenantResolver). Agno NO tiene tenant_id nativo (user_id + session_id). Aislamiento **explícito via filters** (NO RLS, NO auto-scope por contextvar — `set_tenant_id` es solo telemetría/tracing).
