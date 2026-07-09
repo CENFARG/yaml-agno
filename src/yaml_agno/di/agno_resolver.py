@@ -36,6 +36,7 @@ from core_infrastructure.observability.ports import ObservabilityManager
 
 from yaml_agno.di.registries import (
     MODEL_REGISTRY,
+    PROVIDER_ALIASES,
     STORAGE_REGISTRY,
     WORKFLOW_REGISTRY,
 )
@@ -116,6 +117,10 @@ class AgnoResolver:
         if ":" not in spec:
             raise ValueError(f"Invalid model spec: {spec!r}. Expected 'provider:id'.")
         provider, model_id = spec.split(":", 1)
+        # Alias de back-compat (SPEC_14 slice #1): "openai" → "openai_chat".
+        # Se resuelve ANTES del lookup para que el id canónico gobierna toda
+        # indexación posterior. Consumers que ya usan el id canónico no cambian.
+        provider = PROVIDER_ALIASES.get(provider, provider)
         if provider not in self._models:
             raise KeyError(f"Unknown model provider: {provider!r}")
         module_path, class_name, _packages = self._models[provider]
