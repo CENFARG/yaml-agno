@@ -389,18 +389,13 @@ class WorkflowFactory:
                 description=step_cfg.description,
             )
 
-        # --- Loop (steps + max_iterations + optional end_condition) ---
+        # --- Loop (max_iterations + optional end_condition) ---
         if t == StepType.LOOP:
-            loop_steps = [
-                WorkflowFactory._build_step(
-                    step_cfg=StepConfig(**raw),
-                    agents=agents,
-                    teams=teams,
-                    callables=callables,
-                    step_index=step_index,
-                )
-                for raw in step_cfg.steps
-            ]
+            # NOTE: StepConfig's validator forbids `steps` on Loop type (only
+            # Parallel/Steps/Condition allow nested steps), so the Loop body is
+            # structurally empty here. Non-empty Loop bodies need a dedicated
+            # field in SPEC_02 or a schema relaxation — tracked for SPEC_05
+            # (workflows runtime). Until then Loop builds with steps=[].
             # Open Item #1: resolve end_condition via _resolve_callable_or_cel.
             end_condition: Any = None
             if step_cfg.end_condition is not None:
@@ -408,7 +403,7 @@ class WorkflowFactory:
                     step_cfg.end_condition, callables
                 )
             return Loop(
-                steps=loop_steps,  # type: ignore[arg-type]
+                steps=[],  # type: ignore[arg-type]
                 name=step_cfg.step,
                 description=step_cfg.description,
                 max_iterations=step_cfg.max_iterations if step_cfg.max_iterations is not None else 3,
