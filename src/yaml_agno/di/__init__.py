@@ -16,12 +16,15 @@ API pública:
 
 from __future__ import annotations
 
+from yaml_agno.di.agno_model_adapter import AgnoModelAdapter
 from yaml_agno.di.agno_resolver import AgnoResolver, build_agno_resolver
+from yaml_agno.di.capabilities_validator import ModelCapabilitiesValidator
 from yaml_agno.di.provider_capabilities import (
     LOCAL_PROVIDERS,
     PROVIDER_REGISTRY,
     SUPPORTED_PROVIDERS,
 )
+from yaml_agno.di.provider_factory import ModelConstructionError, ProviderFactory
 from yaml_agno.di.registries import (
     AGNO_ALLOWLIST_PREFIXES,
     MODEL_REGISTRY,
@@ -29,6 +32,7 @@ from yaml_agno.di.registries import (
     STORAGE_REGISTRY,
     WORKFLOW_REGISTRY,
 )
+from yaml_agno.di.secret_resolver import ConfigSecretResolver, SecretResolver
 from yaml_agno.di.value_resolver import ValueResolver
 
 __all__ = [
@@ -40,7 +44,13 @@ __all__ = [
     "STORAGE_REGISTRY",
     "SUPPORTED_PROVIDERS",
     "WORKFLOW_REGISTRY",
+    "AgnoModelAdapter",
     "AgnoResolver",
+    "ConfigSecretResolver",
+    "ModelCapabilitiesValidator",
+    "ModelConstructionError",
+    "ProviderFactory",
+    "SecretResolver",
     "ValueResolver",
     "build_agno_resolver",
 ]
