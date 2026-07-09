@@ -116,7 +116,7 @@ def test_resolve_model_openai_returns_model_instance_with_id() -> None:
 def test_resolve_model_unknown_provider_raises() -> None:
     """Unknown provider key ('desconocido') is not in MODEL_REGISTRY → raises."""
     resolver = _build_resolver()
-    with pytest.raises((KeyError, ValueError)):
+    with pytest.raises(KeyError, match="desconocido"):
         resolver.resolve_model("desconocido:foo")
 
 
