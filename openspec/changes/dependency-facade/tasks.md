@@ -39,17 +39,26 @@ test_command: "python -m pytest"
 
 | Field | Value |
 |-------|-------|
-| Estimated changed lines | ~150-180 (8 files: ~90 src + ~60-90 tests) |
-| 400-line budget risk | Low |
-| Chained PRs recommended | No |
+| Estimated changed lines (post-hoc) | ~1066 insertions, 9 files (src + tests + spec/design/tasks) |
+| Original forecast | ~150-180 — **materially understated** (see note below) |
+| 400-line budget risk | High (actual exceeded budget; facade-slice wiring boilerplate) |
+| Chained PRs recommended | No (single PR acceptable con size-exception) |
 | Suggested split | Single PR (todos los archivos nuevos bajo `di/` salvo `__init__.py` ya vacío) |
 | Delivery strategy | ask-on-risk (default; sin cachear — decide el orquestador) |
-| Chain strategy | size-exception (single PR dentro del presupuesto) |
+| Chain strategy | size-exception (single PR, excedido el budget 400) |
+
+> **Forecast correction (W3, post-hoc)**: el forecast original (~150-180 líneas)
+> fue materialmente understated. El tamaño real (~1066 insertions, 9 files) refleja
+> el boilerplate de wiring de core-cenf (imports de 6 managers, 3 test files con
+> doubles, docstrings largos). Lección: forecasts para facade-slices que cablean
+> múltiples managers de core-cenf DEBEN contabilizar el wiring boilerplate, no sólo
+> la lógica de dominio. El single PR se mantuvo porque el slice es atómico y todos
+> los archivos son nuevos (sin conflicto); se grabó `size:exception`.
 
 Decision needed before apply: No
 Chained PRs recommended: No
 Chain strategy: size-exception
-400-line budget risk: Low
+400-line budget risk: High (excedido; size-exception grabado)
 
 ### Suggested Work Units
 
