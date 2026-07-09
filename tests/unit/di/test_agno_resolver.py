@@ -24,6 +24,7 @@ from yaml_agno.di.agno_resolver import AgnoResolver
 from yaml_agno.di.registries import (
     AGNO_ALLOWLIST_PREFIXES,
     MODEL_REGISTRY,
+    PROVIDER_ALIASES,
     STORAGE_REGISTRY,
 )
 
@@ -78,7 +79,9 @@ class _FakeStep:
 # Mapping seed for the InMemoryDependencyAdapter: maps the (module, class) keys
 # used by MODEL_REGISTRY / STORAGE_REGISTRY to the stub classes above.
 _MAPPING: dict[tuple[str, str], type] = {
-    (MODEL_REGISTRY["openai"][0], MODEL_REGISTRY["openai"][1]): OpenAIChat,
+    # Use the canonical SPEC_14 id (openai_chat). "openai" is a back-compat
+    # alias resolved via PROVIDER_ALIASES before MODEL_REGISTRY lookup.
+    (MODEL_REGISTRY[PROVIDER_ALIASES["openai"]][0], MODEL_REGISTRY[PROVIDER_ALIASES["openai"]][1]): OpenAIChat,
     (STORAGE_REGISTRY["memory"][0], STORAGE_REGISTRY["memory"][1]): InMemoryDb,
     (STORAGE_REGISTRY["postgres"][0], STORAGE_REGISTRY["postgres"][1]): PostgresDb,
     (STORAGE_REGISTRY["redis"][0], STORAGE_REGISTRY["redis"][1]): RedisDb,
@@ -113,7 +116,7 @@ def test_resolve_model_openai_returns_model_instance_with_id() -> None:
 def test_resolve_model_unknown_provider_raises() -> None:
     """Unknown provider key ('desconocido') is not in MODEL_REGISTRY → raises."""
     resolver = _build_resolver()
-    with pytest.raises((KeyError, ValueError)):
+    with pytest.raises(KeyError, match="desconocido"):
         resolver.resolve_model("desconocido:foo")
 
 
@@ -126,6 +129,22 @@ def test_resolve_model_bad_format_no_colon_raises_valueerror() -> None:
     resolver = _build_resolver()
     with pytest.raises(ValueError):
         resolver.resolve_model("openai")
+
+
+@pytest.mark.unit
+def test_resolve_model_openai_alias_still_works() -> None:
+    """resolve_model('openai:gpt-4o') resolves via PROVIDER_ALIASES back-compat.
+
+    After the alias refactor, 'openai' is resolved to the canonical
+    'openai_chat' id BEFORE the MODEL_REGISTRY lookup. The InMemoryDependencyAdapter
+    is seeded with the canonical (module, class) key, so the alias path MUST
+    translate 'openai' → 'openai_chat' to find the stub. This test would KeyError
+    if resolve_model skipped the alias resolution step.
+    """
+    resolver = _build_resolver()
+    result = resolver.resolve_model("openai:gpt-4o")
+    assert isinstance(result, OpenAIChat)
+    assert result.id == "gpt-4o"
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +223,8 @@ def test_resolve_class_allowlisted_permitted() -> None:
     """An allowlisted (module, class) pair resolves via the adapter."""
     resolver = _build_resolver()
     cls = resolver.resolve_class(
-        MODEL_REGISTRY["openai"][0],
-        MODEL_REGISTRY["openai"][1],
+        MODEL_REGISTRY[PROVIDER_ALIASES["openai"]][0],
+        MODEL_REGISTRY[PROVIDER_ALIASES["openai"]][1],
     )
     assert cls is OpenAIChat
 
