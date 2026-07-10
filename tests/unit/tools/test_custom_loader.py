@@ -70,3 +70,23 @@ def test_no_dot_in_path_raises_value_error() -> None:
     config = CustomToolConfig(path="nodot")
     with pytest.raises(ValueError, match="Invalid dotted path"):
         loader.load_callable(config)
+
+
+@pytest.mark.unit
+def test_load_mcp_raises_not_implemented() -> None:
+    """MCP single-server resolution is DEFERRED to slice B (W3)."""
+    from yaml_agno.tools.schema import McpToolConfig
+
+    loader, _resolver = _build_loader()
+    with pytest.raises(NotImplementedError, match="slice B"):
+        loader.load_mcp(McpToolConfig())
+
+
+@pytest.mark.unit
+def test_load_mcp_multi_raises_not_implemented() -> None:
+    """MultiMCPTools resolution is DEFERRED to slice B (W3)."""
+    from yaml_agno.tools.schema import McpMultiToolConfig
+
+    loader, _resolver = _build_loader()
+    with pytest.raises(NotImplementedError, match="slice B"):
+        loader.load_mcp_multi(McpMultiToolConfig())

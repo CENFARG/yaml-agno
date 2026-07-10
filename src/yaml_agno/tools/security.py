@@ -19,7 +19,12 @@ class SecurityError(Exception):
 _ALLOWED_MODULE_PREFIXES: tuple[str, ...] = ("agno.tools.",)
 
 
-def is_module_allowed(dotted_path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
+def is_module_allowed(
+    dotted_path: str,
+    extra_prefixes: tuple[str, ...] = (),
+    *,
+    base_prefixes: tuple[str, ...] | None = None,
+) -> bool:
     """Return True iff ``dotted_path`` starts with an allowlisted prefix.
 
     Fail-closed: an empty allowlist rejects everything. Prefix-match lets
@@ -28,11 +33,14 @@ def is_module_allowed(dotted_path: str, extra_prefixes: tuple[str, ...] = ()) ->
     Args:
         dotted_path: The dotted module path to check (e.g. 'agno.tools.calculator').
         extra_prefixes: Additional allowed prefixes (e.g. user package roots).
+        base_prefixes: Optional override of the default allowlist (testing).
+            When an empty tuple is passed explicitly, the result is fail-closed
+            (no match possible) — this exercises the fail-closed branch.
 
     Returns:
         True if any prefix matches.
     """
-    prefixes = _ALLOWED_MODULE_PREFIXES + extra_prefixes
+    prefixes = (_ALLOWED_MODULE_PREFIXES if base_prefixes is None else base_prefixes) + extra_prefixes
     if not prefixes:
         return False
     return any(dotted_path.startswith(p) for p in prefixes)

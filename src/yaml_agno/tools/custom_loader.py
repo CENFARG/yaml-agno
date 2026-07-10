@@ -13,7 +13,12 @@ from yaml_agno.tools.security import SecurityError, is_module_allowed
 
 if TYPE_CHECKING:
     from yaml_agno.di.agno_resolver import AgnoResolver
-    from yaml_agno.tools.schema import CustomToolConfig, CustomToolkitConfig
+    from yaml_agno.tools.schema import (
+        CustomToolConfig,
+        CustomToolkitConfig,
+        McpMultiToolConfig,
+        McpToolConfig,
+    )
 
 __all__ = ["CustomToolLoader"]
 
@@ -64,6 +69,25 @@ class CustomToolLoader:
         resolved = self._resolve_dotted(config.path)
         assert isinstance(resolved, type), f"Expected a class, got {type(resolved).__name__}"
         return resolved
+
+    def load_mcp(self, config: "McpToolConfig") -> Any:
+        """MCP single-server resolution is DEFERRED to slice B.
+
+        The placeholder parses (schema.py) so YAML config validation succeeds,
+        but no resolution happens in slice A. Raises to surface the gap loudly
+        rather than silently doing nothing.
+        """
+        raise NotImplementedError(
+            "MCP single-server resolution (kind: mcp) is not implemented in slice A. "
+            "It lands in SPEC_11 slice B (MCP integration)."
+        )
+
+    def load_mcp_multi(self, config: "McpMultiToolConfig") -> Any:
+        """MultiMCPTools resolution is DEFERRED to slice B."""
+        raise NotImplementedError(
+            "MultiMCPTools resolution (kind: mcp_multi) is not implemented in slice A. "
+            "It lands in SPEC_11 slice B (MCP integration)."
+        )
 
     def _resolve_dotted(self, dotted_path: str) -> Any:
         """Split a dotted path into (module, name) and resolve via the resolver.

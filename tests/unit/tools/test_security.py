@@ -34,8 +34,10 @@ def test_extra_prefixes_extend_allowlist() -> None:
 
 @pytest.mark.unit
 def test_empty_allowlist_fail_closed() -> None:
-    """Empty allowlist (no prefixes) rejects everything — fail-closed."""
-    # Simulate by overriding the module-level prefixes via extra=() AND a
-    # monkeypatched empty _ALLOWED_MODULE_PREFIXES is overkill; instead assert
-    # the logic: no match possible when only non-matching extras given.
-    assert is_module_allowed("agno.tools.x", extra_prefixes=()) is True  # default still applies
+    """Empty allowlist (base_prefixes=() + no extras) rejects everything.
+
+    Exercises the ``if not prefixes: return False`` branch (W4 — the prior
+    test asserted this by reading, not proving).
+    """
+    assert is_module_allowed("agno.tools.calculator", base_prefixes=()) is False
+    assert is_module_allowed("anything", base_prefixes=()) is False
