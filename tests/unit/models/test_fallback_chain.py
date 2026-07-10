@@ -22,10 +22,6 @@ from dataclasses import dataclass, field
 
 import pytest
 
-# Pre-existing circular-import guard (model_spec -> di -> model_spec). Importing
-# a yaml_agno.di symbol first lets di/__init__ finish loading before model_spec
-# is requested. test_provider_factory.py uses the same pattern.
-from yaml_agno.di.agno_resolver import AgnoResolver  # noqa: F401
 from yaml_agno.models.fallback_chain import build_fallback_chain
 from yaml_agno.models.model_spec import (
     FallbackConfig,

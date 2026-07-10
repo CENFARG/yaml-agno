@@ -15,13 +15,6 @@ from __future__ import annotations
 
 import pytest
 
-# The codebase has a pre-existing circular import (model_spec ->
-# di.provider_capabilities -> di.__init__ -> capabilities_validator ->
-# model_spec) that only bites when a test is the first to touch the package
-# graph. ``test_provider_factory.py`` uses the same guard: importing a
-# ``yaml_agno.di`` symbol first lets ``di/__init__.py`` finish loading
-# (resolving the cycle) before ``model_spec`` is requested.
-from yaml_agno.di.agno_resolver import AgnoResolver  # noqa: F401
 from yaml_agno.models.cache_key import CacheKeyBuilder
 from yaml_agno.models.model_spec import ModelExpandedSpec
 

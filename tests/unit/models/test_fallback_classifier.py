@@ -30,12 +30,6 @@ from agno.exceptions import (  # noqa: E402
     ModelRateLimitError,
 )
 
-# Pre-existing circular-import guard (model_spec -> di -> model_spec). The
-# ``yaml_agno.models`` package __init__ transitively imports model_spec (via
-# cache_key/fallback_chain re-exports), so importing any submodule triggers the
-# cycle unless di/__init__ is loaded first. test_provider_factory.py uses the
-# same pattern.
-from yaml_agno.di.agno_resolver import AgnoResolver  # noqa: E402,F401
 from yaml_agno.models.fallback_classifier import FallbackErrorClassifier  # noqa: E402
 
 # ---------------------------------------------------------------------------
