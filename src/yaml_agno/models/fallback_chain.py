@@ -25,14 +25,21 @@ Truncación (Open Item #1 — CORRECCIÓN del design literal):
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from yaml_agno.di.provider_factory import ProviderFactory
 from yaml_agno.models.model_spec import (
     ModelExpandedSpec,
     ProviderResolver,
     parse_model_spec,
 )
+
+# ProviderFactory is only a type hint on the ``factory`` parameter (runtime
+# duck-typing). Importing it at module level would create a circular import:
+# models.fallback_chain -> di.provider_factory -> di.capabilities_validator ->
+# models.model_spec. Guarding it under TYPE_CHECKING breaks the cycle while
+# keeping the public re-export from ``yaml_agno.models``.
+if TYPE_CHECKING:
+    from yaml_agno.di.provider_factory import ProviderFactory
 
 __all__ = ["build_fallback_chain"]
 
