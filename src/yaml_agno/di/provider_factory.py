@@ -23,12 +23,18 @@ constructor sin bloqueo.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from yaml_agno.di.agno_resolver import AgnoResolver
 from yaml_agno.di.provider_capabilities import PROVIDER_REGISTRY
 from yaml_agno.di.secret_resolver import SecretResolver
-from yaml_agno.models.model_spec import ModelExpandedSpec
+
+# ModelExpandedSpec is only a type hint (runtime duck-typing via attribute
+# access). Module-level import would create a circular import:
+# models.model_spec -> di.provider_capabilities -> di.__init__ ->
+# di.provider_factory -> models.model_spec (partially initialized).
+if TYPE_CHECKING:
+    from yaml_agno.models.model_spec import ModelExpandedSpec
 
 __all__ = ["ModelConstructionError", "ProviderFactory"]
 

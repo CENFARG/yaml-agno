@@ -21,8 +21,17 @@ si es hard-error (ProviderFactory con ``validate_capabilities=True``) o warning.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from yaml_agno.di.provider_capabilities import ProviderCapabilities
-from yaml_agno.models.model_spec import ModelExpandedSpec
+
+# ModelExpandedSpec is only a type hint here (runtime duck-typing via
+# attribute access). Importing it at module level creates a circular import:
+# models.model_spec -> di.provider_capabilities -> di.__init__ ->
+# di.capabilities_validator -> models.model_spec (partially initialized).
+# TYPE_CHECKING guard breaks the cycle.
+if TYPE_CHECKING:
+    from yaml_agno.models.model_spec import ModelExpandedSpec
 
 __all__ = ["ModelCapabilitiesValidator"]
 
