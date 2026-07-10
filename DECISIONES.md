@@ -62,16 +62,22 @@ app.py:1072). NO `jwt_signing_key`.
 
 ---
 
-## 3. ESTADO (2026-07-04)
+## 3. ESTADO (2026-07-10) — implementación EN CURSO
 
 - **34 SPECs** en `specs/` (SPEC_00–SPEC_33), gate verde 34/34 (`python scripts/spec_gate.py all`).
 - **Índice**: `specs/INDEX.md` agrupa en 10 grupos temáticos (G1-G10) + campo
   `Read_Order` en cada frontmatter. Los archivos **NO se renombraron**
   (trazabilidad intacta).
-- **Revisión profunda 33/33 COMPLETA**, todas verificadas contra Agno v2.6.18 +
+- **Revisión profunda 33/33 COMPLETA**, todas verificadas contra Agno v2.6.22 +
   core-cenf-py **reales** ( APIs inventadas cazadas en todas). CERO deudas abiertas.
 - **Auditoría cross-SPEC completa** (72 hallazgos, Waves 1-6, 11 contradicciones resueltas).
-- git LOCAL (sin GitHub todavía — decisión del usuario).
+- **Implementación MVP top 10 en curso** (GitHub repo `CENFARG/yaml-agno`, 17 PRs):
+  - ✅ SPEC_00 (bootstrap), SPEC_02 (AgentConfig), SPEC_01 (4 slices factories),
+    SPEC_14 (4 slices model resilience) — **COMPLETAS**.
+  - 🔄 SPEC_11 (Tools/MCP) — slice A ✅ (PR #17), faltan B/C/D.
+  - ⏳ SPEC_30, 26, 03, 05, 06 — pendientes.
+- **270 unit tests** pasando, ruff/mypy limpios, 11 `openspec/specs/` publicadas.
+- CI pendiente: token `GIT_AUTH_TOKEN` del usuario para `core-cenf-py` privado.
 
 ### Grupos temáticos (mapa rápido)
 - **G1 Fundaciones**: SPEC_00 · **G2 Runtime-Core**: 01,02,03,33(templates)
@@ -159,11 +165,13 @@ carpeta por SPEC dueño; (c) `core_infrastructure` se IMPORTA nunca se copia;
 
 ## 5. CÓMO SEGUIR (próximos pasos)
 
-1. **Fase actual**: especificaciones COHERENTES y COMPLETAS. Listo para
-   **implementación**.
-2. **Próximo**: planificar implementación del MVP (empezar por SPEC_00→02→01→14→11).
-   SDD/TDD ultra-detallado ya está en cada SPEC (BDD gherkin + TDD microtasks).
-3. **GitHub**: pendiente decisión del usuario (cuando quiera, crear repo + remote).
+1. **Fase actual**: implementación MVP top 10 en curso (4/10 SPECs completas).
+2. **Próximo**: SPEC_11 slice B (MCP), luego C/D, luego SPEC_30, 26, 03, 05, 06.
+   Cada slice = ciclo SDD completo (explore→propose→spec→design→tasks→apply→
+   verify→archive→PR) con TDD estricto y el **gate decisions.yaml** (ver §7).
+3. **Fuente de verdad para verificación**: `.chats/decisions.yaml` (snapshot
+   actualizable por el usuario — ver §7). El código debe coincidir con el YAML,
+   NO al revés.
 
 ---
 
@@ -179,6 +187,53 @@ carpeta por SPEC dueño; (c) `core_infrastructure` se IMPORTA nunca se copia;
   - `yaml-agno/agno-intel/*` — APIs reales Agno verificadas (A2A, memory, workflows, AgentOS, playground)
   - `yaml-agno/audit-wave-1`, `audit-waves-2-6`, `deep-review-complete`
   - `global/engineering-rules` — reglas globales CENF (seguridad, patrones)
+
+---
+
+## 7. GATE `decisions.yaml` — verificación ejecutable (reproducible por MVP)
+
+> @ai-directive: **`.chats/decisions.yaml` es la fuente de verdad para
+> verificación.** Es un **snapshot** que el usuario actualiza cuando avanzan
+> decisions/scope. Las 12 decisiones inviolables (§2) viven ahí como
+> **queries ejecutables** (`verification_queries`, VQ001-VQ00N). El código debe
+> coincidir con el YAML, **NO al revés**.
+
+### Cómo se aplica el gate (en cada ciclo SDD)
+
+El sub-agente `sdd-verify` DEBE, antes de dar PASS a cualquier slice:
+
+1. **Cargar** `.chats/decisions.yaml` sección `verification_queries`.
+2. **Ejecutar cada VQ** (son comandos `rg`/`python -c` concretos) contra el
+   código del slice bajo verificación + el código existente.
+3. **Reportar PASS/FAIL** por query con el output real del comando.
+4. **Cualquier FAIL = finding CRITICAL** — el código divergió de una decisión
+   inviolable. NO marcar el slice PASS si alguna VQ falla.
+5. Verificar también que el `scope.mvp_progress` del YAML coincide con lo
+   shipped (drift = WARNING a corregir en el YAML o en el código, según quién
+   tenga razón — pero el YAML es el árbitro).
+
+### Las 9 queries vigentes (resumen — leer el YAML para el texto exacto)
+
+| VQ | Decisión | Check | Expected |
+|----|----------|-------|----------|
+| VQ001 | PHIL004 anti-frankenstein | sin CacheManager/RetryPolicy/reimplemented classify | no reimplemented logic |
+| VQ002 | TECH003 COMPOSE | `rg 'import\s+importlib\|importlib\.import_module' src/yaml_agno/di/` | ZERO |
+| VQ003 | TECH010 cold imports | `python -c "from yaml_agno.models import AgentConfig"` + di | no ImportError |
+| VQ004 | TECH005 thinking excluded | thinking en `_compose_kwargs` excluded set | excluded, not forwarded |
+| VQ005 | TECH007 thin adapter | `rg '429\|529\|CONTEXT_WINDOW' ... \| rg -v '"""'` | ZERO fuera docstrings |
+| VQ006 | TECH009 off-by-one | `chain[:max_hops+1]` en fallback_chain.py | plus one |
+| VQ007 | TECH008 no cache store | cache_key.py sin lógica cache (solo sha256/digest) | no cache impl |
+| VQ008 | STRAT003 TaskGroup | `rg 'gather' src/yaml_agno/` | ZERO |
+| VQ009 | TECH008 no messages | cache_key.py: messages solo en `messages_hash` param | no serialization |
+
+### Mantenimiento del gate
+
+- **El usuario actualiza** `.chats/decisions.yaml` cuando: nuevas decisions
+  técnicas, slices completados (scope), contradicciones resueltas.
+- **El orquestador NO edita el YAML** — lo lee para verificar. Si detecta drift
+  código-vs-YAML, lo reporta y el usuario decide (actualizar YAML o corregir código).
+- **Estado verificado**: 2026-07-10, 9/9 VQ PASS (obs engram
+  `yaml-agno/decisions-yaml-verified`).
 
 ---
 
