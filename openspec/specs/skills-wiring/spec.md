@@ -89,28 +89,20 @@ yaml-agno NO genera estas tools — las provee Agno a través de
 - WHEN `AgentFactory.build(cfg)` construye el `Agent`
 - THEN el tool set del agente NO contiene ninguna `Function` llamada `get_skill_instructions`, `get_skill_reference`, ni `get_skill_script`
 
-### Requirement: Hot-reload opera sobre el atributo público agent.skills
+### Requirement: Hot-reload opera sobre el atributo público agent.skills (DEFERRED)
+
+> **DEFERRED**: yaml-agno no tiene un hook de reload propio hoy. Agno's
+> `agent.skills.reload()` funciona nativamente sobre el atributo público.
+> Cuando yaml-agno necesite un hook de reload (ej. scheduler que re-carga
+> skills en runtime), se agregará en un change futuro. El constraint de no
+> acceder a atributos privados (`_skills`) es vacuamente satisfecho mientras
+> no existan hooks.
 
 El hot-reload DEBE invocar `agent.skills.reload()` directamente sobre el
 atributo público `agent.skills` (agent.py:588). yaml-agno NO DEBE acceder a
 atributos privados (`_skills`) ni reimplementar la recarga. Cuando
 `agent.skills is None`, el hook de reload DEBE ser un no-op (no levantar
 excepción).
-
-#### Scenario: Hot-reload recarga skills editadas en disco
-
-- GIVEN un `Agent` construido con skills que cargaron la skill `brand-audit` en t0
-- WHEN el archivo `SKILL.md` de `brand-audit` se edita en disco
-- AND se invoca `agent.skills.reload()`
-- THEN el diccionario interno de skills se limpia y reconstruye
-- AND `get_skill_instructions("brand-audit")` devuelve el cuerpo actualizado
-
-#### Scenario: Hot-reload sobre agente sin skills es no-op
-
-- GIVEN un `Agent` construido con `skills=None`
-- WHEN el hook de hot-reload evalúa `agent.skills`
-- THEN no se invoca `reload()` sobre `None`
-- AND no se levanta ninguna excepción
 
 ### Requirement: SkillsFactory.build devuelve None cuando cfg.skills es None
 
