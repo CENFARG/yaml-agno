@@ -164,6 +164,7 @@ class ToolFactory:
             "user_input_fields": config.user_input_fields or None,
             "external_execution": config.external_execution,
             "external_execution_silent": config.external_execution_silent,
+            "strict": config.strict,
             "show_result": config.show_result,
             "stop_after_tool_call": config.stop_after_tool_call,
             "cache_results": config.cache_results,

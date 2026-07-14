@@ -107,6 +107,10 @@ class CustomToolConfig(BaseModel):
         default=None,
         description="Silence the external_execution feedback message.",
     )
+    strict: bool | None = Field(
+        default=None,
+        description="Enable strict parameter checking (Agno @tool strict flag).",
+    )
     show_result: bool | None = Field(
         default=None,
         description="Show the result in the response. Agno default None; "
