@@ -73,21 +73,21 @@ Chain strategy: size-exception
 
 ## Phase 4: Verification (full quality gate — GATE VQ)
 
-- [ ] 4.1 Run `python -m pytest tests/unit/factories/test_agent_factory.py -v` — new class + existing scenarios GREEN.
-- [ ] 4.2 Run `python -m pytest tests/unit/skills/test_skills_factory.py -v` — slice A no regression.
-- [ ] 4.3 Run `python -m pytest -q` — full suite GREEN.
-- [ ] 4.4 Run `ruff check .` — lint clean.
-- [ ] 4.5 Run `ruff format --check .` — format clean.
-- [ ] 4.6 Run `mypy` — types clean (skills: Skills | None matches Agent.__init__ Optional[Skills]).
-- [ ] 4.7 Cold import check: `python -c "from yaml_agno.factories.agent_factory import AgentFactory"` — no circular import, no runtime error.
+- [x] 4.1 Run `python -m pytest tests/unit/factories/test_agent_factory.py -v` — new class + existing scenarios GREEN.
+- [x] 4.2 Run `python -m pytest tests/unit/skills/test_skills_factory.py -v` — slice A no regression.
+- [x] 4.3 Run `python -m pytest -q` — full suite GREEN.
+- [x] 4.4 Run `ruff check .` — lint clean.
+- [x] 4.5 Run `ruff format --check .` — format clean.
+- [x] 4.6 Run `mypy` — types clean (skills: Skills | None matches Agent.__init__ Optional[Skills]).
+- [x] 4.7 Cold import check: `python -c "from yaml_agno.factories.agent_factory import AgentFactory"` — no circular import, no runtime error.
 
 ## Phase 5: Commit (granular, conventional)
 
-- [ ] 5.1 Commit 1: `test: fix opaque-skills fixture + add RED contract tests for skills-wiring (SPEC_30 slice B)` — Phase 2 changes.
-- [ ] 5.2 Commit 2: `feat(factories): wire AgentFactory.build to forward cfg.skills via SkillsFactory (SPEC_30 slice B)` — Phase 3 changes.
-- [ ] 5.3 Confirm `git status` clean after both commits.
+- [x] 5.1 Commit 1: `test: fix opaque-skills fixture + add RED contract tests for skills-wiring (SPEC_30 slice B)` — Phase 2 changes.
+- [x] 5.2 Commit 2: `feat(factories): wire AgentFactory.build to forward cfg.skills via SkillsFactory (SPEC_30 slice B)` — Phase 3 changes.
+- [x] 5.3 Confirm `git status` clean after both commits.
 
 ## Open Items
 
-- [ ] Confirm `Function.name` is the canonical attribute for access-tool names in Agno 2.6.22 (one-line assertion fix at apply time if it differs).
-- [ ] If system-prompt snippet assertion via `get_system_prompt_snippet()` is empty, fall back to inspecting assembled system message (design open question, default is public method).
+- [x] Confirm `Function.name` is the canonical attribute for access-tool names in Agno 2.6.22 (one-line assertion fix at apply time if it differs). — RESOLVED: `Function.name` confirmed canonical in Agno 2.6.22.
+- [x] If system-prompt snippet assertion via `get_system_prompt_snippet()` is empty, fall back to inspecting assembled system message (design open question, default is public method). — RESOLVED: `get_system_prompt_snippet()` returns non-empty `<skills_system>` block; public method works, no fallback needed.

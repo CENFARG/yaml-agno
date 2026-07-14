@@ -316,12 +316,7 @@ class TestAgentFactorySkillsWiring:
         """
         skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "SKILL.md").write_text(
-            "---\n"
-            f"name: {name}\n"
-            "description: A test skill.\n"
-            "---\n"
-            "# My Skill\n"
-            "Instructions here.\n",
+            f"---\nname: {name}\ndescription: A test skill.\n---\n# My Skill\nInstructions here.\n",
             encoding="utf-8",
         )
 
