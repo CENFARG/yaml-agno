@@ -73,20 +73,41 @@ def test_no_dot_in_path_raises_value_error() -> None:
 
 
 @pytest.mark.unit
-def test_load_mcp_raises_not_implemented() -> None:
-    """MCP single-server resolution is DEFERRED to slice B (W3)."""
-    from yaml_agno.tools.schema import McpToolConfig
+def test_load_mcp_delegates_to_resolver() -> None:
+    """Slice B: load_mcp delegates to MCPResolver.resolve_single."""
+    from unittest.mock import MagicMock
+
+    from yaml_agno.tools.schema import StdioMcpConfig
 
     loader, _resolver = _build_loader()
-    with pytest.raises(NotImplementedError, match="slice B"):
-        loader.load_mcp(McpToolConfig())
+    # Replace the lazy MCPResolver with a mock to verify delegation.
+    mock_mcp_resolver = MagicMock()
+    sentinel = object()
+    mock_mcp_resolver.resolve_single.return_value = sentinel
+    loader._mcp_resolver = mock_mcp_resolver  # bypass lazy construction
+
+    config = StdioMcpConfig(command="echo hi")
+    result = loader.load_mcp(config)
+
+    mock_mcp_resolver.resolve_single.assert_called_once_with(config)
+    assert result is sentinel
 
 
 @pytest.mark.unit
-def test_load_mcp_multi_raises_not_implemented() -> None:
-    """MultiMCPTools resolution is DEFERRED to slice B (W3)."""
-    from yaml_agno.tools.schema import McpMultiToolConfig
+def test_load_mcp_multi_delegates_to_resolver() -> None:
+    """Slice B: load_mcp_multi delegates to MCPResolver.resolve_multi."""
+    from unittest.mock import MagicMock
+
+    from yaml_agno.tools.schema import McpMultiToolConfig, StdioMcpConfig
 
     loader, _resolver = _build_loader()
-    with pytest.raises(NotImplementedError, match="slice B"):
-        loader.load_mcp_multi(McpMultiToolConfig())
+    mock_mcp_resolver = MagicMock()
+    sentinel = object()
+    mock_mcp_resolver.resolve_multi.return_value = sentinel
+    loader._mcp_resolver = mock_mcp_resolver
+
+    config = McpMultiToolConfig(servers=[StdioMcpConfig(command="echo hi")])
+    result = loader.load_mcp_multi(config)
+
+    mock_mcp_resolver.resolve_multi.assert_called_once_with(config)
+    assert result is sentinel
