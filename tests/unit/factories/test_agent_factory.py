@@ -220,3 +220,52 @@ class TestAgentFactoryImportContract:
     def test_agent_factory_build_is_callable(self) -> None:
         """``AgentFactory.build`` is callable (static method)."""
         assert callable(AgentFactory.build)
+
+
+class TestAgentFactoryToolsWiring:
+    """RED→GREEN tests for SPEC_11 slice C: ``build(cfg, resolver=None)``.
+
+    When ``resolver`` is provided and ``cfg.tools`` is non-empty, the factory
+    builds a ``ToolFactory(resolver)``, resolves the opaque dicts, and forwards
+    the result to ``Agent(tools=...)``. When ``resolver is None``, behavior is
+    unchanged (``tools=[]``).
+    """
+
+    def test_build_forwards_tools_when_resolver(self) -> None:
+        """Slice C: build(cfg, resolver) -> Agent.tools non-empty.
+
+        Req: AgentFactory wiring — resolver + tools.
+        """
+        import importlib
+        from typing import Any
+
+        class _RealResolver:
+            def resolve_class(self, module_path: str, class_name: str) -> Any:
+                module = importlib.import_module(module_path)
+                return getattr(module, class_name)
+
+        cfg = AgentConfig(
+            name="t",
+            model="openai:gpt-4o",
+            tools=[{"kind": "builtin", "name": "calculator"}],
+        )
+        result = AgentFactory.build(cfg, resolver=_RealResolver())  # type: ignore[arg-type]
+        assert isinstance(result, Agent)
+        assert len(result.tools) == 1
+        from agno.tools.calculator import CalculatorTools
+
+        assert isinstance(result.tools[0], CalculatorTools)
+
+    def test_build_without_resolver_keeps_tools_empty(self) -> None:
+        """Slice C: build(cfg) without resolver -> agent.tools == [].
+
+        Req: AgentFactory sin resolver — tools=[] (backward compat).
+        """
+        cfg = AgentConfig(
+            name="t",
+            model="openai:gpt-4o",
+            tools=[{"kind": "builtin", "name": "calculator"}],
+        )
+        result = AgentFactory.build(cfg)
+        assert isinstance(result, Agent)
+        assert result.tools == []
