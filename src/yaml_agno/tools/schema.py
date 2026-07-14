@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "BuiltinToolConfig",
@@ -48,17 +48,130 @@ class BuiltinToolConfig(BaseModel):
 
 
 class CustomToolConfig(BaseModel):
-    """A single custom function declared as a dotted-path callable reference.
+    """A custom ``@tool`` function declared as a dotted-path callable reference.
 
-    ``path`` is resolved via ``AgnoResolver.resolve_class`` (allowlisted). The
-    callable is returned RAW by ``CustomToolLoader`` — ``@tool`` wrapping is the
-    ToolFactory's job (slice C), NOT this schema.
+    ``path`` is resolved via ``CustomToolLoader.load_callable`` (allowlisted
+    importlib, slice A) and returned RAW. ``ToolFactory._wrap_tool`` applies
+    ``@tool(**flags)`` from the remaining fields (SPEC_11 §3.1, slice C).
+
+    The HITL mutual-exclusivity constraint (SPEC_11 §3.1: at most one of
+    ``requires_confirmation`` / ``requires_user_input`` /
+    ``external_execution`` may be ``True``) is enforced at the schema
+    boundary via a ``model_validator(mode="after")`` — fail-early, fail-loud,
+    before ``@tool`` is applied.
+
+    NOTE: ``tool_hooks``, ``pre_hook``, and ``post_hook`` are INTENTIONALLY
+    ABSENT (DEFER to slice D, TASK_005). ``extra="forbid"`` rejects them
+    until slice D adds the ``ToolHookRef`` schema + resolution.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["function"] = "function"
-    path: str = Field(..., min_length=1, description="Dotted-path callable (e.g. 'my_pkg.tools.fetch').")
+    path: str = Field(
+        ...,
+        min_length=1,
+        max_length=400,
+        description="Dotted-path callable (e.g. 'my_pkg.tools.fetch').",
+    )
+
+    # --- @tool identity overrides (SPEC_11 §3.1) ---
+    name: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Override the function name exposed to the model.",
+    )
+    description: str | None = Field(
+        default=None,
+        description="Override the docstring exposed to the model.",
+    )
+
+    # --- @tool behavior flags (SPEC_11 §3.1) ---
+    requires_confirmation: bool = Field(
+        default=False,
+        description="HITL: prompt the user for confirmation before execution.",
+    )
+    requires_user_input: bool = Field(
+        default=False,
+        description="HITL: collect user input before execution.",
+    )
+    user_input_fields: list[str] = Field(
+        default_factory=list,
+        description="Fields that require user input (used with requires_user_input).",
+    )
+    external_execution: bool = Field(
+        default=False,
+        description="HITL: the tool runs outside the agent's control.",
+    )
+    external_execution_silent: bool | None = Field(
+        default=None,
+        description="Silence the external_execution feedback message.",
+    )
+    strict: bool | None = Field(
+        default=None,
+        description="Enable strict parameter checking (Agno @tool strict flag).",
+    )
+    show_result: bool | None = Field(
+        default=None,
+        description="Show the result in the response. Agno default None; "
+        "auto-set to True only when stop_after_tool_call=True.",
+    )
+    stop_after_tool_call: bool = Field(
+        default=False,
+        description="Stop the run after this tool is called.",
+    )
+
+    # --- @tool caching flags (per-call; cross-run LRU is slice D, TASK_013) ---
+    cache_results: bool = Field(
+        default=False,
+        description="Cache the tool result (Agno applies per-call).",
+    )
+    cache_dir: str | None = Field(
+        default=None,
+        description="Cache directory for results.",
+    )
+    cache_ttl: int | None = Field(
+        default=None,
+        ge=1,
+        description="Cache TTL in seconds.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_hitl_mutual_exclusivity(self) -> CustomToolConfig:
+        """Enforce SPEC_11 §3.1: at most one HITL flag may be True.
+
+        Agno's ``@tool`` decorator raises ``ValueError`` if more than one of
+        ``requires_confirmation`` / ``requires_user_input`` /
+        ``external_execution`` is ``True``. yaml-agno replicates this check
+        at the schema boundary so YAML authors fail at parse time, not at
+        wrap time (SPEC_11 §3.1: "yaml-agno replica esta validación en el
+        boundary").
+
+        Returns:
+            self (unchanged) if the constraint holds.
+
+        Raises:
+            ValueError: If two or more HITL flags are True simultaneously.
+        """
+        hitl_active = sum(
+            1
+            for flag in (
+                self.requires_confirmation,
+                self.requires_user_input,
+                self.external_execution,
+            )
+            if flag
+        )
+        if hitl_active > 1:
+            raise ValueError(
+                "HITL mutual-exclusivity violation (SPEC_11 §3.1): at most one of "
+                "'requires_confirmation', 'requires_user_input', 'external_execution' "
+                "may be True. Got: "
+                f"requires_confirmation={self.requires_confirmation}, "
+                f"requires_user_input={self.requires_user_input}, "
+                f"external_execution={self.external_execution}."
+            )
+        return self
 
 
 class CustomToolkitConfig(BaseModel):

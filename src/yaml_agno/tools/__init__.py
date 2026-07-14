@@ -21,6 +21,7 @@ from yaml_agno.tools.schema import (
     ToolEntry,
 )
 from yaml_agno.tools.security import SecurityError, is_module_allowed
+from yaml_agno.tools.tool_factory import ToolFactory
 
 __all__ = [
     "BUILTIN_REGISTRY",
@@ -35,6 +36,7 @@ __all__ = [
     "SecurityError",
     "StdioMcpConfig",
     "ToolEntry",
+    "ToolFactory",
     "ToolkitAdapter",
     "UnknownBuiltinError",
     "is_module_allowed",
