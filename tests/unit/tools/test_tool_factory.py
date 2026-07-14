@@ -126,3 +126,199 @@ def test_build_mcp_returns_unconnected() -> None:
     mcp = result[0]
     assert isinstance(mcp, MCPTools)
     assert mcp.initialized is False
+
+
+# --- SPEC_11 slice D: hook resolution + forwarding in _wrap_tool (R2+R3+R6) ---
+
+
+class _HookStubResolver:
+    """Resolver that returns distinct stub callables for each dotted-path.
+
+    Each call to ``resolve_class`` returns a NEW sentinel callable and records
+    the (module_path, class_name) pair so tests can assert call order. The
+    path MUST be under an allowlisted prefix (``agno.tools.``) for the
+    loader's security guard to pass.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.stubs: list[Any] = []
+
+    def resolve_class(self, module_path: str, class_name: str) -> Any:
+        self.calls.append((module_path, class_name))
+
+        def _hook_stub(**kwargs: object) -> object:  # pragma: no cover - never called
+            return None
+
+        _hook_stub.__module__ = module_path
+        _hook_stub.__name__ = class_name
+        self.stubs.append(_hook_stub)
+        return _hook_stub
+
+
+@pytest.mark.unit
+def test_wrap_tool_resolves_pre_hook() -> None:
+    """Slice D R2: _wrap_tool resolves pre_hook dotted-path and forwards to @tool.
+
+    Req: Reenvío dorado pre_hook a @tool.
+    """
+    resolver = _HookStubResolver()
+    factory = ToolFactory(resolver)  # type: ignore[arg-type]
+    result = factory.build(
+        [{"kind": "function", "path": "agno.tools.stub.fn", "pre_hook": "agno.tools.hooks.audit"}]
+    )
+    assert len(result) == 1
+    from agno.tools.function import Function
+
+    wrapped = result[0]
+    assert isinstance(wrapped, Function)
+    # The pre_hook must be set to the resolved callable (the last stub created).
+    assert wrapped.pre_hook is resolver.stubs[-1]
+
+
+@pytest.mark.unit
+def test_wrap_tool_resolves_tool_hooks_list() -> None:
+    """Slice D R2: _wrap_tool resolves tool_hooks list and forwards in order.
+
+    Req: Reenvío dorado tool_hooks como lista (orden preservado).
+    """
+    resolver = _HookStubResolver()
+    factory = ToolFactory(resolver)  # type: ignore[arg-type]
+    result = factory.build(
+        [
+            {
+                "kind": "function",
+                "path": "agno.tools.stub.fn",
+                "tool_hooks": ["agno.tools.hooks.h1", "agno.tools.hooks.h2"],
+            }
+        ]
+    )
+    assert len(result) == 1
+    from agno.tools.function import Function
+
+    wrapped = result[0]
+    assert isinstance(wrapped, Function)
+    # tool_hooks must contain 2 resolved callables in the same order as the YAML.
+    # stubs[0] is the path callable; stubs[1] and stubs[2] are the hooks.
+    assert isinstance(wrapped.tool_hooks, list)
+    assert len(wrapped.tool_hooks) == 2
+    assert wrapped.tool_hooks[0] is resolver.stubs[1]
+    assert wrapped.tool_hooks[1] is resolver.stubs[2]
+
+
+@pytest.mark.unit
+def test_wrap_tool_omits_hooks_when_absent() -> None:
+    """Slice D R2: when no hooks are set, @tool is invoked without hook keys.
+
+    Req: Hooks omitidos cuando están ausentes (sin regresión).
+    """
+    resolver = _HookStubResolver()
+    factory = ToolFactory(resolver)  # type: ignore[arg-type]
+    result = factory.build([{"kind": "function", "path": "agno.tools.stub.fn"}])
+    assert len(result) == 1
+    from agno.tools.function import Function
+
+    wrapped = result[0]
+    assert isinstance(wrapped, Function)
+    # No hooks were resolved.
+    assert wrapped.pre_hook is None
+    assert wrapped.post_hook is None
+    # tool_hooks should be Agno's default (None when not forwarded).
+    assert wrapped.tool_hooks is None
+
+
+@pytest.mark.unit
+def test_wrap_tool_rejects_non_allowlisted_hook() -> None:
+    """Slice D R3: a non-allowlisted hook module raises SecurityError.
+
+    Req: Hook en módulo no allowlisted (RED de seguridad).
+    """
+    from yaml_agno.tools.security import SecurityError
+
+    resolver = _HookStubResolver()
+    factory = ToolFactory(resolver)  # type: ignore[arg-type]
+    with pytest.raises(SecurityError):
+        factory.build(
+            [{"kind": "function", "path": "agno.tools.stub.fn", "pre_hook": "evil_pkg.spy"}]
+        )
+
+
+@pytest.mark.unit
+def test_wrap_tool_partial_hooks_transaction() -> None:
+    """Slice D R3: tool_hooks with one allowlisted + one non-allowlisted is all-or-nothing.
+
+    Req: Transacción parcial — un hook ok y otro evil -> SecurityError (no Function built).
+    """
+    from yaml_agno.tools.security import SecurityError
+
+    resolver = _HookStubResolver()
+    factory = ToolFactory(resolver)  # type: ignore[arg-type]
+    with pytest.raises(SecurityError):
+        factory.build(
+            [
+                {
+                    "kind": "function",
+                    "path": "agno.tools.stub.fn",
+                    "tool_hooks": ["agno.tools.hooks.ok", "evil_pkg.bad"],
+                }
+            ]
+        )
+
+
+@pytest.mark.unit
+def test_caching_plus_hooks_coexist() -> None:
+    """Slice D R6: cache_results + pre_hook both forwarded, no flag lost.
+
+    Req: Caching+hooks coexisten (invariante slice C preservada).
+    """
+    resolver = _HookStubResolver()
+    factory = ToolFactory(resolver)  # type: ignore[arg-type]
+    result = factory.build(
+        [
+            {
+                "kind": "function",
+                "path": "agno.tools.stub.fn",
+                "cache_results": True,
+                "cache_ttl": 300,
+                "pre_hook": "agno.tools.hooks.audit",
+            }
+        ]
+    )
+    assert len(result) == 1
+    from agno.tools.function import Function
+
+    wrapped = result[0]
+    assert isinstance(wrapped, Function)
+    # Both caching and hook are present.
+    assert wrapped.cache_results is True
+    assert wrapped.cache_ttl == 300
+    assert wrapped.pre_hook is resolver.stubs[-1]
+
+
+@pytest.mark.unit
+def test_caching_without_hooks_no_regression() -> None:
+    """Slice D R6: caching flags still forwarded when no hooks are set.
+
+    Req: Caching sin hooks sin regresión (byte-idéntico a slice C).
+    """
+    resolver = _HookStubResolver()
+    factory = ToolFactory(resolver)  # type: ignore[arg-type]
+    result = factory.build(
+        [
+            {
+                "kind": "function",
+                "path": "agno.tools.stub.fn",
+                "cache_results": True,
+                "cache_dir": "/tmp/cache",
+                "cache_ttl": 600,
+            }
+        ]
+    )
+    assert len(result) == 1
+    from agno.tools.function import Function
+
+    wrapped = result[0]
+    assert isinstance(wrapped, Function)
+    assert wrapped.cache_results is True
+    assert wrapped.cache_dir == "/tmp/cache"
+    assert wrapped.cache_ttl == 600

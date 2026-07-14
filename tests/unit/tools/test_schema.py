@@ -176,3 +176,51 @@ def test_hitl_single_flag_true_is_valid() -> None:
     """
     config = CustomToolConfig(path="x.y", external_execution=True)
     assert config.external_execution is True
+
+
+# --- SPEC_11 slice D: CustomToolConfig hook fields (pre_hook/post_hook/tool_hooks) ---
+
+
+@pytest.mark.unit
+def test_custom_tool_config_accepts_hook_fields() -> None:
+    """Slice D: CustomToolConfig accepts pre_hook, post_hook, tool_hooks.
+
+    Req R1: Configuración válida con hook fields.
+    """
+    config = CustomToolConfig(
+        path="x.y",
+        pre_hook="myapp.hooks.audit_pre",
+        post_hook="myapp.hooks.audit_post",
+        tool_hooks=["myapp.hooks.a", "myapp.hooks.b"],
+    )
+    assert config.pre_hook == "myapp.hooks.audit_pre"
+    assert config.post_hook == "myapp.hooks.audit_post"
+    assert config.tool_hooks == ["myapp.hooks.a", "myapp.hooks.b"]
+
+
+@pytest.mark.unit
+def test_tool_hooks_defaults_empty() -> None:
+    """Slice D: tool_hooks defaults to [] when omitted; pre_hook/post_hook default None.
+
+    Req R1: tool_hooks como lista vacía por defecto.
+    """
+    config = CustomToolConfig(path="x.y")
+    assert config.tool_hooks == []
+    assert config.pre_hook is None
+    assert config.post_hook is None
+
+
+@pytest.mark.unit
+def test_pre_hook_invalid_no_dot() -> None:
+    """Slice D: pre_hook without a dot (no module.name structure) is rejected.
+
+    Req R1: Referencia dotted-path inválida (sin punto).
+
+    The schema-level validation requires a dotted-path; a bare name has no
+    module separator. ``min_length=1`` is satisfied, but the model_validator
+    or field constraint must reject a structurally invalid dotted-path. Since
+    the design says the schema validates SYNTAX (must contain at least one '.'),
+    we add a field_validator for this.
+    """
+    with pytest.raises(ValidationError):
+        CustomToolConfig(path="x.y", pre_hook="hooks_audit")  # no dot
