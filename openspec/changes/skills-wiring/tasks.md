@@ -65,11 +65,11 @@ Chain strategy: size-exception
 
 ## Phase 3: GREEN — AgentFactory skills forwarding (minimal code to pass)
 
-- [ ] 3.1 Add `from yaml_agno.skills import SkillsFactory` import to `src/yaml_agno/factories/agent_factory.py`.
-- [ ] 3.2 Add skills branch in `build()`: `skills = SkillsFactory.build(cfg.skills) if cfg.skills else None` (after tools branch, before Agent constructor).
-- [ ] 3.3 Add `skills=skills` kwarg to `Agent(...)` constructor call.
-- [ ] 3.4 Update `build()` docstring: add skills row to mapping table, note SkillsFactory dispatch, update Raises section.
-- [ ] 3.5 Run `python -m pytest tests/unit/factories/test_agent_factory.py -v` — confirm all 5 new tests GREEN + 13 existing scenarios GREEN.
+- [x] 3.1 Add `from yaml_agno.skills import SkillsFactory` import to `src/yaml_agno/factories/agent_factory.py`.
+- [x] 3.2 Add skills branch in `build()`: `skills = SkillsFactory.build(cfg.skills) if cfg.skills else None` (after tools branch, before Agent constructor).
+- [x] 3.3 Add `skills=skills` kwarg to `Agent(...)` constructor call.
+- [x] 3.4 Update `build()` docstring: add skills row to mapping table, note SkillsFactory dispatch, update Raises section.
+- [x] 3.5 Run `python -m pytest tests/unit/factories/test_agent_factory.py -v` — confirm all 5 new tests GREEN + 13 existing scenarios GREEN.
 
 ## Phase 4: Verification (full quality gate — GATE VQ)
 
