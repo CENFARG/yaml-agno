@@ -1,7 +1,9 @@
-"""Unit tests for ``yaml_agno.tools.registry`` — SPEC_11 slice A.
+"""Unit tests for ``yaml_agno.tools.registry`` — SPEC_11 slices A + D.
 
-BUILTIN_REGISTRY ships 5 adapters. ToolkitAdapter normalizes aliases and
-filters kwargs via inspect.signature (Toolkits are NOT dataclasses).
+Slice A: ToolkitAdapter normalizes aliases and filters kwargs via
+inspect.signature (Toolkits are NOT dataclasses), with 5 baseline adapters.
+Slice D: BUILTIN_REGISTRY expands to the full Agno 2.6.22 tool surface
+(~131+ adapters). The original 5 remain present and unchanged.
 """
 
 from __future__ import annotations
@@ -23,9 +25,28 @@ class _StubResolver:
 
 @pytest.mark.unit
 def test_registry_has_five_builtins() -> None:
-    """The 5 shipped adapters are present."""
+    """The 5 shipped adapters are present (subset check still passes)."""
     expected = {"calculator", "yfinance", "hackernews", "duckduckgo", "shell"}
     assert expected <= set(BUILTIN_REGISTRY)
+
+
+@pytest.mark.unit
+def test_registry_expanded_full_count() -> None:
+    """Slice D: registry covers the full Agno tool surface.
+
+    The explore mapping (Agno 2.6.22) yields 134 candidate tool modules after
+    excluding mcp_toolbox/google_auth/google_base. Every candidate MUST appear
+    as a registry key. This guards against silent regressions if an adapter is
+    accidentally dropped during edits.
+    """
+    assert len(BUILTIN_REGISTRY) >= 131
+
+
+@pytest.mark.unit
+def test_registry_no_excluded_keys() -> None:
+    """Infrastructure modules excluded by design are NOT in the registry."""
+    excluded = {"mcp_toolbox", "google_auth", "google_base", "mcp", "streamlit"}
+    assert excluded.isdisjoint(set(BUILTIN_REGISTRY))
 
 
 @pytest.mark.unit
@@ -106,3 +127,43 @@ def test_build_instantiates_real_calculator() -> None:
     from agno.tools.toolkit import Toolkit
 
     assert isinstance(instance, Toolkit)
+
+
+@pytest.mark.unit
+def test_real_resolver_sample_of_importable_tools() -> None:
+    """Slice D: a sample of importable tools resolve via the real AgnoResolver.
+
+    These are the importable-now adapters (no optional dep). Optional-dep
+    adapters are lazy — they fail at BUILD time without the dep, which is the
+    intended design, so they are not exercised here. calculator, shell,
+    airflow, and coding cover stdlib + agno-core deps.
+    """
+    from core_infrastructure.config.adapters.in_memory_config_adapter import (
+        InMemoryConfigAdapter,
+    )
+    from core_infrastructure.dependency import ImportlibDependencyAdapter
+    from core_infrastructure.errors.adapters.capturing_error_adapter import (
+        CapturingErrorAdapter,
+    )
+    from core_infrastructure.logger.adapters.in_memory_logger_adapter import (
+        InMemoryLoggerAdapter,
+    )
+    from core_infrastructure.observability.adapters import NoopObservabilityAdapter
+
+    from yaml_agno.di.agno_resolver import AgnoResolver
+
+    cfg = InMemoryConfigAdapter()
+    cfg.set_value("dependency.allowlist_paths", ["agno.tools."])
+    resolver = AgnoResolver(
+        ImportlibDependencyAdapter(
+            cfg,
+            InMemoryLoggerAdapter(),
+            CapturingErrorAdapter(cfg, InMemoryLoggerAdapter(), NoopObservabilityAdapter()),
+        )
+    )
+    from agno.tools.toolkit import Toolkit
+
+    sample = ["calculator", "shell", "airflow", "coding"]
+    for key in sample:
+        instance = BUILTIN_REGISTRY[key].build(resolver, {})
+        assert isinstance(instance, Toolkit), key
