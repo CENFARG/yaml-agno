@@ -1,8 +1,8 @@
-"""Unit tests for ``yaml_agno.tools.schema`` — SPEC_11 slice A.
+"""Unit tests for ``yaml_agno.tools.schema`` — SPEC_11 slices A + B.
 
 Covers the ToolEntry discriminated union: kind discrimination (5 kinds),
-field validation (extra=allow on builtin/mcp, extra=forbid on function/
-toolkit_class), and the MCP placeholders.
+field validation (extra=allow on builtin, extra=forbid on function/
+toolkit_class/mcp), and the MCP transport-discriminated union (slice B).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from yaml_agno.tools.schema import (
     CustomToolConfig,
     CustomToolkitConfig,
     McpMultiToolConfig,
-    McpToolConfig,
+    StdioMcpConfig,
     ToolEntry,
 )
 
@@ -49,17 +49,28 @@ def test_tool_entry_toolkit_class_from_dict() -> None:
 
 
 @pytest.mark.unit
-def test_tool_entry_mcp_placeholder_parses() -> None:
-    """MCP kind parses (placeholder); the LOADER raises, not the schema."""
-    entry = TypeAdapter(ToolEntry).validate_python({"kind": "mcp", "command": "echo"})
-    assert isinstance(entry, McpToolConfig)
+def test_tool_entry_mcp_stdio_from_dict() -> None:
+    """Slice B: kind=mcp + transport=stdo -> StdioMcpConfig."""
+    entry = TypeAdapter(ToolEntry).validate_python(
+        {"kind": "mcp", "transport": "stdio", "command": "uvx mcp-server-git"}
+    )
+    assert isinstance(entry, StdioMcpConfig)
+    assert entry.command == "uvx mcp-server-git"
+    assert entry.transport == "stdio"
 
 
 @pytest.mark.unit
-def test_tool_entry_mcp_multi_placeholder_parses() -> None:
-    """mcp_multi kind parses (placeholder)."""
-    entry = TypeAdapter(ToolEntry).validate_python({"kind": "mcp_multi"})
+def test_tool_entry_mcp_multi_with_servers() -> None:
+    """Slice B: kind=mcp_multi with servers list -> McpMultiToolConfig."""
+    entry = TypeAdapter(ToolEntry).validate_python(
+        {
+            "kind": "mcp_multi",
+            "servers": [{"transport": "stdio", "command": "echo hi"}],
+        }
+    )
     assert isinstance(entry, McpMultiToolConfig)
+    assert len(entry.servers) == 1
+    assert isinstance(entry.servers[0], StdioMcpConfig)
 
 
 @pytest.mark.unit
