@@ -133,7 +133,7 @@ class CustomToolConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_hitl_mutual_exclusivity(self) -> "CustomToolConfig":
+    def _validate_hitl_mutual_exclusivity(self) -> CustomToolConfig:
         """Enforce SPEC_11 §3.1: at most one HITL flag may be True.
 
         Agno's ``@tool`` decorator raises ``ValueError`` if more than one of

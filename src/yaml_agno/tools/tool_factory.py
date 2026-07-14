@@ -20,13 +20,14 @@ caching, concurrency, and tool_call_limit forwarding — do NOT add them here.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from agno.tools.decorator import tool as agno_tool
 from pydantic import TypeAdapter
 
 from yaml_agno.tools.custom_loader import CustomToolLoader
-from yaml_agno.tools.registry import BUILTIN_REGISTRY, UnknownBuiltinError
+from yaml_agno.tools.registry import BUILTIN_REGISTRY
 from yaml_agno.tools.schema import (
     BuiltinToolConfig,
     CustomToolConfig,
@@ -77,7 +78,7 @@ class ToolFactory:
         """
         self._loader = CustomToolLoader(resolver)
 
-    def build(self, tool_entries: list[dict[str, Any] | ToolEntry]) -> list[Any]:
+    def build(self, tool_entries: Sequence[dict[str, Any] | ToolEntry]) -> list[Any]:
         """Dispatch each tool entry to its resolver, collect into Agent's mixed list.
 
         Accepts EITHER raw dicts (opaque ``AgentConfig.tools``, Option B) or
