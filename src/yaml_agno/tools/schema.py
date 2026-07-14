@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 __all__ = [
     "BuiltinToolConfig",
@@ -52,7 +52,8 @@ class CustomToolConfig(BaseModel):
 
     ``path`` is resolved via ``CustomToolLoader.load_callable`` (allowlisted
     importlib, slice A) and returned RAW. ``ToolFactory._wrap_tool`` applies
-    ``@tool(**flags)`` from the remaining fields (SPEC_11 §3.1, slice C).
+    ``@tool(**flags)`` from the remaining fields (SPEC_11 §3.1, slice C),
+    including hook resolution (slice D).
 
     The HITL mutual-exclusivity constraint (SPEC_11 §3.1: at most one of
     ``requires_confirmation`` / ``requires_user_input`` /
@@ -60,9 +61,11 @@ class CustomToolConfig(BaseModel):
     boundary via a ``model_validator(mode="after")`` — fail-early, fail-loud,
     before ``@tool`` is applied.
 
-    NOTE: ``tool_hooks``, ``pre_hook``, and ``post_hook`` are INTENTIONALLY
-    ABSENT (DEFER to slice D, TASK_005). ``extra="forbid"`` rejects them
-    until slice D adds the ``ToolHookRef`` schema + resolution.
+    Hook fields (``pre_hook`` / ``post_hook`` / ``tool_hooks``, slice D) are
+    dotted-path strings resolved through the SAME allowlist + resolver as
+    ``path`` (SPEC_11 §10.3). Resolution happens in ``_wrap_tool``, NOT at
+    schema time, so a misconfigured hook module fails with a clear
+    ``SecurityError`` at the wrap site.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -121,7 +124,7 @@ class CustomToolConfig(BaseModel):
         description="Stop the run after this tool is called.",
     )
 
-    # --- @tool caching flags (per-call; cross-run LRU is slice D, TASK_013) ---
+    # --- @tool caching flags (per-call; cross-run LRU is DEFERRED post-MVP, A3) ---
     cache_results: bool = Field(
         default=False,
         description="Cache the tool result (Agno applies per-call).",
@@ -135,6 +138,78 @@ class CustomToolConfig(BaseModel):
         ge=1,
         description="Cache TTL in seconds.",
     )
+
+    # --- @tool hooks (SPEC_11 §3.1, §8.1, §10.3 — slice D) ---
+    # Dotted-path strings resolved via CustomToolLoader._resolve_dotted (the
+    # SAME allowlisted path used for `path` and MCP `header_provider`). Agno's
+    # `@tool` accepts the resolved Callables and sets them on the Function.
+    pre_hook: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=400,
+        description="Dotted-path to a Callable invoked before tool execution "
+        "(e.g. 'myapp.hooks.audit_pre'). Resolved in _wrap_tool.",
+    )
+    post_hook: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=400,
+        description="Dotted path to a Callable invoked after tool execution "
+        "(e.g. 'myapp.hooks.audit_post'). Resolved in _wrap_tool.",
+    )
+    tool_hooks: list[str] = Field(
+        default_factory=list,
+        description="Dotted-path Callables chained around tool execution "
+        "(e.g. ['myapp.hooks.audit_log', 'myapp.hooks.rate_limit']). Each "
+        "entry is resolved via _resolve_dotted in _wrap_tool.",
+    )
+
+    @field_validator("pre_hook", "post_hook")
+    @classmethod
+    def _validate_hook_dotted_syntax(cls, v: str | None) -> str | None:
+        """Enforce that hook refs contain at least one dot (module.name syntax).
+
+        The full resolution + allowlist check happens in ``_wrap_tool`` via
+        ``_resolve_dotted``; this validator only catches structurally invalid
+        dotted-paths at schema time (fail-early for YAML authors).
+
+        Args:
+            v: The hook dotted-path string, or ``None``.
+
+        Returns:
+            The unchanged string if it contains a dot, or ``None``.
+
+        Raises:
+            ValueError: If the string has no ``.`` separator.
+        """
+        if v is not None and "." not in v:
+            raise ValueError(
+                f"Invalid hook dotted-path: {v!r}. Expected 'module.name' "
+                f"(must contain at least one '.')."
+            )
+        return v
+
+    @field_validator("tool_hooks")
+    @classmethod
+    def _validate_tool_hooks_dotted_syntax(cls, v: list[str]) -> list[str]:
+        """Enforce that each tool_hooks entry contains at least one dot.
+
+        Args:
+            v: The list of hook dotted-path strings.
+
+        Returns:
+            The unchanged list if all entries contain a dot.
+
+        Raises:
+            ValueError: If any entry has no ``.`` separator.
+        """
+        for entry in v:
+            if "." not in entry:
+                raise ValueError(
+                    f"Invalid tool_hooks entry: {entry!r}. Expected 'module.name' "
+                    f"(must contain at least one '.')."
+                )
+        return v
 
     @model_validator(mode="after")
     def _validate_hitl_mutual_exclusivity(self) -> CustomToolConfig:

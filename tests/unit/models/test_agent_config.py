@@ -126,3 +126,39 @@ class TestAgentConfigExtraForbiddenAndUserId:
         """user_id provided in YAML is rejected by extra='forbid'."""
         with pytest.raises(ValidationError):
             AgentConfig(name="a1", model="openai:gpt-4o", user_id="u1")
+
+
+# --- SPEC_11 slice D: tool_call_limit field (R4) ---
+
+
+class TestAgentConfigToolCallLimit:
+    """RED→GREEN tests for ``AgentConfig.tool_call_limit`` (slice D, SPEC_11 §5.4)."""
+
+    def test_agent_config_accepts_tool_call_limit(self) -> None:
+        """Slice D R4: a valid tool_call_limit int is accepted.
+
+        Req: tool_call_limit válido.
+        """
+        cfg = AgentConfig(name="a1", model="openai:gpt-4o", tool_call_limit=5)
+        assert cfg.tool_call_limit == 5
+
+    def test_agent_config_tool_call_limit_defaults_none(self) -> None:
+        """Slice D R4: tool_call_limit defaults to None when omitted.
+
+        Req: tool_call_limit ausente (default None).
+        """
+        cfg = AgentConfig(name="a1", model="openai:gpt-4o")
+        assert cfg.tool_call_limit is None
+
+    def test_agent_config_rejects_zero_tool_call_limit(self) -> None:
+        """Slice D R4: tool_call_limit=0 is rejected (ge=1 constraint).
+
+        Req: tool_call_limit inválido (cero o negativo).
+        """
+        with pytest.raises(ValidationError):
+            AgentConfig(name="a1", model="openai:gpt-4o", tool_call_limit=0)
+
+    def test_agent_config_rejects_negative_tool_call_limit(self) -> None:
+        """Slice D R4: tool_call_limit=-1 is rejected (ge=1 constraint)."""
+        with pytest.raises(ValidationError):
+            AgentConfig(name="a1", model="openai:gpt-4o", tool_call_limit=-1)

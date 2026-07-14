@@ -47,6 +47,7 @@ class AgentFactory:
         | description: str | None  | description              | direct    |
         | model: str               | model                    | passthru  |
         | tools: list[dict]        | tools                    | factory*  |
+        | tool_call_limit: int|None| tool_call_limit          | direct    |
         +--------------------------+--------------------------+-----------+
         | knowledge, memory, ...   | (not forwarded)          | deferred  |
         | tags, metadata           | (not forwarded)          | deferred  |
@@ -105,6 +106,5 @@ class AgentFactory:
             description=cfg.description,
             model=cfg.model,
             tools=tools or None,
-            # tool_call_limit is DEFER to slice D (TASK_011): AgentConfig has
-            # no tool_call_limit field today; requires SPEC_02 evolution.
+            tool_call_limit=cfg.tool_call_limit,
         )

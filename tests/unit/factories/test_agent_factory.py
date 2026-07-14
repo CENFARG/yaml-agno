@@ -269,3 +269,27 @@ class TestAgentFactoryToolsWiring:
         result = AgentFactory.build(cfg)
         assert isinstance(result, Agent)
         assert result.tools == []
+
+
+class TestAgentFactoryToolCallLimit:
+    """RED→GREEN tests for SPEC_11 slice D: tool_call_limit forwarding (R5)."""
+
+    def test_agent_factory_forwards_tool_call_limit(self) -> None:
+        """Slice D R5: build(cfg with tool_call_limit=10) -> Agent.tool_call_limit == 10.
+
+        Req: tool_call_limit reenviado (GOLDEN).
+        """
+        cfg = AgentConfig(name="t", model="openai:gpt-4o", tool_call_limit=10)
+        result = AgentFactory.build(cfg)
+        assert isinstance(result, Agent)
+        assert result.tool_call_limit == 10
+
+    def test_agent_factory_tool_call_limit_none_omitted(self) -> None:
+        """Slice D R5: build(cfg without tool_call_limit) -> Agent.tool_call_limit is None.
+
+        Req: tool_call_limit=None (default, Agent recibe None).
+        """
+        cfg = AgentConfig(name="t", model="openai:gpt-4o")
+        result = AgentFactory.build(cfg)
+        assert isinstance(result, Agent)
+        assert result.tool_call_limit is None
