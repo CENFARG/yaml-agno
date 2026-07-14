@@ -42,9 +42,18 @@ class AgentConfig(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Unique agent name.")
     model: ModelReference = Field(..., description="Model as string 'provider:id' (e.g. openai:gpt-4o). See SPEC_14.")
 
-    # --- Behavior (2 fields) ---
+    # --- Behavior (3 fields) ---
     instructions: Instructions | None = Field(None, max_length=50000, description="System prompt.")
     description: str | None = Field(None, description="Human-readable description.")
+    # tool_call_limit (slice D, SPEC_11 §5.4): per-run cap on total tool
+    # calls across the whole run. Agent-level, NOT per-tool. ge=1 matches
+    # Agno's own lower bound; NO upper bound (Agno imposes none; an
+    # artificial le=100 would reject valid long-running agent configs).
+    tool_call_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Max tool calls per run (Agent-level). None = no limit. See SPEC_11 §5.4.",
+    )
 
     # --- Delegated sub-systems: 9 opaque slots ---
     # tools is list[ToolConfig]; the other 8 are dict[str, Any] | None.
@@ -63,7 +72,7 @@ class AgentConfig(BaseModel):
     tags: list[Tag] = Field(default_factory=list, max_length=20, description="Tags for organization.")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Free-form metadata.")
 
-    # Total: 13 named fields (2 identity + 2 behavior + 9 opaque + 2 org) + model_config.
+    # Total: 14 named fields (2 identity + 3 behavior + 9 opaque + 2 org) + model_config.
     # `user_id` is INTENTIONALLY ABSENT (composite, runtime-only, SPEC_04).
 
     @field_validator("name")

@@ -14,8 +14,11 @@ Synchronous by design: ``MCPResolver`` returns UNCONNECTED ``MCPTools`` /
 path.
 
 @ai-directive: SSOT is specs/SPEC_11_TOOLS_AND_MCP.md §3 (custom @tool),
-§9.5 (CustomToolLoader raw return contract). Slice D adds hooks, cross-run
-caching, concurrency, and tool_call_limit forwarding — do NOT add them here.
+§9.5 (CustomToolLoader raw return contract). Slice D adds hook resolution
+(pre_hook / post_hook / tool_hooks dotted-path strings resolved to Callables
+and forwarded to @tool). Cross-run caching (cache_callables) is DEFERRED
+post-MVP; concurrency executor is NEVER (Agno owns tool execution); registry
+expansion is SEPARATED to its own change.
 """
 
 from __future__ import annotations
@@ -56,12 +59,12 @@ class ToolFactory:
 
     Construction is cheap (one ``CustomToolLoader``); ``resolver`` is the
     shared dependency. The factory holds no tool-level state — each
-    ``build()`` call is independent (caching is slice D).
+    ``build()`` call is independent.
 
-    Slice C scope: dispatch + ``@tool`` wrapping. Hooks (``tool_hooks``,
-    ``pre_hook`` / ``post_hook``), cross-run caching (``cache_callables``),
-    concurrency (``asyncio.TaskGroup``), and ``tool_call_limit`` forwarding
-    are DEFER to slice D.
+    Scope: dispatch + ``@tool`` wrapping (slice C) + hook resolution (slice D).
+    Cross-run caching (``cache_callables``) is DEFERRED post-MVP; concurrency
+    executor is NEVER (Agno owns tool execution); registry expansion is
+    SEPARATED to its own change.
 
     Attributes:
         _loader: The ``CustomToolLoader`` for ``function`` / ``toolkit_class``
@@ -144,6 +147,13 @@ class ToolFactory:
         its own defaults (matches SPEC_11 §3.1: ``show_result`` default
         ``None``, ``name``/``description`` default to function name/docstring).
 
+        Hook fields (``pre_hook`` / ``post_hook`` / ``tool_hooks``, slice D)
+        are dotted-path strings RESOLVED HERE via
+        ``self._loader._resolve_dotted`` — the same allowlisted path used for
+        ``config.path`` itself and MCP ``header_provider`` (SPEC_11 §10.3).
+        The resolved ``Callable`` objects are forwarded to ``@tool``, which
+        sets them on the returned ``Function`` (verified Agno 2.6.22).
+
         Args:
             raw_callable: The bare callable resolved by
                 ``CustomToolLoader.load_callable``.
@@ -155,7 +165,26 @@ class ToolFactory:
         Returns:
             An ``agno.tools.function.Function`` object (the type
             ``@tool`` returns per TECH011).
+
+        Raises:
+            SecurityError: If a hook dotted-path references a non-allowlisted
+                module (propagated from ``_resolve_dotted``).
+            ValueError: If a hook dotted-path has no ``module.name`` structure
+                (propagated from ``_resolve_dotted``).
         """
+        # --- Slice D: resolve hook dotted-paths to Callables (A1, A2) ---
+        # Reuses CustomToolLoader._resolve_dotted (the SAME allowlisted path
+        # as `config.path` and MCP `header_provider`). No separate hooks.py.
+        pre_hook_callable = (
+            self._loader._resolve_dotted(config.pre_hook) if config.pre_hook is not None else None
+        )
+        post_hook_callable = (
+            self._loader._resolve_dotted(config.post_hook) if config.post_hook is not None else None
+        )
+        tool_hooks_callables = [
+            self._loader._resolve_dotted(hook_ref) for hook_ref in config.tool_hooks
+        ]
+
         flags = {
             "name": config.name,
             "description": config.description,
@@ -170,8 +199,13 @@ class ToolFactory:
             "cache_results": config.cache_results,
             "cache_dir": config.cache_dir,
             "cache_ttl": config.cache_ttl,
+            "pre_hook": pre_hook_callable,
+            "post_hook": post_hook_callable,
+            "tool_hooks": tool_hooks_callables or None,
         }
         # Drop None-valued flags so Agno applies its own defaults. Boolean
-        # False is KEPT (it is a meaningful explicit value, not "unset").
+        # False is KEPT (it is a meaningful explicit value, not "unset"). An
+        # empty tool_hooks list is normalized to None above so it is dropped
+        # here (Agno default is []).
         flags = {k: v for k, v in flags.items() if v is not None}
         return agno_tool(**flags)(raw_callable)
