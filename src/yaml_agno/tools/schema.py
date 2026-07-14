@@ -124,7 +124,7 @@ class CustomToolConfig(BaseModel):
         description="Stop the run after this tool is called.",
     )
 
-    # --- @tool caching flags (per-call; cross-run LRU is slice D, TASK_013) ---
+    # --- @tool caching flags (per-call; cross-run LRU is DEFERRED post-MVP, A3) ---
     cache_results: bool = Field(
         default=False,
         description="Cache the tool result (Agno applies per-call).",
