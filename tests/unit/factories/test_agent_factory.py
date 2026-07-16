@@ -130,7 +130,6 @@ class TestAgentFactoryBuild:
             memory={"backends": ["db"]},
             session={"storage": "sqlite"},
             reasoning={"effort": "high"},
-            skills={"list": ["s1"]},
             human_review={"enabled": True},
             culture={"locale": "es-AR"},
             persistence={"mode": "auto"},
@@ -142,9 +141,10 @@ class TestAgentFactoryBuild:
         # Non-forwarding: the factory MUST NOT pass opaque slots/tags/metadata
         # to Agent(). For attributes Agent exposes, assert they hold Agno's
         # DEFAULTS, not the populated cfg values (proves they were ignored).
+        # NOTE: skills is now owned by SPEC_30 slice B (TestAgentFactorySkillsWiring)
+        # and is not part of this opaque-slots test.
         assert result.tools == []  # cfg had [{"name": "tool1"}] -> ignored
         assert result.knowledge is None  # cfg had {"db": "pg"} -> ignored
-        assert result.skills is None  # cfg had {"list": ["s1"]} -> ignored
         assert result.metadata is None  # cfg had {"owner": "team-foo"} -> ignored
 
     def test_build_does_not_invoke_run_or_arun(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -293,3 +293,113 @@ class TestAgentFactoryToolCallLimit:
         result = AgentFactory.build(cfg)
         assert isinstance(result, Agent)
         assert result.tool_call_limit is None
+
+
+class TestAgentFactorySkillsWiring:
+    """RED→GREEN tests for SPEC_30 slice B: ``build(cfg)`` skills forwarding.
+
+    When ``cfg.skills`` is non-None, the factory builds a ``Skills`` instance
+    via ``SkillsFactory.build`` and forwards it to ``Agent(skills=...)``. When
+    ``cfg.skills is None``, behavior is unchanged (``agent.skills is None``).
+
+    Contract tests (R-sysprompt, R-tools): real ``SKILL.md`` fixtures in
+    ``tmp_path`` exercise Agno's system-prompt snippet injector and access-tool
+    exposer end-to-end. No Agno mocks.
+    """
+
+    @staticmethod
+    def _write_valid_skill(skill_dir, name="my-skill"):
+        """Write a structurally valid ``SKILL.md`` (lowercase, hyphenated name).
+
+        Mirrors the helper in ``tests/unit/skills/test_skills_factory.py`` so
+        Agno's ``validate_skill_directory`` passes when ``validate=True``.
+        """
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: A test skill.\n---\n# My Skill\nInstructions here.\n",
+            encoding="utf-8",
+        )
+
+    def test_build_forwards_skills_when_present(self, tmp_path) -> None:
+        """Slice B golden: build(cfg with skills) -> agent.skills is a Skills instance.
+
+        Req R-fwd: AgentFactory.build cablea cfg.skills hacia SkillsFactory.build.
+        """
+        from agno.skills import Skills
+
+        self._write_valid_skill(tmp_path / "my-skill")
+        cfg = AgentConfig(
+            name="agent-skills",
+            model="openai:gpt-4o",
+            skills={"path": str(tmp_path), "validate": True},
+        )
+        result = AgentFactory.build(cfg)
+        assert isinstance(result, Agent)
+        assert isinstance(result.skills, Skills)
+
+    def test_build_without_skills_keeps_agent_skills_none(self) -> None:
+        """Slice B backward-compat: build(cfg without skills) -> agent.skills is None.
+
+        Req R-none: None forwarding produces Agent(skills=None).
+        """
+        cfg = AgentConfig(name="agent-no-skills", model="openai:gpt-4o")
+        result = AgentFactory.build(cfg)
+        assert isinstance(result, Agent)
+        assert result.skills is None
+
+    def test_build_skills_injects_system_prompt_snippet(self, tmp_path) -> None:
+        """Slice B contract (R-sysprompt): agent.skills.get_system_prompt_snippet()
+        returns a non-empty XML block (the ``<skills_system>`` injection).
+        """
+        self._write_valid_skill(tmp_path / "my-skill")
+        cfg = AgentConfig(
+            name="agent-snippet",
+            model="openai:gpt-4o",
+            skills={"path": str(tmp_path), "validate": True},
+        )
+        result = AgentFactory.build(cfg)
+        assert result.skills is not None
+        snippet = result.skills.get_system_prompt_snippet()
+        assert isinstance(snippet, str)
+        assert snippet.strip() != ""
+
+    def test_build_skills_exposes_three_access_tools(self, tmp_path) -> None:
+        """Slice B contract (R-tools): agent.skills.get_tools() returns the
+        three Agno access tools (instructions, reference, script) as Function
+        objects.
+        """
+        from agno.tools.function import Function
+
+        self._write_valid_skill(tmp_path / "my-skill")
+        cfg = AgentConfig(
+            name="agent-tools",
+            model="openai:gpt-4o",
+            skills={"path": str(tmp_path), "validate": True},
+        )
+        result = AgentFactory.build(cfg)
+        assert result.skills is not None
+        tools = result.skills.get_tools()
+        assert len(tools) == 3
+        assert all(isinstance(t, Function) for t in tools)
+        tool_names = {t.name for t in tools}
+        assert tool_names == {
+            "get_skill_instructions",
+            "get_skill_reference",
+            "get_skill_script",
+        }
+
+    def test_build_skills_propagates_invalid_skill_error(self, tmp_path) -> None:
+        """Slice B error propagation (R-err): an invalid skill dir (BadName
+        uppercase) with validate=True propagates SkillValidationError from the
+        factory.
+        """
+        from agno.skills import SkillValidationError
+
+        self._write_valid_skill(tmp_path / "BadName", name="BadName")
+        cfg = AgentConfig(
+            name="agent-bad",
+            model="openai:gpt-4o",
+            skills={"path": str(tmp_path), "validate": True},
+        )
+        with pytest.raises(SkillValidationError):
+            AgentFactory.build(cfg)
