@@ -12,7 +12,9 @@ type-coercion layer (JSONB -> JSON, ARRAY(String) -> JSON).
 
 from __future__ import annotations
 
+import datetime as _dt
 import importlib
+import json
 import sys
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -27,10 +29,12 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-# Make Postgres-only column types compile under SQLite so the round-trip tests
-# can run against the in-memory engine. JSONB -> JSON; ARRAY(String) -> JSON.
-# Both translations preserve round-trip semantics: Python dict/list values are
-# serialized to TEXT on write and deserialized back on read.
+# Make Postgres-only column types compile AND round-trip under SQLite so the
+# in-memory engine can exercise inserts/selects. JSONB and ARRAY both render
+# as ``JSON`` columns; JSON values pass through SQLite's TEXT binding natively.
+# ARRAY values need explicit JSON encoding on bind (SQLite can't accept Python
+# lists directly), so we monkey-patch ARRAY's bind/result processors for the
+# SQLite dialect below.
 @compiles(JSONB, "sqlite")
 def _compile_jsonb_sqlite(type_: object, compiler: object, **kw: object) -> str:
     return "JSON"
@@ -39,6 +43,46 @@ def _compile_jsonb_sqlite(type_: object, compiler: object, **kw: object) -> str:
 @compiles(ARRAY, "sqlite")
 def _compile_array_sqlite(type_: object, compiler: object, **kw: object) -> str:
     return "JSON"
+
+
+def _install_sqlite_array_json_codec() -> None:
+    """Teach ARRAY to serialize Python lists as JSON text under SQLite.
+
+    Postgres accepts Python ``list`` natively via ARRAY; SQLite has no array
+    type and rejects ``list`` bindings. Pairing the DDL render (``JSON``) with
+    a JSON encoder/decoder lets the round-trip tests use the ORM ``Session``
+    exactly as production code will against PG.
+    """
+    _original_bind_processor = ARRAY.bind_processor
+    _original_result_processor = ARRAY.result_processor
+
+    def _patched_bind_processor(self: ARRAY, dialect: sqlalchemy.Dialect) -> object | None:
+        if dialect.name == "sqlite":
+            def encode(value: object) -> object:
+                if value is None:
+                    return None
+                return json.dumps(list(value))  # type: ignore[arg-type]
+            return encode
+        return _original_bind_processor(self, dialect)  # type: ignore[misc]
+
+    def _patched_result_processor(
+        self: ARRAY, dialect: sqlalchemy.Dialect, coltype: object,
+    ) -> object | None:
+        if dialect.name == "sqlite":
+            def decode(value: object) -> object:
+                if value is None:
+                    return None
+                if isinstance(value, list):
+                    return value
+                return json.loads(value)
+            return decode
+        return _original_result_processor(self, dialect, coltype)  # type: ignore[misc]
+
+    ARRAY.bind_processor = _patched_bind_processor  # type: ignore[method-assign,assignment]
+    ARRAY.result_processor = _patched_result_processor  # type: ignore[method-assign,assignment]
+
+
+_install_sqlite_array_json_codec()
 
 
 pytestmark = pytest.mark.unit
@@ -85,7 +129,6 @@ def _sqlite_engine_with_yamlagno_schema(metadata: sqlalchemy.MetaData) -> Engine
         # ``server_default=text("NOW()")`` columns accept inserts under SQLite.
         # The shim returns the current UTC timestamp in ISO-8601, matching PG's
         # NOW() behavior for round-trip purposes.
-        import datetime as _dt
 
         def _now() -> str:
             return _dt.datetime.now(_dt.UTC).isoformat()
@@ -508,53 +551,39 @@ def test_tenant_bad_kind_raises_integrity_error() -> None:
 @pytest.mark.integration
 def test_agent_config_round_trip_in_sqlite() -> None:
     """Round-trip AgentConfigRecord: defaults (version=1, is_active=True,
-    tags=[], metadata_={}) and explicit values are preserved on re-read."""
-    from sqlalchemy.dialects.postgresql import JSONB  # noqa: F401  (ensures import ok)
+    tags=[], metadata_={}) and explicit values are preserved on re-read.
+
+    Uses the ORM ``Session`` so Python-side defaults (``version=1``,
+    ``is_active=True``, ``tags=[]``, ``metadata_={}``) fire on flush — these
+    are ORM defaults, not ``server_default``."""
+    from sqlalchemy.orm import Session
 
     from yaml_agno.db.models import Base
     from yaml_agno.db.models.agent_config import AgentConfigRecord
-    from yaml_agno.db.models.tenant import TenantRecord  # noqa: F401  (table reg)
+    from yaml_agno.db.models.tenant import TenantRecord
 
     engine = _sqlite_engine_with_yamlagno_schema(Base.metadata)
-    tenant_id = uuid4()
     with engine.begin() as conn:
         _sqlite_create_all(conn, Base.metadata)
-        # Parent tenant first (FK).
-        conn.execute(
-            text(
-                """
-                INSERT INTO yamlagno_tenants
-                    (id, name, slug, parent_org_id, settings)
-                VALUES (:id, :name, :slug, NULL, :settings)
-                """
-            ),
-            {
-                "id": str(tenant_id),
-                "name": "Acme",
-                "slug": "acme",
-                "settings": "{}",
-            },
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO yamlagno_agent_configs
-                    (id, tenant_id, name, version, config_yaml, config_jsonb,
-                     description, tags, metadata, created_by, is_active)
-                VALUES
-                    (:id, :tenant_id, :name, NULL, :config_yaml, :config_jsonb,
-                     NULL, NULL, NULL, NULL, NULL)
-                """
-            ),
-            {
-                "id": str(uuid4()),
-                "tenant_id": str(tenant_id),
-                "name": "probe-agent",
-                "config_yaml": "name: probe",
-                "config_jsonb": '{"model": "gpt-4"}',
-            },
-        )
-        rows = conn.execute(
+
+    tenant_id = uuid4()
+    tenant = TenantRecord(
+        id=tenant_id, name="Acme", slug="acme", settings={},
+    )
+    # Construct AgentConfigRecord WITHOUT version/is_active/tags/metadata_ —
+    # their Python-side defaults MUST fire on flush.
+    record = AgentConfigRecord(
+        tenant_id=tenant_id,
+        name="probe-agent",
+        config_yaml="name: probe",
+        config_jsonb={"model": "gpt-4"},
+    )
+    with Session(engine) as session:
+        session.add(tenant)
+        session.flush()  # materialize tenant row so FK on agent_config passes
+        session.add(record)
+        session.commit()
+        rows = session.execute(
             select(
                 AgentConfigRecord.name,
                 AgentConfigRecord.version,
@@ -566,13 +595,10 @@ def test_agent_config_round_trip_in_sqlite() -> None:
         ).all()
 
     assert len(rows) == 1
-    name, version, is_active, tags, metadata_value, _config_jsonb = rows[0]
+    name, version, is_active, tags, metadata_value, config_jsonb = rows[0]
     assert name == "probe-agent"
     assert version == 1, "version must default to 1 when omitted"
     assert is_active is True, "is_active must default to True"
-    # tags default — SQLite returns None because no default fires server-side
-    # without a Python ORM flush; accept None OR empty list.
-    assert tags in (None, [], "[]"), f"unexpected tags default: {tags!r}"
-    assert metadata_value in (None, {}, "{}"), (
-        f"unexpected metadata default: {metadata_value!r}"
-    )
+    assert tags == [], f"unexpected tags default: {tags!r}"
+    assert metadata_value == {}, f"unexpected metadata default: {metadata_value!r}"
+    assert config_jsonb == {"model": "gpt-4"}
