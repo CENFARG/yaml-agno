@@ -52,8 +52,8 @@ class StepConfig(BaseModel):
     human_review: dict[str, Any] | None = Field(None, description="Per-step human-review gate config. See SPEC_29.")
 
     # --- Type-specific fields (yaml-agno abstraction; factory maps to Agno) ---
-    # Nested steps (Parallel/Steps/Condition).
-    steps: list[dict[str, Any]] = Field(default_factory=list, description="Nested steps (Parallel/Steps/Condition).")
+    # Nested steps (Parallel/Steps/Condition/Loop).
+    steps: list[dict[str, Any]] = Field(default_factory=list, description="Nested steps (Parallel/Steps/Condition/Loop).")
     # Condition-only.
     condition: str | None = Field(None, description="CEL or callable expression (maps to Agno Condition.evaluator).")
     if_true: str | None = Field(None, description="Step id when condition is true (Agno Condition steps branch).")
@@ -80,9 +80,15 @@ class StepConfig(BaseModel):
             4. Loop-only (end_condition, max_iterations).
         """
         t = self.type
-        # (1) Nested steps apply to Parallel, Steps and Condition.
-        if self.steps and t not in (StepType.PARALLEL, StepType.STEPS, StepType.CONDITION):
-            raise ValueError("Nested steps only allowed for Parallel/Steps/Condition types.")
+        # (1) Nested steps apply to Parallel, Steps, Condition and Loop
+        #     (SPEC_05 slice A: Loop body relaxation).
+        if self.steps and t not in (
+            StepType.PARALLEL,
+            StepType.STEPS,
+            StepType.CONDITION,
+            StepType.LOOP,
+        ):
+            raise ValueError("Nested steps only allowed for Parallel/Steps/Condition/Loop types.")
         # (2) Condition-only fields.
         if any(v is not None for v in (self.condition, self.if_true, self.if_false)) and t != StepType.CONDITION:
             raise ValueError("condition/if_true/if_false only allowed for Condition type.")
