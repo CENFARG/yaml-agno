@@ -167,10 +167,12 @@ class TestStepTypeSpecificFields:
     """RED scenarios — type-specific fields on incompatible types rejected."""
 
     def test_nested_steps_on_invalid_type_rejected(self) -> None:
-        """steps field only allowed on Parallel/Steps/Condition."""
+        """steps field only allowed on Parallel/Steps/Condition/Loop."""
         with pytest.raises(ValidationError) as exc:
-            StepConfig(step="s1", type="Loop", steps=[{"step": "inner"}])
+            StepConfig(step="s1", type="Step", steps=[{"step": "inner"}])
         assert "Nested steps only allowed" in str(exc.value)
+        # SPEC_05 slice A: the error message now lists Loop as allowed.
+        assert "Loop" in str(exc.value)
 
     def test_nested_steps_on_parallel_ok(self) -> None:
         """GREEN: steps on Parallel is allowed."""
@@ -208,6 +210,19 @@ class TestStepTypeSpecificFields:
         )
         assert s.type.value == "Loop"
         assert s.max_iterations == 10
+
+    def test_loop_with_body_ok(self) -> None:
+        """SPEC_05 slice A: Loop now accepts nested steps."""
+        s = StepConfig(
+            step="l",
+            type="Loop",
+            steps=[{"step": "inner", "type": "Step", "agent": "a1"}],
+            max_iterations=5,
+            end_condition="done == true",
+        )
+        assert s.type.value == "Loop"
+        assert len(s.steps) == 1
+        assert s.max_iterations == 5
 
 
 class TestStepFinallyAlias:
