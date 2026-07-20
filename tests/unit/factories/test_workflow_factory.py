@@ -340,10 +340,6 @@ class TestLoopDispatch:
         ``Loop.max_iterations == 10``, ``end_condition`` is the CEL string.
         Uses a real CEL expression (has operator) so it passes through raw per
         the hybrid resolver.
-
-        Note: the shipped ``StepConfig`` schema forbids ``steps`` on Loop type
-        (only Parallel/Steps/Condition allow nested steps). The Loop body is
-        therefore empty at config time; the factory builds ``Loop(steps=[])``.
         """
         cel_end = "all_success == true"
         cfg = _workflow_cfg([
@@ -382,6 +378,36 @@ class TestLoopDispatch:
         loop = result.steps[0]
         assert isinstance(loop, Loop)
         assert loop.max_iterations == 3
+
+    def test_dispatch_loop_builds_nested_body(self) -> None:
+        """SPEC_05 slice A: Loop body steps are built recursively."""
+        agent = _agent("a1")
+        cfg = _workflow_cfg([
+            StepConfig(
+                step="l",
+                type="Loop",
+                max_iterations=4,
+                end_condition="k == true",
+                steps=[{"step": "inner", "type": "Step", "agent": "a1"}],
+            ),
+        ])
+        result = WorkflowFactory.build(cfg, agents={"a1": agent}, teams={})
+        loop = result.steps[0]
+        assert isinstance(loop, Loop)
+        assert loop.max_iterations == 4
+        assert loop.end_condition == "k == true"
+        assert len(loop.steps) == 1
+        assert isinstance(loop.steps[0], Step)
+        assert loop.steps[0].name == "inner"
+        assert loop.steps[0].agent is agent
+
+    def test_dispatch_loop_empty_body_backward_compat(self) -> None:
+        """SPEC_05 slice A: Loop with no steps still builds Loop(steps=[])."""
+        cfg = _workflow_cfg([StepConfig(step="l", type="Loop")])
+        result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
+        loop = result.steps[0]
+        assert isinstance(loop, Loop)
+        assert loop.steps == []
 
 
 # --------------------------------------------------------------------------- #
