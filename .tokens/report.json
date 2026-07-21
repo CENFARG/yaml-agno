@@ -1,0 +1,29 @@
+﻿{
+  "report_type": "tokscale_models_workspace_grouped",
+  "generated": "2026-07-20",
+  "total_all_time": {
+    "cost": 2000.22,
+    "messages": 57487,
+    "input_tokens": 1293185177,
+    "output_tokens": 29559845,
+    "cache_read": 6467896934
+  },
+  "july_2026_current_month": {
+    "cost": 401.03,
+    "messages": 11854,
+    "input_tokens": 193913584,
+    "output_tokens": 5829940,
+    "cache_read": 1471494048,
+    "models_used": [
+      "glm-5.2", "mimo-v2.5", "minimax-m3", "gemini-3-flash-preview",
+      "gemini-3.5-flash", "deepseek-v4-pro", "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4-pro", "deepseek-v4-flash", "qwen3.7-max",
+      "gemini-default", "glm-4.7", "nemotron-3-ultra-free",
+      "deepseek-v4-flash-free", "mimo-v2.5-free",
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "deepseek-ai/deepseek-v4-pro"
+    ]
+  },
+  "source": "npx tokscale models --group-by workspace,model --json (global) + npx tokscale monthly --since 2026-07-01 (july)",
+  "methodology_notes": "Los reportes por proyecto individual (yaml-agno, cenf-arca-sdk) están vacíos porque tokscale usa el caché de sesiones de OpenCode que es global. Los proyectos son subdirectorios de DOC.RECA y todo el gasto se registra bajo la workspace 'DOC.RECA'. Para estimar costo por proyecto se necesita proporción basada en commits o mensajes, no hay dato exacto de tokscale."
+}

@@ -1,468 +1,233 @@
 ---
 Spec_ID: "SPEC_08"
-Title: "TDD Microtasks - Implementation Checklist"
-Version: "0.1.0-MVP"
+Title: "TDD Microtasks - Master Catalog"
+Version: "0.2.0-iter8"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#TDD", "#Microtasks", "#Checklist", "#Implementation"]
-Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03"]
-Last_Updated: "2026-06-13"
+Context_Tags: ["#TDD", "#Microtasks", "#MasterCatalog", "#Traceability"]
+Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04", "SPEC_05", "SPEC_06", "SPEC_07", "SPEC_09", "SPEC_15"]
+Group: "G10-Meta"
+Read_Order: 32
+Last_Updated: "2026-07-02"
+Revision_Note: "Iter 8 - Wave 6 hygiene: Q2 wording aligned to the SPEC_04 reformulation (port/adapter -> memory config builders). No task changes."
 ---
 
 # SPEC_08_TDD_MICROTASKS
 
-> **Propósito**: Plan de micro-tareas secuenciales listas para ejecución por agentes TDD con protocolo RED/GREEN/REFACTOR.
+> **Purpose**: Master catalog that consolidates, for traceability, the TDD microtasks already defined inside their owner SPECs. This spec does NOT redefine tasks; it aggregates them grouped by owner SPEC so the full RED/GREEN/REFACTOR execution path is visible in one place.
+>
+> **@ai-directive (catalog, not source of truth)**: The authoritative definition of each microtask lives in its **owner SPEC** (column `Owner SPEC` below). Every entry here is a pointer. If a task is missing details, read the owner SPEC section, never invent a new task here. Concrete RED steps, GREEN implementation notes, file paths and commit messages are copied verbatim from the owner SPECs and must stay in sync with them.
 
 ---
 
 ## 1. TDD MICRO-TASK EXECUTION PROTOCOL
 
-### 1.1 Protocolo Completo
+### 1.1 Full Protocol
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    TDD EXECUTION PROTOCOL                    │
-├─────────────────────────────────────────────────────────────┤
-│  1. RED    → Escribir test que falla con implementación vacía│
-│  2. GREEN  → Implementación mínima para pasar el test        │
-│  3. REFACTOR→ Limpieza de código sin cambiar comportamiento │
-│  4. COMMIT → Mensaje descriptivo del cambio                  │
-└─────────────────────────────────────────────────────────────┘
++-------------------------------------------------------------+
+|                    TDD EXECUTION PROTOCOL                    |
++-------------------------------------------------------------+
+|  1. RED     -> Write a failing test against an empty impl    |
+|  2. GREEN   -> Minimum implementation to make the test pass  |
+|  3. REFACTOR-> Clean code without changing behavior          |
+|  4. COMMIT  -> Descriptive conventional commit message       |
++-------------------------------------------------------------+
 ```
 
-### 1.2 Reglas de Oro
+### 1.2 Golden Rules
 
-- **Nunca escribir código sin test primero**
-- **Solo escribir el mínimo código para pasar el test**
-- **Refactorizar solo después de GREEN**
-- **Commits atómicos por task**
-- **Mantener tests < 100 lines**
+- **Never write code without a test first.**
+- **Write only the minimum code required to pass the test.**
+- **Refactor only after GREEN.**
+- **One atomic commit per task.**
+- **Keep tests under 100 lines.**
 
----
+### 1.3 @ai-directive - Classes that MUST NOT be created
 
-## 2. CASCADING TASK CHECKLIST
+The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT appear as tasks to create anywhere in this catalog. They are listed here only as a negative list so reviewers can catch regressions:
 
-### 2.1 Fase 1: Core Models (Tasks 001-020)
-
-#### TASK_001: Initialize Project Structure
-- **File**: `yaml-agno/pyproject.toml`
-- **Test**: `tests/unit/test_project_init.py`
-- **RED**: `import yaml_agno` fails
-- **GREEN**: Create `pyproject.toml` with Python 3.12+
-- **Commit**: `chore: initialize project with pyproject.toml`
-
-#### TASK_002: Create AgentConfig Model
-- **File**: `yaml-agno/src/models/config/agent_config.py`
-- **Test**: `tests/unit/models/test_agent_config.py`
-- **RED**: `AgentConfig(name="test", model="openai/gpt-4o")` fails
-- **GREEN**: Implement Pydantic model
-- **Commit**: `feat: add AgentConfig Pydantic model`
-
-#### TASK_003: Add Model Validation
-- **File**: `yaml-agno/src/models/config/agent_config.py`
-- **Test**: `tests/unit/models/test_agent_config.py`
-- **RED**: Invalid model format doesn't raise error
-- **GREEN**: Add `@field_validator("model")`
-- **Commit**: `feat: add model format validation`
-
-#### TASK_004: Create TeamConfig Model
-- **File**: `yaml-agno/src/models/config/team_config.py`
-- **Test**: `tests/unit/models/test_team_config.py`
-- **RED**: `TeamConfig(name="test", mode="coordinate")` fails
-- **GREEN**: Implement Pydantic model
-- **Commit**: `feat: add TeamConfig Pydantic model`
-
-#### TASK_005: Create WorkflowConfig Model
-- **File**: `yaml-agno/src/models/config/workflow_config.py`
-- **Test**: `tests/unit/models/test_workflow_config.py`
-- **RED**: `WorkflowConfig(name="test", steps=[...])` fails
-- **GREEN**: Implement Pydantic model
-- **Commit**: `feat: add WorkflowConfig Pydantic model`
-
-#### TASK_006: Create SessionContext Model
-- **File**: `yaml-agno/src/models/runtime/session_context.py`
-- **Test**: `tests/unit/models/test_session_context.py`
-- **RED**: `SessionContext(session_id="s1", user_id="u1", tenant_id="t1")` fails
-- **GREEN**: Implement Pydantic model
-- **Commit**: `feat: add SessionContext Pydantic model`
-
-#### TASK_007: Create AgentInstance Model
-- **File**: `yaml-agno/src/models/runtime/agent_instance.py`
-- **Test**: `tests/unit/models/test_agent_instance.py`
-- **RED**: `AgentInstance(config_name="test")` fails
-- **GREEN**: Implement Pydantic model with lifecycle
-- **Commit**: `feat: add AgentInstance Pydantic model`
-
-#### TASK_008: Create ModelId Value Object
-- **File**: `yaml-agno/src/models/value_objects/model_id.py`
-- **Test**: `tests/unit/value_objects/test_model_id.py`
-- **RED**: `ModelId(value="openai/gpt-4o")` fails
-- **GREEN**: Implement frozen Pydantic model
-- **Commit**: `feat: add ModelId value object`
-
-#### TASK_009: Create SessionKey Value Object
-- **File**: `yaml-agno/src/models/value_objects/session_key.py`
-- **Test**: `tests/unit/value_objects/test_session_key.py`
-- **RED**: `SessionKey(user_id="u1", session_name="s1")` fails
-- **GREEN**: Implement frozen Pydantic model
-- **Commit**: `feat: add SessionKey value object`
-
-#### TASK_010: Create DIReference Value Object
-- **File**: `yaml-agno/src/models/value_objects/di_reference.py`
-- **Test**: `tests/unit/value_objects/test_di_reference.py`
-- **RED**: `DIReference(template="${user_db.name}")` fails
-- **GREEN**: Implement frozen Pydantic model
-- **Commit**: `feat: add DIReference value object`
-
-### 2.2 Fase 2: Factories (Tasks 011-025)
-
-#### TASK_011: Create AgentFactory
-- **File**: `yaml-agno/src/factories/agent_factory.py`
-- **Test**: `tests/unit/factories/test_agent_factory.py`
-- **RED**: `AgentFactory.create(config)` fails
-- **GREEN**: Implement `create()` method
-- **Commit**: `feat: add AgentFactory.create()`
-
-#### TASK_012: Add Model Resolution
-- **File**: `yaml-agno/src/factories/agent_factory.py`
-- **Test**: `tests/unit/factories/test_agent_factory.py`
-- **RED**: `_resolve_model("openai/gpt-4o")` fails
-- **GREEN**: Implement `_resolve_model()`
-- **Commit**: `feat: add model resolution logic`
-
-#### TASK_013: Create TeamFactory
-- **File**: `yaml-agno/src/factories/team_factory.py`
-- **Test**: `tests/unit/factories/test_team_factory.py`
-- **RED**: `TeamFactory.create(config, agents)` fails
-- **GREEN**: Implement `create()` method
-- **Commit**: `feat: add TeamFactory.create()`
-
-#### TASK_014: Create WorkflowFactory
-- **File**: `yaml-agno/src/factories/workflow_factory.py`
-- **Test**: `tests/unit/factories/test_workflow_factory.py`
-- **RED**: `WorkflowFactory.create(config, agents, teams)` fails
-- **GREEN**: Implement `create()` method
-- **Commit**: `feat: add WorkflowFactory.create()`
-
-#### TASK_015: Add Step Builder
-- **File**: `yaml-agno/src/factories/workflow_factory.py`
-- **Test**: `tests/unit/factories/test_workflow_factory.py`
-- **RED**: `_build_step(step_config, agents, teams)` fails
-- **GREEN**: Implement `_build_step()`
-- **Commit**: `feat: add step builder logic`
-
-### 2.3 Fase 3: Persistence (Tasks 026-040)
-
-#### TASK_016: Create Tenant Model
-- **File**: `yaml-agno/src/db/models/tenant.py`
-- **Test**: `tests/unit/db/test_tenant_model.py`
-- **RED**: `Tenant(name="Test", slug="test")` fails
-- **GREEN**: Implement SQLAlchemy model
-- **Commit**: `feat: add Tenant SQLAlchemy model`
-
-#### TASK_017: Create AgentConfig Model (DB)
-- **File**: `yaml-agno/src/db/models/agent_config.py`
-- **Test**: `tests/unit/db/test_agent_config_model.py`
-- **RED**: `AgentConfigDB(...)` fails
-- **GREEN**: Implement SQLAlchemy model
-- **Commit**: `feat: add AgentConfigDB SQLAlchemy model`
-
-#### TASK_018: Create SessionContext Model (DB)
-- **File**: `yaml-agno/src/db/models/session_context.py`
-- **Test**: `tests/unit/db/test_session_context_model.py`
-- **RED**: `SessionContextDB(...)` fails
-- **GREEN**: Implement SQLAlchemy model
-- **Commit**: `feat: add SessionContextDB SQLAlchemy model`
-
-#### TASK_019: Create Migration - Tenants
-- **File**: `yaml-agno/migrations/versions/001_create_tenants.py`
-- **Test**: `tests/integration/test_migrations.py`
-- **RED**: `tenants` table doesn't exist
-- **GREEN**: Create migration with DDL
-- **Commit**: `feat: add tenants table migration`
-
-#### TASK_020: Create Migration - AgentConfigs
-- **File**: `yaml-agno/migrations/versions/002_create_agent_configs.py`
-- **Test**: `tests/integration/test_migrations.py`
-- **RED**: `agent_configs` table doesn't exist
-- **GREEN**: Create migration with DDL
-- **Commit**: `feat: add agent_configs table migration`
-
-#### TASK_021: Create TransactionManager
-- **File**: `yaml-agno/src/db/transaction.py`
-- **Test**: `tests/unit/db/test_transaction_manager.py`
-- **RED**: `async with tm.transaction():` fails
-- **GREEN**: Implement context manager
-- **Commit**: `feat: add TransactionManager context manager`
-
-#### TASK_022: Add Rollback on Error
-- **File**: `yaml-agno/src/db/transaction.py`
-- **Test**: `tests/unit/db/test_transaction_manager.py`
-- **RED**: Exception doesn't trigger rollback
-- **GREEN**: Add `try/except/rollback`
-- **Commit**: `feat: add automatic rollback`
-
-#### TASK_023: Create AgentConfigRepository
-- **File**: `yaml-agno/src/repositories/agent_config_repository.py`
-- **Test**: `tests/integration/repositories/test_agent_config_repository.py`
-- **RED**: `repo.create(...)` fails
-- **GREEN**: Implement `create()` method
-- **Commit**: `feat: add AgentConfigRepository.create()`
-
-#### TASK_024: Add Get By Name
-- **File**: `yaml-agno/src/repositories/agent_config_repository.py`
-- **Test**: `tests/integration/repositories/test_agent_config_repository.py`
-- **RED**: `repo.get_by_name(...)` fails
-- **GREEN**: Implement `get_by_name()` method
-- **Commit**: `feat: add AgentConfigRepository.get_by_name()`
-
-#### TASK_025: Add List Active
-- **File**: `yaml-agno/src/repositories/agent_config_repository.py`
-- **Test**: `tests/integration/repositories/test_agent_config_repository.py`
-- **RED**: `repo.list_active(...)` fails
-- **GREEN**: Implement `list_active()` method
-- **Commit**: `feat: add AgentConfigRepository.list_active()`
-
-### 2.4 Fase 4: Memory (Tasks 041-055)
-
-#### TASK_026: Create PIISanitizer
-- **File**: `yaml-agno/src/memory/pii_sanitizer.py`
-- **Test**: `tests/unit/memory/test_pii_sanitizer.py`
-- **RED**: `PIISanitizer().sanitize(...)` fails
-- **GREEN**: Implement sanitization logic
-- **Commit**: `feat: add PII sanitizer`
-
-#### TASK_027: Create SecretSanitizer
-- **File**: `yaml-agno/src/memory/secret_sanitizer.py`
-- **Test**: `tests/unit/memory/test_secret_sanitizer.py`
-- **RED**: `SecretSanitizer().sanitize(...)` fails
-- **GREEN**: Implement secret masking
-- **Commit**: `feat: add secret sanitizer`
-
-#### TASK_028: Create ContextCompressor
-- **File**: `yaml-agno/src/memory/compression.py`
-- **Test**: `tests/unit/memory/test_compression.py`
-- **RED**: `ContextCompressor().should_compress(...)` fails
-- **GREEN**: Implement threshold check
-- **Commit**: `feat: add context compressor`
-
-#### TASK_029: Add Important Message Identification
-- **File**: `yaml-agno/src/memory/compression.py`
-- **Test**: `tests/unit/memory/test_compression.py`
-- **RED**: `_identify_important(...)` fails
-- **GREEN**: Implement identification logic
-- **Commit**: `feat: add important message identification`
-
-#### TASK_030: Create EngramMemoryManager
-- **File**: `yaml-agno/src/memory/engram_manager.py`
-- **Test**: `tests/integration/memory/test_engram_manager.py`
-- **RED**: `manager.save_decision(...)` fails
-- **GREEN**: Implement save methods
-- **Commit**: `feat: add Engram memory manager`
-
-#### TASK_031: Add Search Relevant
-- **File**: `yaml-agno/src/memory/engram_manager.py`
-- **Test**: `tests/integration/memory/test_engram_manager.py`
-- **RED**: `manager.search_relevant(...)` fails
-- **GREEN**: Implement search via Engram
-- **Commit**: `feat: add Engram search`
-
-### 2.5 Fase 5: Workflows (Tasks 056-070)
-
-#### TASK_032: Create WorkflowExecution Model
-- **File**: `yaml-agno/src/workflows/models.py`
-- **Test**: `tests/unit/workflows/test_models.py`
-- **RED**: `WorkflowExecution(...)` fails
-- **GREEN**: Implement Pydantic model
-- **Commit**: `feat: add WorkflowExecution model`
-
-#### TASK_033: Create StepExecutor
-- **File**: `yaml-agno/src/workflows/step_executor.py`
-- **Test**: `tests/unit/workflows/test_step_executor.py`
-- **RED**: `executor.execute_step(...)` fails
-- **GREEN**: Implement step execution
-- **Commit**: `feat: add step executor`
-
-#### TASK_034: Add Parallel Execution
-- **File**: `yaml-agno/src/workflows/step_executor.py`
-- **Test**: `tests/unit/workflows/test_step_executor.py`
-- **RED**: `executor.execute_parallel_step(...)` fails
-- **GREEN**: Implement with asyncio.gather
-- **Commit**: `feat: add parallel step execution`
-
-#### TASK_035: Create ConditionEvaluator
-- **File**: `yaml-agno/src/workflows/condition_evaluator.py`
-- **Test**: `tests/unit/workflows/test_condition_evaluator.py`
-- **RED**: `evaluator.evaluate(...)` fails
-- **GREEN**: Implement CEL evaluation
-- **Commit**: `feat: add CEL condition evaluator`
-
-#### TASK_036: Create RetryPolicy
-- **File**: `yaml-agno/src/workflows/retry_policy.py`
-- **Test**: `tests/unit/workflows/test_retry_policy.py`
-- **RED**: `policy.execute_with_retry(...)` fails
-- **GREEN**: Implement retry logic
-- **Commit**: `feat: add retry policy with exponential backoff`
-
-#### TASK_037: Add Error Categorization
-- **File**: `yaml-agno/src/workflows/retry_policy.py`
-- **Test**: `tests/unit/workflows/test_retry_policy.py`
-- **RED**: `policy.categorize_error(...)` fails
-- **GREEN**: Implement categorization
-- **Commit**: `feat: add error categorization`
-
-#### TASK_038: Create TeamMessage Protocol
-- **File**: `yaml-agno/src/workflows/message_protocol.py`
-- **Test**: `tests/unit/workflows/test_message_protocol.py`
-- **RED**: `TeamMessage(...)` fails
-- **GREEN**: Implement Pydantic model
-- **Commit**: `feat: add team message protocol`
-
-#### TASK_039: Create WorkflowStateMachine
-- **File**: `yaml-agno/src/workflows/state_machine.py`
-- **Test**: `tests/unit/workflows/test_state_machine.py`
-- **RED**: `sm.transition_to(...)` fails
-- **GREEN**: Implement state transitions
-- **Commit**: `feat: add workflow state machine`
-
-### 2.6 Fase 6: API (Tasks 071-085)
-
-#### TASK_040: Create AgentRunRequest Model
-- **File**: `yaml-agno/src/api/models/agents.py`
-- **Test**: `tests/unit/api/test_agent_models.py`
-- **RED**: `AgentRunRequest(...)` fails
-- **GREEN**: Implement Pydantic model
-- **Commit**: `feat: add AgentRunRequest model`
-
-#### TASK_041: Create AgentRunResponse Model
-- **File**: `yaml-agno/src/api/models/agents.py`
-- **Test**: `tests/unit/api/test_agent_models.py`
-- **RED**: `AgentRunResponse(...)` fails
-- **GREEN**: Implement Pydantic model
-- **Commit**: `feat: add AgentRunResponse model`
-
-#### TASK_042: Create Run Agent Endpoint
-- **File**: `yaml-agno/src/api/endpoints/agents.py`
-- **Test**: `tests/integration/api/test_agent_endpoints.py`
-- **RED**: `POST /api/v1/agents/{name}/run` fails
-- **GREEN**: Implement endpoint
-- **Commit**: `feat: add run agent endpoint`
-
-#### TASK_043: Create Health Check Endpoint
-- **File**: `yaml-agno/src/api/endpoints/health.py`
-- **Test**: `tests/integration/api/test_health_endpoints.py`
-- **RED**: `GET /health` fails
-- **GREEN**: Implement endpoint
-- **Commit**: `feat: add health check endpoint`
-
-#### TASK_044: Create Readiness Probe
-- **File**: `yaml-agno/src/api/endpoints/health.py`
-- **Test**: `tests/integration/api/test_health_endpoints.py`
-- **RED**: `GET /health/readiness` fails
-- **GREEN**: Implement endpoint
-- **Commit**: `feat: add readiness probe`
-
-#### TASK_045: Define AX Schemas
-- **File**: `yaml-agno/src/api/ax/schemas.py`
-- **Test**: `tests/unit/api/test_ax_schemas.py`
-- **RED**: `get_ax_schema("create_agent")` fails
-- **GREEN**: Implement schema definitions
-- **Commit**: `feat: add AX schema definitions`
-
-### 2.7 Fase 7: Integration Tests (Tasks 086-100)
-
-#### TASK_046: Create Agent End-to-End Test
-- **File**: `tests/integration/e2e/test_agent_lifecycle.py`
-- **Test**: Full agent creation → execution → deletion
-- **RED**: Test fails (no implementation)
-- **GREEN**: Implement all components
-- **Commit**: `test: add agent e2e test`
-
-#### TASK_047: Create Team End-to-End Test
-- **File**: `tests/integration/e2e/test_team_lifecycle.py`
-- **Test**: Full team creation → execution → deletion
-- **RED**: Test fails (no implementation)
-- **GREEN**: Implement all components
-- **Commit**: `test: add team e2e test`
-
-#### TASK_048: Create Workflow End-to-End Test
-- **File**: `tests/integration/e2e/test_workflow_lifecycle.py`
-- **Test**: Full workflow creation → execution → completion
-- **RED**: Test fails (no implementation)
-- **GREEN**: Implement all components
-- **Commit**: `test: add workflow e2e test`
-
-#### TASK_049: Create Memory Compression Test
-- **File**: `tests/integration/memory/test_compression_e2e.py`
-- **Test**: Full compression cycle
-- **RED**: Test fails (no implementation)
-- **GREEN**: Implement compression
-- **Commit**: `test: add compression e2e test`
-
-#### TASK_050: Create Error Recovery Test
-- **File**: `tests/integration/workflows/test_error_recovery.py`
-- **Test**: Full retry cycle with transient error
-- **RED**: Test fails (no implementation)
-- **GREEN**: Implement retry logic
-- **Commit**: `test: add error recovery e2e test`
+- `SessionContext`, `SessionState`, `AgentInstance` - yaml-agno does NOT own a session/agent runtime; Agno manages these natively.
+- `ModelId`, `SessionKey` - value objects removed in SPEC_02. `model` is a plain validated `str`; `user_id`+`session_id` are Agno first-class keys.
+- `WorkflowExecution`, `WorkflowState`, `WorkflowStateMachine` - workflow runtime is Agno native; yaml-agno only declares `WorkflowConfig`/`StepConfig` (SPEC_02) and builds via `WorkflowFactory` (SPEC_01).
+- Domain events (e.g. `AgentConfigCreated`, `AgentStateChanged`) - removed; no proprietary domain event surface.
+- `EngramMemoryManager`, `LongTermMemoryPort`, `AgnoLearningMemoryAdapter` - yaml-agno does NOT define a memory Port or any adapter. Long-term memory is 100% Agno native (`LearningMachine` / `MemoryManager`); yaml-agno only CONFIGURES it from YAML and drives the real Agno APIs (SPEC_04 iter2).
 
 ---
 
-## 3. SUPUESTOS TÉCNICOS ADOPTADOS
+## 2. CASCADING TASK CHECKLIST (MASTER CATALOG)
 
-### [Decisión 1] 100 Tasks Máximo
+> Grouping order follows the dependency graph: `SPEC_02` schemas -> `SPEC_01` factories -> `SPEC_03` persistence -> `SPEC_04` memory -> `SPEC_05` workflows -> `SPEC_06` API. `SPEC_00` contributes the DI/templates Core mechanism (no inline TDD tasks; referenced as cross-cutting dependency). `SPEC_07` (dashboard) consumes the API and contributes no backend microtasks in this catalog.
 
-**Justificación**:
-- Mantener scope manejable
-- Permite tracking fino
-- Cada task < 50 LOC
+### 2.1 Owner SPEC_02 - Domain Schemas (Pydantic V2)
 
-### [Decisión 2] Commits Atómicos
+> @ai-directive: these are the ONLY data model yaml-agno owns. `AgentConfig`, `TeamConfig`, `WorkflowConfig`, `StepConfig`, `DIReference`. Enums (`TeamMode`, `StepType`) are IMPORTED from Agno, never redefined.
 
-**Justificación**:
-- Rollback fácil
-- Historial limpio
-- Code review por task
+| Catalog ID | Owner SPEC task | Component | File | Test |
+|------------|-----------------|-----------|------|------|
+| S02-T01 | SPEC_02 TASK_001 | `AgentConfig` schema | `src/models/config/agent_config.py` | `tests/unit/models/test_agent_config.py` |
+| S02-T02 | SPEC_02 TASK_002 | `AgentConfig` model format + name validation | `src/models/config/agent_config.py` | `tests/unit/models/test_agent_config.py` |
+| S02-T03 | SPEC_02 TASK_003 | `TeamConfig` (Agno `TeamMode` import) | `src/models/config/team_config.py` | `tests/unit/models/test_team_config.py` |
+| S02-T04 | SPEC_02 TASK_004 | `TeamConfig` member uniqueness + mode requirements | `src/models/config/team_config.py` | `tests/unit/models/test_team_config.py` |
+| S02-T05 | SPEC_02 TASK_005 | `WorkflowConfig` + `StepConfig` (Agno `StepType` import) | `src/models/config/workflow_config.py` | `tests/unit/models/test_workflow_config.py` |
+| S02-T06 | SPEC_02 TASK_006 | `WorkflowConfig` branch reference validation | `src/models/config/workflow_config.py` | `tests/unit/models/test_workflow_config.py` |
+| S02-T07 | SPEC_02 TASK_007 | `DIReference` value object (`${provider.key}`) | `src/models/value_objects/di_reference.py` | `tests/unit/value_objects/test_di_reference.py` |
 
-### [Decisión 3] Tests por Definición
+### 2.2 Owner SPEC_01 - Runtime Factories + DependencyManager
 
-**Justificación**:
-- Documentación viva
-- Previene regresiones
-- Especificación ejecutable
+> @ai-directive: factories translate validated YAML (SPEC_02 schemas) into native Agno objects. All factories are `async` and receive a `DependencyManager`. `DependencyManager` resolves providers/DBs/primitives lazily, validated, cached, with allowlist + entry_points. `SessionConfig`/`SessionManager` configure the Agno `db=`, they do NOT model a session runtime.
+
+| Catalog ID | Owner SPEC task | Component | File | Test |
+|------------|-----------------|-----------|------|------|
+| S01-T01 | SPEC_01 TASK_001 | `AgentConfig` Pydantic model (factory input) | `src/models/config/agent_config.py` | `tests/unit/models/test_agent_config.py` |
+| S01-T02 | SPEC_01 TASK_002 | `AgentFactory.create()` (async) | `src/factories/agent_factory.py` | `tests/unit/factories/test_agent_factory.py` |
+| S01-T03 | SPEC_01 TASK_003 | Model resolution via `DependencyManager.resolve_model()` | `src/factories/agent_factory.py` | `tests/unit/factories/test_agent_factory.py` |
+| S01-T04 | SPEC_01 TASK_004 | `TeamConfig` Pydantic model (factory input) | `src/models/config/team_config.py` | `tests/unit/models/test_team_config.py` |
+| S01-T05 | SPEC_01 TASK_005 | `TeamFactory.create()` (async) | `src/factories/team_factory.py` | `tests/unit/factories/test_team_factory.py` |
+| S01-T06 | SPEC_01 TASK_006 | Team mode mapping (4 modes: coordinate/route/broadcast/tasks) | `src/factories/team_factory.py` | `tests/unit/factories/test_team_factory.py` |
+| S01-T07 | SPEC_01 TASK_007 | `SessionConfig` Pydantic model (`storage_type` = registry key, not enum) | `src/models/session.py` | `tests/unit/test_session_models.py` |
+| S01-T08 | SPEC_01 TASK_008 | `SessionManager.validate()` (delegates to `DependencyManager` registry) | `src/core/session_manager.py` | `tests/unit/test_session_manager.py` |
+
+> @ai-directive (cross-cutting): `WorkflowFactory` lives in SPEC_01 section 4 but its microtasks are catalogued under SPEC_05 below because they are co-located with the workflow execution tasks. The factory + step builder build native `agno.Workflow` via lazy primitive resolution in `DependencyManager` - there is NO proprietary workflow runtime.
+
+### 2.3 Owner SPEC_03 - Persistence (Config Store on core-cenf)
+
+> @ai-directive (consume core, do not reimplement): persistence stores CONFIG rows, NOT runtime models. yaml-agno CONSUMES the core-cenf `DatabaseManager` / `TransactionScope` / `GenericRepository[T]` (core_infrastructure) and only declares `DeclarativeBase` ORM entities plus an auto-provisioner. There is NO local `TransactionManager` (the `TransactionScope` comes from core-cenf) and NO Alembic migration runner (the schema is provisioned idempotently via `Base.metadata.create_all(checkfirst=True)` + `yamlagno_schema_versions`). The persistence record is `AgentConfigRecord` (NOT `AgentConfigRow`); its `config_jsonb` validates against the Pydantic `AgentConfig` imported from SPEC_02. Every config-store table uses the prefix `yamlagno_*` in the dedicated SQL schema `yamlagno` to avoid collision with Agno's `agno_*` tables. Usage pattern: `async with db.transaction() as tx:` + `db.get_repository(AgentConfigRecord)` (on `DatabaseManager`, inside the scope) + `tx.commit()`; multi-tenant isolation is explicit via `tenant_id` filters (no native RLS).
+
+| Catalog ID | Owner SPEC task | Component | File | Test |
+|------------|-----------------|-----------|------|------|
+| S03-T01 | SPEC_03 TASK_001 | `Base(DeclarativeBase)` + `TenantRecord` model (`yamlagno_tenants`, schema `yamlagno`) | `src/db/models/tenant.py` | `tests/unit/db/test_tenant_model.py` |
+| S03-T02 | SPEC_03 TASK_002 | `AgentConfigRecord` model (`yamlagno_agent_configs`, schema `yamlagno`; `config_jsonb` validates against Pydantic `AgentConfig`) | `src/db/models/agent_config.py` | `tests/unit/db/test_agent_config_model.py` |
+| S03-T03 | SPEC_03 TASK_003 | Remaining ORM records: `TeamConfigRecord` / `WorkflowConfigRecord` / `DiVariableCacheRecord` / `ConfigChangeLogRecord` / `SchemaVersionRecord` (`yamlagno_*`, schema `yamlagno`) | `src/db/models/*.py` | `tests/unit/db/test_models.py` |
+| S03-T04 | SPEC_03 TASK_004 | `ConfigStoreProvisioner` (`Base.metadata.create_all(checkfirst=True)` + `yamlagno_schema_versions` + `configstore.auto_provision` flag off = no-op) | `src/db/provisioner.py` | `tests/integration/test_provisioner.py` |
+| S03-T05 | SPEC_03 TASK_005 | `AgentConfigRepository` wrapper over core-cenf `GenericRepository` (`async with db.transaction()` + `db.get_repository(AgentConfigRecord)` + `tx.commit()`) | `src/repositories/agent_config_repository.py` | `tests/integration/repositories/test_agent_config_repository.py` |
+| S03-T06 | SPEC_03 TASK_006 | `TenantResolver` interface (maps Agno `(user_id, session_id)` to yaml-agno tenant; sets Core Infra contextvar; app-layer WHERE isolation) | `src/tenant/resolver.py` | `tests/unit/tenant/test_resolver.py` |
+| S03-T07 | SPEC_03 TASK_007 | `build_database_manager()` bootstrap on core-cenf `DatabaseManager` (`BootstrapOrchestrator`, `asyncio.TaskGroup`, DSN via `config.get_string`) | `src/db/bootstrap.py` | `tests/integration/test_bootstrap.py` |
+
+### 2.4 Owner SPEC_04 - Agno Native Memory Configuration
+
+> @ai-directive: yaml-agno does NOT own a session runtime, a memory FIFO, a `LongTermMemoryPort`, or any adapter. Long-term memory is 100% Agno native; yaml-agno only CONFIGURES it from YAML (Agent constructor flags + `learning:` block) and drives the REAL Agno v2.6.18 APIs. The rich path (`learning.enabled=true`) uses `LearningMachine` (recall via `arecall`, writes via `decision_log_store.asave(DecisionLog)` / `learned_knowledge_store.asave(...)`); the simple path uses `MemoryManager` (`aget_user_memories` for recall, the SYNCHRONOUS `add_user_memory(UserMemory, user_id)` for writes). Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
+
+| Catalog ID | Owner SPEC task | Component | File | Test |
+|------------|-----------------|-----------|------|------|
+| S04-T01 | SPEC_04 TASK_001 | `build_memory_config()` - YAML memory block -> Agno Agent constructor flags | `src/memory/agno_memory_config.py` | `tests/unit/memory/test_agno_memory_config.py` |
+| S04-T02 | SPEC_04 TASK_002 | `build_learning_config()` - YAML `learning:` block -> Agno LearningMachine config (no Port, no adapter) | `src/memory/agno_memory_config.py` | `tests/unit/memory/test_learning_config.py` |
+| S04-T03 | SPEC_04 TASK_003 | `recall_on_start()` routing to `LearningMachine.arecall` (enabled) or `MemoryManager.aget_user_memories` (disabled) | `src/memory/agno_memory_config.py` | `tests/integration/memory/test_recall_on_start.py` |
+| S04-T04 | SPEC_04 TASK_004 | `AutosaveManager` routing writes to LearningMachine stores (enabled) or sync `add_user_memory(UserMemory)` (disabled) | `src/memory/autosave.py` | `tests/unit/memory/test_autosave.py` |
+| S04-T05 | SPEC_04 TASK_005 | `resolve_user_id()` - returns the composite `{tenant_id}:{principal_id}` (shared single resolver for HTTP + autonomous; never None, never Agno "default" bucket) | `src/memory/user_identity.py` | `tests/unit/memory/test_user_identity.py` |
+| S04-T06 | SPEC_04 TASK_006 | `map_scope_to_namespace()` + `build_scope_config()` - yaml-agno scope taxonomy -> Agno namespace, with validation (scope="user" needs user_id; learned_knowledge namespace NOT inherited) | `src/memory/scope_mapping.py` | `tests/unit/memory/test_scope_mapping.py` |
+
+### 2.5 Owner SPEC_05 - Workflows and Teams
+
+> @ai-directive: workflow declaration uses `WorkflowConfig`/`StepConfig` from SPEC_02 (single source of truth). Execution delegates to Agno primitives resolved lazily via `DependencyManager`. NO `WorkflowExecution`/`WorkflowState`/`WorkflowStateMachine` - removed. Retry classification is delegated to Core Infra (SPEC_09), retry is applied at the workflow level.
+
+| Catalog ID | Owner SPEC task | Component | File | Test |
+|------------|-----------------|-----------|------|------|
+| S05-T01 | SPEC_05 TASK_001 | Workflow declaration via `WorkflowConfig`/`StepConfig` (SPEC_02) + `WorkflowFactory` build | `src/factories/workflow_factory.py` | `tests/unit/factories/test_workflow_factory.py` |
+| S05-T02 | SPEC_05 TASK_002 | Step executor (delegates to Agno primitive) | `src/workflows/step_executor.py` | `tests/unit/workflows/test_step_executor.py` |
+| S05-T03 | SPEC_05 TASK_003 | Parallel step executor (`asyncio.TaskGroup`, NOT `asyncio.gather`) | `src/workflows/step_executor.py` | `tests/unit/workflows/test_step_executor.py` |
+| S05-T04 | SPEC_05 TASK_004 | Condition evaluator (CEL) | `src/workflows/condition_evaluator.py` | `tests/unit/workflows/test_condition_evaluator.py` |
+| S05-T05 | SPEC_05 TASK_005 | Step-level retry policy (fills Agno's naive step-retry gap; backoff + jitter) | `src/workflows/retry_policy.py` | `tests/unit/workflows/test_retry_policy.py` |
+| S05-T06 | SPEC_05 TASK_006 | Retry decision via core-cenf `ErrorHandlingManager.classify()` (TRANSIENT/RATE_LIMIT retryable; no `should_retry`, no local enum) | `src/workflows/retry_policy.py` | `tests/unit/workflows/test_retry_policy.py` |
+| S05-T07 | SPEC_05 TASK_007 | A2A YAML config (enables Agno `a2a_interface`, expose/remote blocks; ACP explicitly rejected) | `src/workflows/a2a_config.py` | `tests/unit/workflows/test_a2a_config.py` |
+| S05-T08 | SPEC_05 TASK_008 | Verify Agno delegation (no proprietary workflow runtime) | `tests/integration/workflows/test_agno_delegation.py` | (same) |
+
+### 2.6 Owner SPEC_06 - API and AX (inheritance layer over AgentOS)
+
+> @ai-directive: yaml-agno does NOT own `/run`, `/sessions`, `/agents` config, or `/health` endpoints — those are AgentOS native. SPEC_06 defines `class YamlAgentOS(AgentOS)` (subclass) and overrides `get_app()` to register extensions AFTER `super().get_app()`. It adds: config loading (via core-cenf-py ConfigManager), readiness/liveness routers, RateLimitMiddleware, TenantContextMiddleware (composite `user_id` on AgentOS native `user_isolation`), and AX discovery via the NATIVE MCP server (`enable_mcp_server`). No `gaps/` folder (SOTA `src/api/` layout). `AgentRunRequest`/`AgentRunResponse` DTOs were removed (native multipart/{id} wire contract). `MediaInput` is an internal model (maps to `agno.media.*`), shared with SPEC_17.
+
+| Catalog ID | Owner SPEC task | Component | File | Test |
+|------------|-----------------|-----------|------|------|
+| S06-T01 | SPEC_06 TASK_001 | `YamlAgentOS(AgentOS)` subclass + `get_app()` override (super().get_app() then register extensions) | `src/api/app.py` | `tests/integration/api/test_yaml_agent_os.py` |
+| S06-T02 | SPEC_06 TASK_002 | Config loader consuming core-cenf-py `ConfigManager` (no `os.environ`) | `yaml_agno/config/loader.py` | `tests/unit/config/test_loader.py` |
+| S06-T03 | SPEC_06 TASK_003 | `get_readiness_router()` + `get_liveness_router()` (DB-gated readiness; factory style mirroring `get_health_router`) | `src/api/health.py` | `tests/integration/api/test_health_endpoints.py` |
+| S06-T04 | SPEC_06 TASK_004 | `RateLimitMiddleware` (keyed on composite user_id; AgentOS has none) | `src/api/middleware/rate_limit.py` | `tests/unit/api/test_rate_limit.py` |
+| S06-T05 | SPEC_06 TASK_005 | `TenantContextMiddleware` (extracts tenant+principal, DELEGATES to `resolve_user_id()` (SPEC_04) for composite `{tenant_id}:{principal_id}` -> `request.state.user_id`; `user_isolation=True` always-on; no RLS) | `src/api/middleware/tenant_context.py` | `tests/unit/api/test_tenant_context.py` |
+| S06-T06 | SPEC_06 TASK_006 | AX discovery via native MCP server (`enable_mcp_server=True`; exposes `run_agent`/`run_team`/`run_workflow`) | (config wiring in `YamlAgentOS`) | `tests/integration/api/test_mcp_discovery.py` |
+| S06-T07 | SPEC_06 TASK_007 | Document native AgentOS multipart/{id} wire contract + backend sanitization/validation rule | `docs/api/wire_contract.md` | `tests/contract/test_wire_contract.py` |
+| S06-T08 | SPEC_06 TASK_008 | Contract: no own `/run`/`/sessions`/`/agents` routes AND `user_isolation` always-on + user_id never None (NULL-bucket guard) | `tests/contract/test_no_duplicate_routes.py` | (same) |
+
+### 2.7 Owner SPEC_00 - Core DI / Templates (cross-cutting, no inline TDD tasks)
+
+> @ai-directive: SPEC_00 defines the Core mechanism that SPEC_01 factories depend on: `DependencyManager` (lazy, validated, cached loading with allowlist + `entry_points`) and `DIFactory` (`${provider.key}` resolution against `DIReference`). These are cross-cutting infrastructure; their TDD microtasks are NOT enumerated in SPEC_00 as a task checklist. When implementing, derive RED/GREEN tasks directly from the `DependencyManager` contract in SPEC_01 section 1.3 (the canonical spec for the manager). `TemplateManager` (50+ auto-prompted templates with heritable frontmatter) is part of SPEC_00 but is content/tooling, not backend code tasks in this catalog.
+
+### 2.8 Integration / End-to-End (derived from the catalog)
+
+> @ai-directive: these E2E tasks exercise the assembled stack (SPEC_02 schemas -> SPEC_01 factories -> Agno native runtime -> SPEC_03 persistence -> SPEC_06 API). They are derived here because they span multiple owner SPECs; each one references the components it wires together.
+
+| Catalog ID | Scope | Test file | Wires together |
+|------------|-------|-----------|----------------|
+| E2E-T01 | Agent lifecycle (create YAML -> validate -> `AgentFactory.create()` -> run) | `tests/integration/e2e/test_agent_lifecycle.py` | SPEC_02 + SPEC_01 + SPEC_03 |
+| E2E-T02 | Team lifecycle (validate -> `TeamFactory.create()` -> run) | `tests/integration/e2e/test_team_lifecycle.py` | SPEC_02 + SPEC_01 + SPEC_05 |
+| E2E-T03 | Workflow lifecycle (declare -> `WorkflowFactory` -> execute via Agno) | `tests/integration/e2e/test_workflow_lifecycle.py` | SPEC_02 + SPEC_01 + SPEC_05 |
+| E2E-T04 | Native AgentOS run flow (multipart `POST /agents/{agent_id}/runs` end-to-end via `YamlAgentOS`) | `tests/integration/api/test_agent_endpoints.py` | SPEC_06 + SPEC_01 + SPEC_03 |
+| E2E-T05 | Long-term recall on start (port-backed, default Agno adapter) | `tests/integration/memory/test_recall_on_start.py` | SPEC_04 (S04-T04) |
+
+> @ai-directive (removed E2E tasks): the previous iteration listed E2E tasks for "memory compression" and "workflow error recovery" as standalone lifecycle tests. Compression E2E is owned by SPEC_15; workflow retry E2E is covered by S05-T05/T06 unit tests plus an optional integration test in SPEC_05. They are NOT standalone E2E tasks here to avoid duplicating owners.
 
 ---
 
-## 4. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
+## 3. ADOPTED TECHNICAL ASSUMPTIONS
 
-### [Pregunta 1] Task Granularity
+### [Decision 1] Catalog as aggregator, not source of truth
 
-**¿50 tasks es suficientemente granular o necesitamos 100+?**
+**Justification**:
+- Owner SPECs (01-07) hold the authoritative task definitions with full RED/GREEN/REFACTOR detail.
+- This catalog consolidates them for traceability and sequencing without duplicating logic.
+- Any divergence must be fixed in the owner SPEC, then propagated here.
 
-Implica:
-- **50**: Tasks más grandes, más contexto
-- **100+**: Tasks más atómicas, más commits
-- **Trade-off**: Granularidad vs overhead
+### [Decision 2] Atomic commits per microtask
 
-### [Pregunta 2] Paralelización de Tasks
+**Justification**:
+- Easy rollback to any single RED/GREEN step.
+- Clean conventional-commit history.
+- Enables per-task code review.
 
-**¿Qué tasks pueden ejecutarse en paralelo?**
+### [Decision 3] Tests as living specification
 
-Implicas:
-- **Independent**: Models, value objects
-- **Sequential**: Factories → Repositories → API
-- **Trade-off**: Velocidad vs dependencias
+**Justification**:
+- Executable documentation of behavior.
+- Prevents regressions across the YAML -> Agno translation path.
+- RED steps double as acceptance criteria for each owner SPEC task.
 
-### [Pregunta 3] Testing Strategy
+### [Decision 4] No tasks for removed classes
 
-**¿Unit tests > Integration tests o balance 50/50?**
-
-Implica:
-- **Unit-heavy**: Más rápido, menos confidence
-- **Integration-heavy**: Más lento, más confidence
-- **Balance**: Mejor cobertura
+**Justification**:
+- Iteration 1 of SPEC_00-02 removed `SessionContext`, `SessionState`, `AgentInstance`, `ModelId`, `SessionKey`, `WorkflowExecution`, `WorkflowState`, domain events and a native `EngramMemoryManager`.
+- Cataloguing tasks to create them would contradict the corrected baseline. They are listed only in section 1.3 as a negative list.
 
 ---
 
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente específico o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
+## 4. STRATEGIC CALIBRATION QUESTIONS
+
+### [Question 1] Task granularity
+
+**Is the per-owner-SPEC granularity sufficient, or do we need finer decomposition?**
+
+Implications:
+- **Per owner task**: larger steps, more context per commit.
+- **Finer**: more atomic commits, more overhead.
+- **Trade-off**: granularity vs commit overhead.
+
+### [Question 2] Task parallelization
+
+**Which catalog groups can run in parallel?**
+
+Implications:
+- **Independent**: SPEC_02 schemas; SPEC_03 persistence models; SPEC_04 memory config builders.
+- **Sequential**: SPEC_02 -> SPEC_01 factories -> SPEC_06 API; SPEC_03 -> SPEC_06 API.
+- **Trade-off**: speed vs dependency order.
+
+### [Question 3] Test strategy balance
+
+**Unit-heavy vs balanced unit/integration?**
+
+Implications:
+- **Unit-heavy**: faster, lower confidence on the Agno boundary.
+- **Integration-heavy**: slower, higher confidence.
+- **Balance**: best coverage of the YAML -> Agno translation and config-store ACID path.
+
+---
+
+*Do you want to deepen the technical specification to **Level 6** for a specific component group, or authorize execution of this catalog by the agent team?*

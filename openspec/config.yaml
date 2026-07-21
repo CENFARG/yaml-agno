@@ -1,0 +1,65 @@
+# OpenSpec configuration — yaml-agno
+# Managed by SDD (sdd-init). Edit conventions here; do not delete.
+schema: spec-driven
+
+context: |
+  Project: yaml-agno (pip name: yaml_agno)
+  Type: Python 3.12+ pip-installable library (no src/ or pyproject.toml yet —
+        created by the first /sdd-new change, NOT by sdd-init)
+  Purpose: Declarative YAML layer over Agno Framework.
+           Pattern: YAML -> Pydantic -> Factory -> Agno objects.
+  Stack:
+    - Language: Python 3.12+
+    - Framework: Agno v2.6.18 (pip dep, NOT vendored)
+    - Core dep: core-cenf-py (pip name: core_infrastructure, NOT vendored)
+    - Test runner: python -m pytest (with pytest-asyncio)
+    - Linter/formatter: ruff
+    - Type checker: mypy
+    - Coverage target: 100% (Strict TDD project)
+  Testing layers (planned):
+    - tests/ root (unit, integration, e2e)
+    - pytest markers: unit, integration, e2e, slow, fast, guardrails
+  Architecture:
+    - YAML-first declarative config (70% YAML, 30% Python)
+    - Build ON TOP of Agno (never reimplement runtime/session/memory/A2A/retry)
+    - Agent = black box with contract (mission + input/output schema + deps)
+    - Composition by interconnection; multi-tenant storage
+    - ref:// URI scheme, ${ENV_VAR} interpolation, hot-reload, multi-file
+  Conventions:
+    - Code/docstrings/comments/identifiers: English
+    - Conversation/persona: Spanish (Rioplatense) — user-facing only
+    - Agno conventions: both sync/async public methods, no agents in loops,
+      param names identical to Agno
+  Artifact store: HYBRID (engram project=doc.reca + openspec/ files)
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Scope MUST respect "build ON TOP, never frankenstein" philosophy
+    - Distinguish built-in Agno features (YAML) from custom Python (tools only)
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+    - Define input/output schemas for every agent (contract = black box)
+  design:
+    - Include sequence diagrams for complex flows (Factory, hot-reload, ref://)
+    - Document architecture decisions with rationale
+    - Show YAML -> Pydantic -> Factory -> Agno mapping for new features
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+    - Strict TDD: every behavior task starts with RED (failing test)
+  apply:
+    - Follow existing code patterns
+    - Never reimplement Agno runtime/session/memory/A2A/retry
+    - Sync AND async variants for public methods
+    - Param names MUST match Agno exactly
+    tdd: true                  # STRICT TDD MODE — RED-GREEN-REFACTOR enforced
+    test_command: "python -m pytest"
+  verify:
+    test_command: "python -m pytest"
+    build_command: ""          # No build step yet (pure pip library)
+    coverage_threshold: 100    # Project target; warn if below
+  archive:
+    - Warn before merging destructive deltas
+    - Preserve git + Engram traceability

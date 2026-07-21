@@ -1,0 +1,54 @@
+# =============================================================================
+# requirements.txt — yaml-agno + core-cenf-py (all PyPI dependencies)
+# =============================================================================
+# Usage:
+#   1. Create venv:  python -m venv .venv
+#   2. Activate:     .venv\Scripts\Activate.ps1
+#   3. Install:      pip install -r requirements.txt
+#   4. Local pkgs:   pip install -e C:\Dropbox\DOC.RECA\06-Software\core-cenf-py
+#                    pip install -e .
+#
+# For a one-command install, run: scripts\install.ps1
+# =============================================================================
+
+# =============================================================================
+# yaml-agno — direct runtime dependencies
+# =============================================================================
+agno==2.6.22
+pydantic>=2.0,<3
+pyyaml>=6.0
+sqlalchemy[asyncio]>=2.0,<3
+
+# Dependency of sqlalchemy[asyncio]
+greenlet>=3.0
+
+# =============================================================================
+# core-cenf-py — runtime dependencies (transitive)
+# =============================================================================
+structlog>=24.0,<25
+opentelemetry-api>=1.27,<2
+opentelemetry-sdk>=1.27,<2
+opentelemetry-exporter-otlp>=1.27,<2
+aiohttp>=3.9,<4
+tenacity>=9.0,<10
+aiocache>=0.12,<1
+redis>=5.0,<6
+cryptography>=43.0,<44
+python-dotenv>=1.0,<2
+python-jose[cryptography]>=3.5,<4
+pycasbin>=1.9,<2
+
+# =============================================================================
+# core-cenf-py — optional extras (for local development)
+# =============================================================================
+# Storage backends
+aiofiles>=24.0,<25
+asyncpg>=0.30,<1
+psycopg[binary]>=3.2,<4
+aioboto3>=14.0,<15
+gcloud-aio-storage>=9.0,<10
+azure-storage-blob>=12.0,<13
+nats-py>=2.0,<3
+
+# Task queue
+saq>=0.15,<1
