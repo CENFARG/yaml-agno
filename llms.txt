@@ -1,0 +1,115 @@
+# yaml-agno
+
+> Declarative YAML layer over the Agno Framework. YAML → Pydantic → Factory → Agno Objects.
+
+yaml-agno is a pip-installable Python library that lets you define Agno agents, teams, and workflows entirely in YAML configuration files, with templates, dependency injection, and multi-tenant support. It builds ON TOP of Agno 2.6.22 — never reimplements Agno's runtime, session, memory, A2A, or retry internals.
+
+## Quick Start
+
+```bash
+pip install yaml-agno
+```
+
+```python
+from yaml_agno.factories import AgentFactory
+from yaml_agno.models import AgentConfig
+from yaml_agno.di import build_agno_resolver, ProviderFactory
+from yaml_agno.di.secret_resolver import ConfigSecretResolver
+
+# Set your provider key:
+#   export OPENROUTER_API_KEY="sk-or-v1-..."
+
+# Build a fully-configured agent (model + api_key resolved automatically):
+resolver = build_agno_resolver()
+secret = ConfigSecretResolver()
+pf = ProviderFactory(resolver, secret)
+
+agent = AgentFactory.build(
+    AgentConfig(
+        name="research-agent",
+        model="openrouter:openai/gpt-4o",
+        instructions="You are a research assistant.",
+        tools=[
+            {"kind": "builtin", "name": "duckduckgo"},
+            {"kind": "builtin", "name": "calculator"},
+        ],
+        tool_call_limit=10,
+        skills={"path": "/skills/research", "validate": True},
+    ),
+    resolver=resolver,
+    provider_factory=pf,
+)
+
+# Run it:
+import asyncio
+result = asyncio.run(agent.arun("What is 25 * 37?"))
+print(result.content)
+```
+
+## API Surface
+
+### Factories (YAML → Agno Objects)
+- `AgentFactory.build(cfg, resolver=None, provider_factory=None)` → `agno.Agent`
+- `TeamFactory.build(cfg, agents)` → `agno.Team` (modes: coordinate/route/broadcast/tasks)
+- `WorkflowFactory.build(cfg, agents, teams, callables)` → `agno.Workflow` (7 primitives: Step/Steps/Parallel/Condition/Router/Loop/nested)
+- `ToolFactory(resolver).build(tool_entries)` → mixed list of Toolkit/Callable/Function/MCPTools
+- `SkillsFactory.build(config)` → `agno.skills.Skills`
+
+### DI Layer
+- `build_agno_resolver(config=None)` → `AgnoResolver` (seeds default allowlist, no .env needed)
+- `ProviderFactory(resolver, secret_resolver)` → resolves model class + injects api_key
+- `ConfigSecretResolver(config)` → reads secrets from ConfigManager, falls back to `os.environ`
+
+### Domain Models (SPEC_02 SSOT)
+- `AgentConfig` — name, model, instructions, tools, skills, tool_call_limit, 9 opaque slots
+- `TeamConfig` — name, mode, members
+- `WorkflowConfig` — name, steps (StepConfig with 16 fields, type-specific validators)
+- `ModelExpandedSpec` — provider, id, generation params, fallback, hooks
+
+### Capabilities
+- **134 builtin Agno toolkits** (calculator, duckduckgo, shell, email, file, python, etc.)
+- **Custom @tool functions** via dotted-path with HITL flags (requires_confirmation, hooks, caching)
+- **MCP servers** (stdio/http/SSE, single/multi, UNCONNECTED — Agent auto-connects)
+- **26+ model providers** (OpenRouter, OpenAI, Anthropic, DeepSeek, Groq, etc.)
+- **CircuitBreaker** state machine (CLOSED/OPEN/HALF_OPEN, rate-based)
+- **resolve_user_id()** — composite `{tenant_id}:{principal_id}`, fail-fast
+- **Fallback chains** — ordered model list with routing strategies
+
+### Model Format
+- `"openrouter:openai/gpt-4o"` — OpenRouter (supports `/` and `@` in IDs)
+- `"openai:gpt-4o"` — OpenAI direct
+- `"anthropic:claude-3.5-sonnet"` — Anthropic direct
+
+### Tool Format
+```yaml
+tools:
+  - kind: builtin
+    name: duckduckgo
+  - kind: function
+    path: myapp.tools.fetch
+    requires_confirmation: true
+    cache_results: true
+  - kind: mcp
+    transport: stdio
+    command: uvx mcp-server-git
+```
+
+## Build Philosophy
+
+1. **Build ON TOP** — never reimplement Agno. If Agno has it, use it.
+2. **YAML-first** — 70% declarative config, 30% Python (tools only).
+3. **Zero frankenstein** — every module delegates to Agno or core-cenf-py.
+4. **Multi-tenant** — explicit WHERE filters, composite user_id, NO RLS.
+5. **Strict TDD** — RED → GREEN → REFACTOR on every behavioral change.
+
+## Key Files
+- [DECISIONES.md](DECISIONES.md) — 12 inviolable architecture decisions + gate protocol
+- [VISION.md](VISION.md) — project vision, mission, philosophy
+- [specs/INDEX.md](specs/INDEX.md) — 34 SPECs index (10 groups, Read_Order)
+- [.chats/decisions.yaml](.chats/decisions.yaml) — SSOT snapshot with verification queries
+- [AGENTS.md](AGENTS.md) — guide for coding agents
+
+## Links
+- GitHub: https://github.com/CENFARG/yaml-agno
+- Agno Framework: https://github.com/agno-agi/agno
+- Release: v0.2.0
