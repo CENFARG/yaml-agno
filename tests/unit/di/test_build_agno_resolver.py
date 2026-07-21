@@ -70,16 +70,25 @@ def test_build_with_injected_adapter_skips_wiring() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2: empty allowlist → ValidationError (strict guard).
+# Scenario 2: empty allowlist + strict_allowlist=True → ValidationError.
+#
+# FIX 1 (resolver-bootstrap-fix) changed the default behavior: an empty
+# allowlist now silently seeds AGNO_ALLOWLIST_PREFIXES instead of crashing.
+# The strict crash is still reachable via strict_allowlist=True, which is what
+# this scenario now exercises.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
 def test_build_empty_allowlist_raises_validation_error() -> None:
-    """An InMemoryConfigAdapter without dependency.allowlist_paths is rejected."""
+    """Empty allowlist + strict_allowlist=True MUST still raise ValidationError.
+
+    The default behavior changed (FIX 1 seeds defaults silently); the strict
+    opt-in preserves the original crash for callers that want the loud failure.
+    """
     cfg = _inmemory_config(allowlist=None)  # no allowlist seeded
     with pytest.raises(ValidationError):
-        build_agno_resolver(cfg)
+        build_agno_resolver(cfg, strict_allowlist=True)
 
 
 # ---------------------------------------------------------------------------
