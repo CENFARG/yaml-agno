@@ -323,3 +323,89 @@ def test_resolve_model_integration_real_openai_chat_is_model_instance() -> None:
     result = resolver.resolve_model("openai:gpt-4o")
     assert isinstance(result, Model)
     assert result.id == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# FIX 1 (resolver-bootstrap-fix): build_agno_resolver() MUST seed defaults
+# when dependency.allowlist_paths is empty, instead of crashing. Only crash
+# when the caller explicitly opts in via strict_allowlist=True.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_build_agno_resolver_seeds_defaults_when_empty() -> None:
+    """FIX 1 Scenario 1.1 — empty allowlist MUST seed AGNO_ALLOWLIST_PREFIXES.
+
+    Without seeding, the factory raised ValidationError. With the fix, the
+    factory seeds the canonical Agno prefixes from registries.py and the
+    returned resolver can resolve a real Agno Model via the REAL
+    ImportlibDependencyAdapter.
+    """
+    from agno.models.base import Model
+    from core_infrastructure.config.adapters.in_memory_config_adapter import (
+        InMemoryConfigAdapter,
+    )
+    from core_infrastructure.dependency import ImportlibDependencyAdapter
+    from core_infrastructure.errors.adapters import CapturingErrorAdapter
+    from core_infrastructure.logger.adapters import InMemoryLoggerAdapter
+    from core_infrastructure.observability.adapters import NoopObservabilityAdapter
+
+    from yaml_agno.di.agno_resolver import build_agno_resolver
+
+    cfg = InMemoryConfigAdapter()  # NO dependency.allowlist_paths seeded
+    logger = InMemoryLoggerAdapter()
+    obs = NoopObservabilityAdapter()
+    errors = CapturingErrorAdapter(cfg, logger, obs)
+
+    resolver = build_agno_resolver(
+        config=cfg,
+        logger=logger,
+        errors=errors,
+        observability=obs,
+    )
+
+    # Sanity: the seeded adapter is the real ImportlibDependencyAdapter.
+    assert isinstance(resolver._adapter, ImportlibDependencyAdapter)
+    # Real resolution succeeds because defaults were seeded.
+    result = resolver.resolve_model("openai:gpt-4o")
+    assert isinstance(result, Model)
+    assert result.id == "gpt-4o"
+
+
+@pytest.mark.unit
+def test_build_agno_resolver_strict_preserves_crash() -> None:
+    """FIX 1 Scenario 1.2 — strict_allowlist=True MUST keep the ValidationError.
+
+    Backward-compat invariant: callers that explicitly opt into strict mode
+    still get the loud failure when the allowlist is empty.
+    """
+    from core_infrastructure.config.adapters.in_memory_config_adapter import (
+        InMemoryConfigAdapter,
+    )
+
+    from yaml_agno.di.agno_resolver import build_agno_resolver
+
+    cfg = InMemoryConfigAdapter()  # empty allowlist
+    with pytest.raises(ValidationError):
+        build_agno_resolver(config=cfg, strict_allowlist=True)
+
+
+@pytest.mark.unit
+def test_build_agno_resolver_honors_explicit_allowlist() -> None:
+    """FIX 1 Scenario 1.3 — caller-provided allowlist MUST NOT be overwritten.
+
+    If the caller already seeded dependency.allowlist_paths, the factory must
+    leave it alone and use it as-is (no overwrite with defaults).
+    """
+    from core_infrastructure.config.adapters.in_memory_config_adapter import (
+        InMemoryConfigAdapter,
+    )
+
+    from yaml_agno.di.agno_resolver import build_agno_resolver
+
+    cfg = InMemoryConfigAdapter()
+    cfg.set_value("dependency.allowlist_paths", ["agno.models."])  # explicit
+    build_agno_resolver(config=cfg)
+    # The caller's list is preserved (not replaced by the 5 defaults).
+    seeded = cfg.get_section("dependency").get("allowlist_paths")
+    assert seeded == ["agno.models."]
