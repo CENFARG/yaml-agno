@@ -76,9 +76,18 @@ _MAPPING: dict[tuple[str, str], type] = {
 
 
 def _build_factory(
-    secret_resolver: Callable[[str], str | None] = lambda env: None,
+    secret_resolver: Callable[[str], str | None] | None = None,
 ) -> ProviderFactory:
-    """Build a ProviderFactory backed by the in-memory adapter + stubs."""
+    """Build a ProviderFactory backed by the in-memory adapter + stubs.
+
+    The default secret_resolver returns "sk-test" for any env name (FIX 3 —
+    resolver-bootstrap-fix: openai declares api_key_env, so the factory now
+    fail-fast rejects a None resolver). Tests that need a None-returning
+    resolver (to exercise local providers or the fail-fast path) pass one
+    explicitly.
+    """
+    if secret_resolver is None:
+        secret_resolver = lambda env: "sk-test"  # noqa: E731
     adapter = InMemoryDependencyAdapter(mapping=_MAPPING)
     resolver = AgnoResolver(adapter)
     return ProviderFactory(resolver, secret_resolver)
@@ -211,6 +220,11 @@ def test_build_integration_real_openai_chat_is_model_instance() -> None:
     and builds from a ModelExpandedSpec with temperature/top_k/retries. Asserts
     the result is a genuine agno Model instance, id/temperature/retries are set,
     and top_k was dropped (OpenAIChat does not declare it).
+
+    NOTE (FIX 3 — resolver-bootstrap-fix): the openai entry declares
+    api_key_env="OPENAI_API_KEY", so the resolver MUST return a non-None value
+    or ProviderFactory.build now raises ModelConstructionError. The resolver
+    stub returns "sk-test" for any env name.
     """
     from agno.models.base import Model
     from agno.models.openai import OpenAIChat
@@ -231,7 +245,7 @@ def test_build_integration_real_openai_chat_is_model_instance() -> None:
     errors = CapturingErrorAdapter(cfg, logger, obs)
     adapter = ImportlibDependencyAdapter(cfg, logger, errors)
     resolver = AgnoResolver(adapter)
-    factory = ProviderFactory(resolver, secret_resolver=lambda env: None)
+    factory = ProviderFactory(resolver, secret_resolver=lambda env: "sk-test")
 
     spec = ModelExpandedSpec(
         provider="openai", id="gpt-4o", temperature=0.7, top_k=5, retries=3
@@ -244,3 +258,64 @@ def test_build_integration_real_openai_chat_is_model_instance() -> None:
     assert result.retries == 3
     # top_k was filtered out — OpenAIChat does not declare it.
     assert not hasattr(result, "top_k")
+
+
+# ---------------------------------------------------------------------------
+# FIX 3 (resolver-bootstrap-fix): ProviderFactory MUST raise
+# ModelConstructionError when a cloud provider's api_key is missing, instead
+# of silently constructing with api_key=None. The error MUST name the env-var
+# so the user knows which variable to set. Local providers (api_key_env=None)
+# MUST continue to construct without raising.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_provider_factory_raises_on_missing_api_key_cloud() -> None:
+    """FIX 3 Scenario 3.1 — cloud provider missing key MUST raise.
+
+    openrouter declares api_key_env="OPENROUTER_API_KEY". When the
+    SecretResolver returns None, ProviderFactory.build MUST raise
+    ModelConstructionError whose str() contains "OPENROUTER_API_KEY".
+
+    Today this constructs silently and the failure is deferred to agent.run()
+    as an opaque 401 — the fix surfaces it at the last sync gate.
+    """
+    from yaml_agno.di.provider_factory import ModelConstructionError
+
+    # openrouter maps to agno.models.openrouter.OpenRouter; the stub mapping
+    # does not include it, so this test MUST use a stub. We register an
+    # openrouter stub via the InMemoryDependencyAdapter's mapping.
+    @dataclass
+    class StubOpenRouter:
+        id: str = ""
+        api_key: str | None = None
+
+    mapping = dict(_MAPPING)
+    mapping[
+        (
+            PROVIDER_REGISTRY["openrouter"].module_path,
+            PROVIDER_REGISTRY["openrouter"].class_name,
+        )
+    ] = StubOpenRouter
+    adapter = InMemoryDependencyAdapter(mapping=mapping)
+    resolver = AgnoResolver(adapter)
+    factory = ProviderFactory(resolver, secret_resolver=lambda env: None)
+
+    spec = ModelExpandedSpec(provider="openrouter", id="meta-llama/llama-4-scout")
+    with pytest.raises(ModelConstructionError) as exc_info:
+        factory.build(spec)
+    assert "OPENROUTER_API_KEY" in str(exc_info.value)
+    assert exc_info.value.env_name == "OPENROUTER_API_KEY"
+
+
+@pytest.mark.unit
+def test_provider_factory_local_provider_no_raise_on_missing_key() -> None:
+    """FIX 3 Scenario 3.2 — local provider (api_key_env=None) MUST NOT raise.
+
+    ollama has api_key_env=None; the resolver is never consulted for local
+    providers. Even with a resolver that returns None, construction succeeds.
+    """
+    factory = _build_factory(secret_resolver=lambda env: None)
+    spec = ModelExpandedSpec(provider="ollama", id="llama3")
+    result = factory.build(spec)
+    assert isinstance(result, StubOllama)

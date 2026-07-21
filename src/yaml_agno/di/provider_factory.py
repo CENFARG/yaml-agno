@@ -45,23 +45,47 @@ class ModelConstructionError(Exception):
     Wraps the underlying TypeError/ValueError from the Agno constructor with
     context about which provider and model id failed, so the caller (bootstrap
     or config-load) can surface a clear error instead of a raw Agno traceback.
+
+    FIX 3 (resolver-bootstrap-fix): also surfaces a missing-api_key failure
+    with the env-var name. When ``env_name`` is set, ``cause`` is None and the
+    message names the variable the user needs to set.
     """
 
-    def __init__(self, provider: str, model_id: str, cause: Exception) -> None:
-        """Initialize with provider/id context and the wrapped cause.
+    def __init__(
+        self,
+        provider: str,
+        model_id: str,
+        cause: Exception | None = None,
+        *,
+        env_name: str | None = None,
+    ) -> None:
+        """Initialize with provider/id context and either the cause or env name.
 
         Args:
             provider: Provider id (e.g. ``"openai_chat"``).
             model_id: Model id (e.g. ``"gpt-4o"``).
-            cause: The underlying exception from the constructor.
+            cause: The underlying exception from the constructor. Required when
+                ``env_name`` is None.
+            env_name: When set, the error is a missing-api_key failure and the
+                message names this env var. Mutually exclusive with ``cause``.
         """
         self.provider = provider
         self.model_id = model_id
         self.cause = cause
-        super().__init__(
-            f"Failed to construct Agno Model for provider={provider!r} "
-            f"id={model_id!r}: {type(cause).__name__}: {cause}"
-        )
+        self.env_name = env_name
+        if env_name is not None:
+            message = (
+                f"Missing api_key for provider={provider!r} id={model_id!r}: "
+                f"set the {env_name!r} environment variable (or add it to the "
+                f"secrets config namespace)."
+            )
+        else:
+            assert cause is not None  # narrowing for mypy: cause required w/o env_name
+            message = (
+                f"Failed to construct Agno Model for provider={provider!r} "
+                f"id={model_id!r}: {type(cause).__name__}: {cause}"
+            )
+        super().__init__(message)
 
 
 class ProviderFactory:
@@ -130,7 +154,9 @@ class ProviderFactory:
 
         Raises:
             KeyError: If ``spec.provider`` is not in PROVIDER_REGISTRY.
-            ModelConstructionError: If the Agno constructor raises (wrapped).
+            ModelConstructionError: If the Agno constructor raises (wrapped), OR
+                if ``entry.api_key_env`` is set and the SecretResolver returned
+                None (FIX 3 — missing api_key fail-fast).
         """
         if spec.provider not in PROVIDER_REGISTRY:
             raise KeyError(f"Unknown provider: {spec.provider!r}")
@@ -143,10 +169,20 @@ class ProviderFactory:
         # api_key_env=None and never reach the resolver. Cloud/gateway providers
         # get their key injected as api_key= kwarg (filtered in step 3 only if
         # the class declares it — all cloud Agno Models do).
+        #
+        # FIX 3 (resolver-bootstrap-fix): fail fast when the provider declares
+        # an api_key_env but the resolver returned None. Constructing silently
+        # pushes the failure to agent.run() (opaque 401); raising here at the
+        # last sync gate gives the user the env-var name.
         if entry.api_key_env is not None:
             api_key = self._secret_resolver(entry.api_key_env)
-            if api_key is not None:
-                kwargs["api_key"] = api_key
+            if api_key is None:
+                raise ModelConstructionError(
+                    spec.provider,
+                    spec.id,
+                    env_name=entry.api_key_env,
+                )
+            kwargs["api_key"] = api_key
 
         # Optional capability pre-check (A6). Imported lazily to avoid a circular
         # import (capabilities_validator imports PROVIDER_REGISTRY too, which is
