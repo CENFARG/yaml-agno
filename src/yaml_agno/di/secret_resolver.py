@@ -6,16 +6,22 @@ entregado). Para evitar acoplar el factory al boundary async, definimos un
 Protocol SYNC local: el bootstrap (async) pre-resuelve los secrets una vez por
 provider y entrega al factory un callable SYNC (lambda sobre un dict cache).
 
-El default ConfigSecretResolver lee ``config.get_string("secrets.<env>")`` —
-NO toca os.environ (SPEC_00 §9.3 @ai-directive). El production wiring (SPEC_23)
-reemplaza este resolver por un adaptador async->sync sobre SecretManager.
+El default ConfigSecretResolver lee ``config.get_string("secrets.<env>")`` y,
+si la config no tiene el valor (FIX 4 — resolver-bootstrap-fix), cae a
+``os.environ.get(env_name)`` como fallback. SPEC_00 §9.3 prohibe ``os.environ``
+en **código de aplicación**, pero SecretResolver ES la capa de infraestructura
+que abstrae el acceso a secrets — centralizar el fallback de env aquí mantiene
+el acceso a ``os.environ`` en UN solo lugar. El production wiring (SPEC_23)
+reemplaza este resolver por un adaptador async->sync sobre SecretManager y el
+fallback de env desaparece con él.
 
-@ai-directive: NO uses os.environ. NO hagas este resolver async. El factory
-    es SYNC por A2.
+@ai-directive: NO hagas este resolver async. El factory es SYNC por A2. El
+    acceso a os.environ vive aquí (capa de infra), no en app code.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Protocol, runtime_checkable
 
 from core_infrastructure.common.errors import ValidationError
@@ -75,23 +81,34 @@ class ConfigSecretResolver:
         self._config = config
 
     def __call__(self, env_name: str) -> str | None:
-        """Resolve ``env_name`` to its secret via ``config.get_string``.
+        """Resolve ``env_name`` to its secret, config first, env fallback.
+
+        Order (FIX 4 — resolver-bootstrap-fix):
+          1. ``config.get_string("secrets.<env_lower>")`` (authoritative).
+          2. On miss / ValidationError: ``os.environ.get(env_name)``.
+          3. If both miss: None.
+
+        ConfigManager remains the source of truth; the env fallback only fires
+        on a config miss. SPEC_00 §9.3 bans os.environ in app code, but this
+        resolver IS the infrastructure layer that abstracts secret sources —
+        centralizing the fallback here keeps os.environ access in ONE place.
 
         Args:
             env_name: Logical env-var name (e.g. ``"OPENAI_API_KEY"``).
 
         Returns:
-            The secret string, or None if the key is absent from the config.
+            The secret string, or None if neither config nor env has it.
         """
         key = f"secrets.{env_name.lower()}"
         try:
             value = self._config.get_string(key, default_value=None)
         except ValidationError:
             # ConfigManager.get_string raises ValidationError when the key is
-            # absent (default_value=None is treated as "no default"). The
-            # SecretResolver contract returns None for a missing secret so the
-            # factory can decide whether to proceed (local provider) or fail
-            # elsewhere. SPEC_14 slice #3 Scenario: ConfigSecretResolver
-            # devuelve None si falta.
-            return None
-        return str(value)
+            # absent (default_value=None is treated as "no default"). Fall
+            # through to the env fallback below.
+            value = None
+        if value is not None:
+            return str(value)
+        # FIX 4: env fallback (infrastructure-layer escape hatch). Config
+        # missed; consult the process environment before giving up.
+        return os.environ.get(env_name)

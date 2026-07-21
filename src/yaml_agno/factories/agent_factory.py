@@ -10,6 +10,13 @@ non-None, ``SkillsFactory.build(cfg.skills)`` resolves the opaque dict into a
 ``agno.skills.Skills`` forwarded to ``Agent(skills=...)`` (Option B —
 AgentConfig.skills stays opaque; validation happens inside the factory).
 
+FIX 2 (resolver-bootstrap-fix): adds an optional ``provider_factory`` keyword
+to ``build()``. When provided, ``cfg.model`` is parsed via
+``parse_model_spec()`` and routed through ``ProviderFactory.build()`` to
+produce a real Agno ``Model`` instance (with api_key injected); that instance
+is forwarded to ``Agent(model=instance)`` instead of the raw string. When
+``provider_factory is None``, current string passthru is preserved.
+
 Contract:
     - Construction stays pure assignment + factory dispatch. No network, no
       LLM instantiation, no provider resolution. ``MCPResolver`` returns
@@ -19,6 +26,8 @@ Contract:
       untouched (zero breaking tests).
     - When ``cfg.skills is None`` (the default), ``skills=None`` is forwarded
       (zero breaking tests; slice #1 backward-compat invariant).
+    - When ``provider_factory is None`` (the default), ``model=cfg.model``
+      (raw string) is forwarded unchanged (slice #1 backward-compat invariant).
 
 @ai-directive: SSOT is specs/SPEC_01_AGENT_FACTORY.md (identity) +
 specs/SPEC_11_TOOLS_AND_MCP.md (tools wiring) +
@@ -33,11 +42,13 @@ from typing import TYPE_CHECKING, Any
 from agno.agent import Agent
 
 from yaml_agno.models.config.agent_config import AgentConfig
+from yaml_agno.models.model_spec import ModelExpandedSpec, parse_model_spec
 from yaml_agno.skills import SkillsFactory
 from yaml_agno.tools.tool_factory import ToolFactory
 
 if TYPE_CHECKING:
     from yaml_agno.di.agno_resolver import AgnoResolver
+    from yaml_agno.di.provider_factory import ProviderFactory
 
 __all__ = ["AgentFactory"]
 
@@ -76,6 +87,7 @@ class AgentFactory:
     def build(
         cfg: AgentConfig,
         resolver: AgnoResolver | None = None,
+        provider_factory: ProviderFactory | None = None,
     ) -> Agent:
         """Build a native ``agno.Agent`` from an ``AgentConfig``.
 
@@ -86,17 +98,33 @@ class AgentFactory:
         the opaque skills dict into a ``Skills`` instance via
         ``SkillsFactory.build`` and forwards it to ``Agent(skills=...)``.
 
+        FIX 2 (resolver-bootstrap-fix): when ``provider_factory`` is provided,
+        ``cfg.model`` is parsed via ``parse_model_spec()`` and the resulting
+        spec is routed through ``provider_factory.build()`` to obtain a real
+        Agno ``Model`` instance (with api_key injected by the factory's
+        SecretResolver). That instance is forwarded to ``Agent(model=...)``
+        instead of the raw string. When ``provider_factory is None``, the
+        string is forwarded as-is (slice #1 backward-compat).
+
         Args:
             cfg: A validated ``AgentConfig`` (SPEC_02). Its ``model`` field is
-                a ``provider:id`` string forwarded verbatim to Agno. Its
-                ``tools`` field is an opaque ``list[dict]`` resolved here when
-                a resolver is supplied. Its ``skills`` field is an opaque
-                ``dict[str, Any] | None`` resolved here whenever non-None.
+                a ``provider:id`` string forwarded verbatim to Agno when no
+                ``provider_factory`` is given, or parsed-and-built into a Model
+                instance when one is. Its ``tools`` field is an opaque
+                ``list[dict]`` resolved here when a resolver is supplied. Its
+                ``skills`` field is an opaque ``dict[str, Any] | None``
+                resolved here whenever non-None.
             resolver: Optional ``AgnoResolver`` for allowlisted dotted-path
                 resolution of custom tools / toolkit classes / MCP
                 ``header_provider``. When ``None`` (default), tools are
                 skipped — callers that do not need tools pass nothing. Skills
-                do not use the resolver.
+                do not use the resolver. When ``provider_factory`` is given,
+                the same resolver is typically wired into it by the caller.
+            provider_factory: Optional ``ProviderFactory`` (FIX 2). When
+                provided, ``cfg.model`` is routed through it to produce a
+                fully-configured Agno Model instance (with api_key). When
+                ``None`` (default), ``cfg.model`` is forwarded as a raw string
+                and Agno resolves it (slice #1 behavior).
 
         Returns:
             A constructed ``agno.Agent``. Per ``agno/agent/agent.py:504``,
@@ -109,21 +137,43 @@ class AgentFactory:
         Raises:
             (none directly) Any exception raised by ``agno.Agent.__init__``,
                 ``ToolFactory.build()`` (``UnknownBuiltinError``,
-                ``SecurityError``, ``ValidationError``), or
+                ``SecurityError``, ``ValidationError``),
                 ``SkillsFactory.build()`` (``ValidationError``,
-                ``FileNotFoundError``, ``SkillValidationError``) propagates
-                unchanged.
+                ``FileNotFoundError``, ``SkillValidationError``), or
+                ``ProviderFactory.build()`` (``KeyError``,
+                ``ModelConstructionError``) propagates unchanged.
         """
         tools: list[Any] = []
         if cfg.tools and resolver is not None:
             factory = ToolFactory(resolver)
             tools = factory.build(cfg.tools)
         skills = SkillsFactory.build(cfg.skills) if cfg.skills else None
+
+        # FIX 2: when a provider_factory is wired, parse cfg.model and build a
+        # real Agno Model instance (with api_key injected) instead of passing
+        # the raw string. Backward-compat: provider_factory=None keeps the
+        # slice-#1 string passthru that Agno resolves itself.
+        model: Any = cfg.model
+        if provider_factory is not None:
+            parsed = parse_model_spec(cfg.model)
+            # ModelExpandedSpec carries the generation params; ModelStringSpec
+            # only carries provider+id. ProviderFactory.build type-annotates its
+            # param as ModelExpandedSpec and consumes the spec via attribute
+            # access (model_dump), so we promote a ModelStringSpec to the
+            # expanded form. We round-trip via model_validate to preserve all
+            # carried fields (works for either spec type) without naming every
+            # optional ModelExpandedSpec field at the construction site.
+            if not isinstance(parsed, ModelExpandedSpec):
+                spec = ModelExpandedSpec.model_validate(parsed.model_dump())
+            else:
+                spec = parsed
+            model = provider_factory.build(spec)
+
         return Agent(
             name=cfg.name,
             instructions=cfg.instructions,
             description=cfg.description,
-            model=cfg.model,
+            model=model,
             tools=tools or None,
             tool_call_limit=cfg.tool_call_limit,
             skills=skills,

@@ -403,3 +403,75 @@ class TestAgentFactorySkillsWiring:
         )
         with pytest.raises(SkillValidationError):
             AgentFactory.build(cfg)
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 (resolver-bootstrap-fix): AgentFactory.build accepts an optional
+# provider_factory keyword. When provided, the model string is parsed via
+# parse_model_spec, built into a real Agno Model instance via ProviderFactory,
+# and forwarded to Agent(model=instance). When None, current string passthru.
+# ---------------------------------------------------------------------------
+
+
+class TestAgentFactoryProviderFactoryWiring:
+    """RED→GREEN tests for the provider_factory keyword on AgentFactory.build."""
+
+    def test_build_with_provider_factory_uses_model_instance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FIX 2 Scenario 2.1 — provider_factory produces a real Model instance.
+
+        Wiring the resolver + provider_factory end-to-end MUST yield an Agent
+        whose ``.model`` is the exact instance returned by ProviderFactory.build
+        (identity equality), with the api_key populated from env via the
+        SecretResolver fallback.
+        """
+        from core_infrastructure.config.adapters.in_memory_config_adapter import (
+            InMemoryConfigAdapter,
+        )
+        from core_infrastructure.dependency import ImportlibDependencyAdapter
+        from core_infrastructure.errors.adapters import CapturingErrorAdapter
+        from core_infrastructure.logger.adapters import InMemoryLoggerAdapter
+        from core_infrastructure.observability.adapters import NoopObservabilityAdapter
+
+        from yaml_agno.di.agno_resolver import build_agno_resolver
+        from yaml_agno.di.provider_factory import ProviderFactory
+        from yaml_agno.di.registries import AGNO_ALLOWLIST_PREFIXES
+        from yaml_agno.di.secret_resolver import ConfigSecretResolver
+
+        # Seed the env var so ConfigSecretResolver picks it up via FIX 4.
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-from-env")
+
+        cfg = InMemoryConfigAdapter()
+        cfg.set_value("dependency.allowlist_paths", AGNO_ALLOWLIST_PREFIXES)
+        logger = InMemoryLoggerAdapter()
+        obs = NoopObservabilityAdapter()
+        CapturingErrorAdapter(cfg, logger, obs)  # wiring side-effect; not retained
+        adapter = ImportlibDependencyAdapter(cfg, logger, obs)
+        resolver = build_agno_resolver(adapter=adapter)
+        secret_resolver = ConfigSecretResolver(cfg)
+        pf = ProviderFactory(resolver, secret_resolver)
+
+        agent_cfg = AgentConfig(name="x", model="openai:gpt-4o")
+        result = AgentFactory.build(agent_cfg, resolver=resolver, provider_factory=pf)
+
+        assert isinstance(result, Agent)
+        # The model is a real Agno Model instance (not a string), built by pf.
+        assert isinstance(result.model, Model)
+        assert result.model.id == "gpt-4o"
+        # The api_key was injected via SecretResolver env fallback (FIX 4).
+        assert getattr(result.model, "api_key", None) == "sk-test-from-env"
+
+    def test_build_without_provider_factory_keeps_string_passthru(self) -> None:
+        """FIX 2 Scenario 2.2 — no provider_factory keeps current behavior.
+
+        ``AgentFactory.build(cfg)`` with no provider_factory MUST continue to
+        pass ``model=cfg.model`` as a raw string and let Agno resolve it. This
+        is the slice-#1 backward-compat invariant.
+        """
+        cfg = AgentConfig(name="x", model="openai:gpt-4o")
+        result = AgentFactory.build(cfg)
+        assert isinstance(result, Agent)
+        # Agno resolves the string to a Model; we only assert the id round-trips.
+        assert isinstance(result.model, Model)
+        assert result.model.id == "gpt-4o"

@@ -30,7 +30,7 @@ from yaml_agno.di.registries import PROVIDER_ALIASES
 # Regex shared by ModelStringSpec format validation. "provider:id" with both
 # halves non-empty; ":" alone is invalid (AgentConfig.validate_model_format
 # invariants mirrored here for slice-2 standalone use).
-_PROVIDER_ID_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9_]+:[A-Za-z0-9_.\-]+$")
+_PROVIDER_ID_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9_]+:[A-Za-z0-9_./\-@]+$")
 
 
 class ModelStringSpec(BaseModel):

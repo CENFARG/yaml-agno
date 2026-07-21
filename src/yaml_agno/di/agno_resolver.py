@@ -35,6 +35,7 @@ from core_infrastructure.observability.adapters import NoopObservabilityAdapter
 from core_infrastructure.observability.ports import ObservabilityManager
 
 from yaml_agno.di.registries import (
+    AGNO_ALLOWLIST_PREFIXES,
     MODEL_REGISTRY,
     PROVIDER_ALIASES,
     STORAGE_REGISTRY,
@@ -206,6 +207,7 @@ def build_agno_resolver(
     errors: ErrorHandlingManager | None = None,
     observability: ObservabilityManager | None = None,
     adapter: DependencyManager | None = None,
+    strict_allowlist: bool = False,
 ) -> AgnoResolver:
     """Fábrica síncrona que ensambla los managers de core-cenf y el AgnoResolver.
 
@@ -217,23 +219,31 @@ def build_agno_resolver(
     con defaults (env-only). Si ``adapter`` ya viene inyectado (tests), se omite
     el wiring de los 3 managers.
 
+    FIX 1 (resolver-bootstrap-fix): si ``dependency.allowlist_paths`` está
+    vacío, se siembran ``AGNO_ALLOWLIST_PREFIXES`` desde ``registries.py`` como
+    default, en lugar de crashear. El caller puede optar por el comportamiento
+    previo (crash loud) pasando ``strict_allowlist=True``.
+
     Args:
-        config: ConfigManager con ``dependency.allowlist_paths`` ya sembrados
-            (A4). Si None, se crea ``PydanticConfigAdapter()`` — el host DEBE
-            entonces exponer ``CENF_dependency__allowlist_paths`` o un YAML.
+        config: ConfigManager. Si trae ``dependency.allowlist_paths`` sembrado
+            se respeta; si está vacío se siembran los defaults (FIX 1) salvo
+            ``strict_allowlist=True``. Si None, se crea
+            ``PydanticConfigAdapter()`` con env-only.
         logger: LoggerManager. Si None, ``StructlogAdapter(config)``.
         errors: ErrorHandlingManager. Si None,
             ``ClassificationAdapter(config, logger, observability)``.
         observability: ObservabilityManager. Si None, ``NoopObservabilityAdapter()``.
         adapter: DependencyManager ya construido. Si se pasa, se usa directo y
             ``config/logger/errors/observability`` se ignoran.
+        strict_allowlist: Si True, restaurar el comportamiento previo (raise
+            ``ValidationError`` cuando ``dependency.allowlist_paths`` esté
+            vacío). Default False — sembrar defaults silenciosamente.
 
     Returns:
         Un ``AgnoResolver`` listo para resolver providers Agno.
 
     Raises:
-        ValidationError: Si el allowlist está vacío y el adapter está en strict
-            mode (mala siembra de ``dependency.allowlist_paths``).
+        ValidationError: Si el allowlist está vacío Y ``strict_allowlist=True``.
     """
     if adapter is not None:
         return AgnoResolver(adapter)
@@ -242,14 +252,23 @@ def build_agno_resolver(
     # caller no proveyó uno, PydanticConfigAdapter lee YAML+CENF_ env.
     resolved_config: ConfigManager = config if config is not None else PydanticConfigAdapter()
 
-    # Guard de siembra: si la sección no tiene allowlist_paths, fallar ruidosamente
-    # en lugar de devolver un resolver que rechaza todo en strict mode.
+    # Guard de siembra (FIX 1): si la sección no tiene allowlist_paths, sembrar
+    # los prefijos canónicos declarativos desde registries.py. Solo crashea si
+    # el caller opta explícitamente por strict_allowlist=True (back-compat).
     dep_section = resolved_config.get_section("dependency")
     if not dep_section.get("allowlist_paths"):
-        raise ValidationError(
-            "dependency.allowlist_paths is empty — seed AGNO_ALLOWLIST_PREFIXES "
-            "in the config before calling build_agno_resolver()",
-            details={"section": "dependency"},
+        if strict_allowlist:
+            raise ValidationError(
+                "dependency.allowlist_paths is empty — seed AGNO_ALLOWLIST_PREFIXES "
+                "in the config before calling build_agno_resolver()",
+                details={"section": "dependency"},
+            )
+        # Seed in place: mutate the config section so ImportlibDependencyAdapter
+        # reads the canonical Agno prefixes. set_value is the ConfigManager port
+        # method both PydanticConfigAdapter and InMemoryConfigAdapter expose.
+        resolved_config.set_value(
+            "dependency.allowlist_paths",
+            list(AGNO_ALLOWLIST_PREFIXES),
         )
 
     resolved_logger: LoggerManager = logger if logger is not None else StructlogAdapter(resolved_config)
