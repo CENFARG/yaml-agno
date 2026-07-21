@@ -71,13 +71,18 @@ class ConfigSecretResolver:
         'sk-...'
     """
 
-    def __init__(self, config: ConfigManager) -> None:
-        """Initialize the resolver with a ConfigManager.
+    def __init__(self, config: ConfigManager | None = None) -> None:
+        """Initialize the resolver with an optional ConfigManager.
 
         Args:
-            config: ConfigManager port. MUST expose ``secrets.*`` keys for the
-                providers the app uses.
+            config: ConfigManager port. If None, creates an InMemoryConfigAdapter
+                (empty — secrets resolved from os.environ fallback only).
         """
+        if config is None:
+            from core_infrastructure.config.adapters.in_memory_config_adapter import (
+                InMemoryConfigAdapter,
+            )
+            config = InMemoryConfigAdapter()
         self._config = config
 
     def __call__(self, env_name: str) -> str | None:
