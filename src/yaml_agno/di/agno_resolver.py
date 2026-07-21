@@ -16,12 +16,10 @@ core-cenf (ImportlibDependencyAdapter). Este modulo NO lo reimplementa.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from core_infrastructure.common.errors import ValidationError
-from core_infrastructure.config.adapters.pydantic_config_adapter import (
-    PydanticConfigAdapter,
-)
 from core_infrastructure.config.ports import ConfigManager
 from core_infrastructure.dependency import (
     DependencyManager,
@@ -248,9 +246,16 @@ def build_agno_resolver(
     if adapter is not None:
         return AgnoResolver(adapter)
 
-    # Config: ya debe traer dependency.allowlist_paths sembrado (A4). Si el
-    # caller no proveyó uno, PydanticConfigAdapter lee YAML+CENF_ env.
-    resolved_config: ConfigManager = config if config is not None else PydanticConfigAdapter()
+    # ISSUE 5 fix: use InMemoryConfigAdapter as default (supports set_value,
+    # standalone, no YAML/env required). PydanticConfigAdapter doesn't support
+    # set_value and requires CENF_ env / YAML files.
+    if config is not None:
+        resolved_config = config
+    else:
+        from core_infrastructure.config.adapters.in_memory_config_adapter import (
+            InMemoryConfigAdapter,
+        )
+        resolved_config = InMemoryConfigAdapter()
 
     # Guard de siembra (FIX 1): si la sección no tiene allowlist_paths, sembrar
     # los prefijos canónicos declarativos desde registries.py. Solo crashea si
@@ -264,12 +269,13 @@ def build_agno_resolver(
                 details={"section": "dependency"},
             )
         # Seed in place: mutate the config section so ImportlibDependencyAdapter
-        # reads the canonical Agno prefixes. set_value is the ConfigManager port
-        # method both PydanticConfigAdapter and InMemoryConfigAdapter expose.
-        resolved_config.set_value(
-            "dependency.allowlist_paths",
-            list(AGNO_ALLOWLIST_PREFIXES),
-        )
+        # reads the canonical Agno prefixes. suppress handles adapters that
+        # don't implement set_value (e.g. PydanticConfigAdapter passed by caller).
+        with contextlib.suppress(AttributeError, NotImplementedError):
+            resolved_config.set_value(
+                "dependency.allowlist_paths",
+                list(AGNO_ALLOWLIST_PREFIXES),
+            )
 
     resolved_logger: LoggerManager = logger if logger is not None else StructlogAdapter(resolved_config)
     resolved_obs: ObservabilityManager = observability if observability is not None else NoopObservabilityAdapter()

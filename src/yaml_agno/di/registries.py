@@ -97,10 +97,12 @@ WORKFLOW_REGISTRY: Final[dict[str, tuple[str, str]]] = {
 # Todos los module_path de los REGISTRY anteriores caen bajo estos prefijos.
 AGNO_ALLOWLIST_PREFIXES: Final[list[str]] = [
     "agno.models.",
+    "agno.tools.",        # ISSUE 2 fix: 134 builtin toolkits use agno.tools.*
     "agno.db.",
     "agno.workflow.",
     "agno.team.",
-    "agno.agent",
+    "agno.agent",         # ISSUE 3: also add agno.agent. for submodules below
+    "agno.agent.",
 ]
 
 __all__ = [
