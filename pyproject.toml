@@ -29,6 +29,11 @@ dependencies = [
     "core-cenf @ git+https://github.com/CENFARG/core-cenf-py.git@v0.1.0",
     "pydantic>=2.0",
     "pyyaml>=6.0",
+    # sqlalchemy[asyncio] is used by yaml_agno.db.models.* and yaml_agno.db.base
+    # (DeclarativeBase, Mapped, mapped_column, async_sessionmaker, etc.).
+    # core-cenf-py also declares it as an optional extra; we pin it directly
+    # so pip resolves both to the same version without requiring extras.
+    "sqlalchemy[asyncio]>=2.0,<3",
 ]
 
 [project.optional-dependencies]
