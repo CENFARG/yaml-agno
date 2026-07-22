@@ -38,6 +38,7 @@ dependencies = [
     "aiofiles>=24.0,<25",
     "fastapi>=0.100",
     "mcp>=1.0",
+    "saq>=0.15,<1",
 ]
 
 [project.optional-dependencies]
