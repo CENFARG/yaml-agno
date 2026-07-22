@@ -52,8 +52,14 @@ WHEN YamlAgentOS(agents=[...], config_path="...") is instantiated
 THEN a ValueError is raised with a message mentioning the ambiguity
 ```
 
-RFC 2119: The constructor MUST reject the ambiguous call. Passing neither
-argument SHALL be allowed and result in `agents=None` forwarded to the parent.
+RFC 2119: The constructor MUST reject the ambiguous call.
+
+Note (verified Agno 2.6.22): `AgentOS.__init__` itself REQUIRES at least one of
+`agents`, `teams`, `workflows`, `knowledge`, or `db`. Passing NEITHER source
+therefore raises `ValueError("Either agents, teams, workflows, knowledge bases
+or a database must be provided.")` from the parent. Slice A surfaces this
+unchanged; the test asserting the default `authorization=False` provides a
+minimal agent list so the parent's invariant is satisfied.
 
 ### Scenario 4: get_app() returns a FastAPI app with native routes
 

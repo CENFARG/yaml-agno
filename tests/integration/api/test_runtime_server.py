@@ -51,7 +51,13 @@ class TestCreateApp:
         assert ("/agents/{agent_id}/runs", "POST") in pairs
 
     def test_create_app_with_config_path_builds_agents(self, tmp_path: Path) -> None:
-        """Scenario 10: ``create_app(config_path=...)`` builds agents from YAML."""
+        """Scenario 10: ``create_app(config_path=...)`` builds agents from YAML.
+
+        Verified by hitting the inherited ``GET /agents`` endpoint, which Agno
+        populates from the agents list forwarded to ``super().__init__``.
+        """
+        from fastapi.testclient import TestClient
+
         yaml_file = tmp_path / "agents.yaml"
         yaml_file.write_text(
             """
@@ -64,9 +70,12 @@ class TestCreateApp:
         app = create_app(config_path=str(yaml_file))
 
         assert isinstance(app, FastAPI)
-        # The agent appears in the OpenAPI schema as a registered component.
-        agent_ids = {agent.name for agent in app.state._agentos.agents}  # type: ignore[attr-defined]
-        assert "runtime-yaml-agent" in agent_ids
+        client: Any = TestClient(app)
+        response = client.get("/agents")
+
+        assert response.status_code == 200
+        agent_names = {entry["name"] for entry in response.json()}
+        assert "runtime-yaml-agent" in agent_names
 
 
 class TestRunServer:

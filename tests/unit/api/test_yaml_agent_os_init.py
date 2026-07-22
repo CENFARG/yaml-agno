@@ -70,30 +70,32 @@ class TestYamlAgentOSInit:
         )
         agent = _build_test_agent()
 
-        with pytest.raises(ValueError, match="ambiguous|both"):
+        with pytest.raises(ValueError, match=r"ambiguous|both"):
             YamlAgentOS(agents=[agent], config_path=str(yaml_file))
 
-    def test_init_accepts_neither_agents_nor_config_path(self) -> None:
-        """Scenario: ``YamlAgentOS()`` with no agent source succeeds (foundation-only boot)."""
-        os_app = YamlAgentOS()
-
-        assert isinstance(os_app, AgentOS)
-
     def test_init_default_authorization_false(self) -> None:
-        """Scenario 8: the slice-A default for authorization is False."""
-        os_app = YamlAgentOS()
+        """Scenario 8: the slice-A default for authorization is False.
+
+        Agno's ``AgentOS`` requires at least one agent source, so the smallest
+        valid call still provides ``agents=[...]``. The authorization default is
+        what slice A is asserting here.
+        """
+        agent = _build_test_agent()
+        os_app = YamlAgentOS(agents=[agent])
 
         assert os_app.authorization is False
 
     def test_init_forwards_authorization_true(self) -> None:
         """Scenario 8: explicit ``authorization=True`` is forwarded to the parent."""
-        os_app = YamlAgentOS(authorization=True)
+        agent = _build_test_agent()
+        os_app = YamlAgentOS(agents=[agent], authorization=True)
 
         assert os_app.authorization is True
 
     def test_init_forwards_extra_agentos_kwargs(self) -> None:
         """Scenario 9: ``**agentos_kwargs`` are forwarded to ``super().__init__``."""
-        os_app = YamlAgentOS(enable_mcp_server=True, telemetry=False)
+        agent = _build_test_agent()
+        os_app = YamlAgentOS(agents=[agent], enable_mcp_server=True, telemetry=False)
 
         assert os_app.enable_mcp_server is True
         assert os_app.telemetry is False
