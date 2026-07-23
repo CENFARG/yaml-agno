@@ -67,7 +67,7 @@ def create_app(
             exclusive with ``config_path``.
         **yaml_agentos_kwargs: Extra keyword arguments forwarded to
             ``YamlAgentOS.__init__`` (e.g. ``authorization``,
-            ``mount_health``, ``enable_mcp_server``...).
+            ``mount_health``, ``mcp_server``...).
 
     Returns:
         The fully wired ``fastapi.FastAPI`` instance produced by

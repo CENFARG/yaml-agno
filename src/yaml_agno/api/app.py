@@ -111,7 +111,7 @@ class YamlAgentOS(AgentOS):
                 ``/health/readiness`` inside ``get_app()``. Set to ``False`` for
                 unit tests that want the bare native surface.
             **agentos_kwargs: Extra keyword arguments forwarded verbatim to
-                ``super().__init__`` (e.g. ``enable_mcp_server``,
+                ``super().__init__`` (e.g. ``mcp_server``,
                 ``telemetry``, ``teams``, ``workflows``, ``db``...).
 
         Raises:

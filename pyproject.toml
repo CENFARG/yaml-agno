@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "agno==2.6.22",
+    "agno==2.8.0",
     # core-cenf-py: transversal infrastructure (ConfigManager, SecretManager,
     # DatabaseManager, ErrorHandlingManager, ObservabilityManager, DependencyManager).
     # Tag v0.1.2 has the correct distribution name "core-cenf-py" (v0.1.0 was "core-cenf").

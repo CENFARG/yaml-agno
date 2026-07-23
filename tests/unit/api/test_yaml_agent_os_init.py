@@ -95,9 +95,9 @@ class TestYamlAgentOSInit:
     def test_init_forwards_extra_agentos_kwargs(self) -> None:
         """Scenario 9: ``**agentos_kwargs`` are forwarded to ``super().__init__``."""
         agent = _build_test_agent()
-        os_app = YamlAgentOS(agents=[agent], enable_mcp_server=True, telemetry=False)
+        os_app = YamlAgentOS(agents=[agent], mcp_server=True, telemetry=False)
 
-        assert os_app.enable_mcp_server is True
+        assert os_app.mcp_server is True
         assert os_app.telemetry is False
 
     def test_init_invalid_yaml_entry_raises_validation_error(
