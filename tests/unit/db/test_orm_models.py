@@ -455,13 +455,23 @@ def test_models_init_registers_exactly_seven_tables() -> None:
 
 def test_no_runtime_ddl_in_db_package() -> None:
     """src/yaml_agno/db/ must NOT contain create_all/engine.begin/create_engine/
-    Engine( calls (enforces spec Requirement 7)."""
+    Engine( calls EXCEPT in the designated DDL surface (provisioner.py and
+    bootstrap.py), which are the ONLY files allowed to touch DDL per SPEC_03 §6.1.
+
+    This enforces spec Requirement 7: ORM models are side-effect-free; the
+    provisioner and bootstrap are the sole DDL owners.
+    """
     db_root = Path(__file__).resolve().parents[3] / "src" / "yaml_agno" / "db"
     assert db_root.is_dir(), f"db package missing at {db_root}"
+
+    # The provisioner and bootstrap are the designated DDL surface (SPEC_03 §6.1).
+    ddl_files = {"provisioner.py", "bootstrap.py"}
 
     forbidden = ("create_all", "engine.begin", "create_engine(", "Engine(", "drop_all")
     offenders: list[str] = []
     for py in db_root.rglob("*.py"):
+        if py.name in ddl_files:
+            continue
         try:
             content = py.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -470,7 +480,8 @@ def test_no_runtime_ddl_in_db_package() -> None:
             if token in content:
                 offenders.append(f"{py.relative_to(db_root)}: {token!r}")
     assert offenders == [], (
-        "Forbidden runtime-DDL tokens in src/yaml_agno/db/: " + ", ".join(offenders)
+        "Forbidden runtime-DDL tokens in src/yaml_agno/db/ (outside provisioner.py/"
+        f"bootstrap.py): {', '.join(offenders)}"
     )
 
 
