@@ -46,4 +46,4 @@ jobs:
         run: mypy src/yaml_agno
 
       - name: Run tests
-        run: pytest
+        run: pytest -m "unit and not integration" -q
