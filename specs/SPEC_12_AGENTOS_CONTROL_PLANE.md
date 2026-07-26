@@ -86,14 +86,19 @@ Cada parámetro mapea a un campo del aggregate `AgentOSConfig`. La columna "YAML
 | 10 | `lifespan` | `Any` | `None` | `agentos.lifespan` | `LifespanAdapter` |
 | 11 | `authorization` | `bool` | `False` | `agentos.authorization.enabled` | `AuthorizationAdapter` |
 | 12 | `authorization_config` | `AuthorizationConfig` | `None` | `agentos.authorization.config` | `AuthorizationAdapter` |
-| 13 | `mcp_server` | `bool` | `False` | `agentos.mcp.enabled` | `MCPServerLifecycle` |
-| 14 | `mcp_config` | `MCPServerConfig` | `None` | `agentos.mcp.config` | `MCPServerLifecycle` |
+| 13 | `mcp_server` | `Union[bool, MCPServerConfig]` | `False` | `agentos.mcp` | `MCPServerLifecycle` |
+| 14 | `mcp_auth` | `AuthProvider` | `None` | `agentos.mcp.auth` | `MCPAuthAdapter` *(new in 2.8.x)* |
 | 15 | `a2a_interface` | `bool` | `False` | `agentos.a2a_interface` | `A2AInterfaceFactory` (SPEC_26) |
 | 16 | `cors_allowed_origins` | `List[str]` | `None` | `agentos.cors_allowed_origins` | `FastAPIAppBuilder` |
 | 17 | `auto_provision_dbs` | `bool` | `True` | `agentos.auto_provision_dbs` | `DatabaseManager` |
 | 18 | `run_hooks_in_background` | `bool` | `False` | `agentos.run_hooks_in_background` | `HookAdapter` (SPEC_09) |
 | 19 | `tracing` | `bool` | `False` | `agentos.tracing` | `ObservabilityManager` (SPEC_09) |
 | 20 | `scheduler` / `scheduler_poll_interval` | `bool` / `int` | `False` / 15 | `agentos.scheduler.*` | delegado a SPEC_13 |
+
+> **v2.8.x change (Agno v2.7+)**: `mcp_server` now accepts `Union[bool, MCPServerConfig]`.
+> The old `enable_mcp_server` (bool) and `mcp_config` (MCPServerConfig) params are
+> **deprecated aliases** — Agno forwards them to `mcp_server` with a DeprecationWarning.
+> yaml-agno uses the canonical `mcp_server` name exclusively from v2.8.3 forward.
 
 ### 2.1b Native-only parameters (NOT forwarded from YAML)
 
@@ -104,7 +109,8 @@ intentionally NOT surfaced in `agentos.yaml`:
 |----------------|---------|----------------------|
 | `id` | auto (`generate_id`/`uuid4`) | Derivado de `name`; no requiere override YAML |
 | `description` / `version` | `None` | Metadatos cosméticos; opcionales vía `agentos.description`/`agentos.version` si se desean (no modelados en MVP) |
-| `checkpoint` | `None` | Default OS-level; heredado por agentes (SPEC_02) |
+| `mcp_auth` | `None` | Auth para MCP (OAuth). POST-MVP. Requiere `mcp_server`. |
+| `checkpoint` | `None` | Default OS-level; heredado por agentes (SPEC_02). Values: `"runs"`, `"tool-batch"`, `"tools"`. |
 | `settings` | `AgnoAPISettings()` | Interno; cors/origins se controlan via `cors_allowed_origins` |
 | `on_route_conflict` | `"preserve_agentos"` | Política de seguridad; se deja el default salvo `base_app` custom |
 | `telemetry` | `True` | Se respeta el default Agno; no se modela |
@@ -140,9 +146,9 @@ class MCPServerSettings(BaseModel):
     instructions: Optional[str] = None
     tools_to_expose: list[str] = Field(default_factory=list)  # agent/tool ids
     port: Optional[int] = None
-    # mcp_config passthrough: when present, AgentOSFactory builds an
-    # agno.os.config.MCPServerConfig and forwards it as the `mcp_config` kwarg
-    # (NOT just mcp_server). tools_to_expose maps to MCPServerConfig.tools.
+    # v2.8.x: mcp_server now accepts MCPServerConfig directly. tools_to_expose maps
+    # to MCPServerConfig.tools. The old `mcp_config` kwarg is deprecated.
+    auth: Optional[dict[str, Any]] = None  # MCP OAuth config (new in 2.8.x, POST-MVP)
 
 class SchedulerSettings(BaseModel):
     enabled: bool = False
@@ -297,12 +303,13 @@ agentos:
 
 RBAC con JWT. Ver Sección 9. Integración con SPEC_19.
 
-### 2.13 `mcp_server` / `mcp_config`
+### 2.13 `mcp_server` / `mcp_auth`
 
-Ver Sección 5 (MCP server mode). `mcp_server` es el bool de activación;
-`mcp_config` (`MCPServerConfig` de Agno) scopa los built-in tools y registra
-tools custom. El `MCPServerSettings.tools_to_expose` se traduce a
-`MCPServerConfig.tools` y se pasa como `mcp_config=` (NO solo el flag).
+Ver Sección 5 (MCP server mode). `mcp_server` ahora acepta `Union[bool, MCPServerConfig]` (v2.8.x).
+El viejo `enable_mcp_server` (bool) y `mcp_config` (MCPServerConfig) son aliases deprecados.
+
+`mcp_auth` (nuevo en v2.8.x) es un `AuthProvider` que habilita OAuth en el endpoint MCP
+para clientes como claude.ai y ChatGPT. Requiere `mcp_server=True`. POST-MVP para yaml-agno.
 
 ### 2.13b `a2a_interface`
 

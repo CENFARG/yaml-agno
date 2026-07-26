@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_14"
 Title: "Model Resilience & Configuration"
-Version: "0.2.0-iter4"
+Version: "0.3.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#models", "#fallback", "#resilience", "#circuit-breaker", "#cach
 Dependency_Hashes: ["SPEC_01", "SPEC_05", "SPEC_08", "SPEC_09"]
 Group: "G2-Runtime-Core"
 Read_Order: 4
-Last_Updated: "2026-07-03"
-Revision_Note: "Iter 4 - Deep adversarial review vs Agno 2.8.3: fixed 8 incorrect provider class mappings (deepseek DeepSeekChat->DeepSeek, xai XAI->xAI, vercel Vercel->V0, vllm vLLM->VLLM, bedrock BedrockModel->AwsBedrock; module paths llama_cpp/lmstudio; vertex GeminiVertex INVENTED -> vertexai.Claude). Fixed MISTRANT->MISTRAL typo. Corrected retry_delay/delay_between_retries forwarding (Agno has NO retry_delay field; NO wait_on_rate_limit field). Fixed _compose_kwargs to pass delay_between_retries. Rewired CircuitBreaker ownership SPEC_05 -> SPEC_09 (RetryPolicy stays SPEC_05). Converted ProviderFactory to lazy importlib loading (no eager 30+ provider imports). Replaced invented gpt-5.2 ids with gpt-4o."
+Last_Updated: "2026-07-26"
+Revision_Note: "Iter 5 - Update to Agno 2.8.3. Added 20 new model providers (46 total vs 26 in v2.6.18): aimlapi, cerebras, cloudflare, cometapi, deepinfra, huggingface, ibm, inception, internlm, litellm, minimax, moonshot, n1n, neosantara, nexus, nvidia, portkey, requesty, sambanova, siliconflow, tokenlab, tuning_engines, xiaomi. Removed models/defaults.py (deleted upstream). Iter 4 content otherwise stands."
 ---
 
 # SPEC_14_MODEL_RESILIENCE_AND_CONFIG
