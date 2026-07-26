@@ -10,12 +10,12 @@ Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04"]
 Group: "G7-ControlPlane-API"
 Read_Order: 18
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared resolve_user_id() (SPEC_04) to build the composite user_id instead of constructing f'{tenant_id}:{raw_user_id}' inline. resolve_user_id is the single source of truth for the composite format (same resolver for HTTP and autonomous runs). No other behavior change. Iter 4 (inheritance reformulation). Replaces parallel AgentOS composition with YamlAgentOS(AgentOS) subclass pattern: yaml-agno now INHERITS AgentOS and overrides get_app() to register extensions via app.include_router()/app.add_middleware() after super().get_app(). Adds composite user_id multi-tenancy (tenant_id:raw_user_id) layered on AgentOS native user_isolation (AuthorizationConfig). Resolves 10 corrections: inherit-not-compose; composite user_id + user_isolation always-on (NULL-bucket footgun documented via FODA); no gaps/ folder (SOTA src/api/ layout); readiness probe decoupled from optional external adapters; config loading consumes core-cenf-py ConfigManager; backend sanitization/validation mandatory directive; AX discovery via native MCP server (enable_mcp_server) instead of parallel REST endpoint; reinforce AgentOS coding patterns."
+Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared resolve_user_id() (SPEC_04) to build the composite user_id instead of constructing f'{tenant_id}:{raw_user_id}' inline. resolve_user_id is the single source of truth for the composite format (same resolver for HTTP and autonomous runs). No other behavior change. Iter 4 (inheritance reformulation). Replaces parallel AgentOS composition with YamlAgentOS(AgentOS) subclass pattern: yaml-agno now INHERITS AgentOS and overrides get_app() to register extensions via app.include_router()/app.add_middleware() after super().get_app(). Adds composite user_id multi-tenancy (tenant_id:raw_user_id) layered on AgentOS native user_isolation (AuthorizationConfig). Resolves 10 corrections: inherit-not-compose; composite user_id + user_isolation always-on (NULL-bucket footgun documented via FODA); no gaps/ folder (SOTA src/api/ layout); readiness probe decoupled from optional external adapters; config loading consumes core-cenf-py ConfigManager; backend sanitization/validation mandatory directive; AX discovery via native MCP server (mcp_server) instead of parallel REST endpoint; reinforce AgentOS coding patterns."
 ---
 
 # SPEC_06_API_AND_AX
 
-> **Purpose**: yaml-agno is a THIN INHERITANCE LAYER over AgentOS (Agno v2.6.18). It does NOT build a parallel FastAPI app, does NOT ship its own `/run`, `/sessions`, `/agents` config, `/health`, or middleware classes that duplicate AgentOS. Instead yaml-agno defines **`class YamlAgentOS(AgentOS)`** — a subclass — and overrides `get_app()` to register the few extensions AgentOS genuinely lacks. Everything yaml-agno adds is mounted on the app returned by `super().get_app()`, preserving AgentOS lifespan, exception handlers, DB auto-discovery, JWT/RBAC, and the full native router set.
+> **Purpose**: yaml-agno is a THIN INHERITANCE LAYER over AgentOS (Agno 2.8.3). It does NOT build a parallel FastAPI app, does NOT ship its own `/run`, `/sessions`, `/agents` config, `/health`, or middleware classes that duplicate AgentOS. Instead yaml-agno defines **`class YamlAgentOS(AgentOS)`** — a subclass — and overrides `get_app()` to register the few extensions AgentOS genuinely lacks. Everything yaml-agno adds is mounted on the app returned by `super().get_app()`, preserving AgentOS lifespan, exception handlers, DB auto-discovery, JWT/RBAC, and the full native router set.
 >
 > yaml-agno adds ONLY what AgentOS lacks:
 >
@@ -30,11 +30,11 @@ Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared reso
 
 ## 1. NATIVE AGENTOS ENDPOINTS (mounted via inheritance, NOT reimplemented)
 
-`YamlAgentOS` inherits `AgentOS.__init__` and passes `agents=`, `teams=`, `workflows=`, `db=`, `authorization=`, `enable_mcp_server=`, `a2a_interface=` to `super().__init__()`. `super().get_app()` mounts every native router via `_add_built_in_routes` / `_add_router` (`os/app.py:509`, `app.py:1182`, ~22 routers). Native endpoints are far more complete than anything yaml-agno could clone: streaming, background runs, SSE resume, checkpoints, fork, continue, cancel, multimodal upload (~1744 lines in `agents/router.py` alone).
+`YamlAgentOS` inherits `AgentOS.__init__` and passes `agents=`, `teams=`, `workflows=`, `db=`, `authorization=`, `mcp_server=`, `a2a_interface=` to `super().__init__()`. `super().get_app()` mounts every native router via `_add_built_in_routes` / `_add_router` (`os/app.py:509`, `app.py:1182`, ~22 routers). Native endpoints are far more complete than anything yaml-agno could clone: streaming, background runs, SSE resume, checkpoints, fork, continue, cancel, multimodal upload (~1744 lines in `agents/router.py` alone).
 
 ### 1.1 Native run / session / config / health endpoints
 
-| yaml-agno role | AgentOS native endpoint | file:line (v2.6.18) |
+| yaml-agno role | AgentOS native endpoint | file:line (2.8.3) |
 |---|---|---|
 | Mount, do NOT reimplement | `POST /agents/{agent_id}/runs` | `agents/router.py:551` |
 | Mount, do NOT reimplement | `GET /agents/{agent_id}`, `GET /agents`, `GET /config` | `agents/router.py:1320`, `agents/router.py:1216`, `os/router.py:79` |
@@ -66,7 +66,7 @@ For multimodal input on native run endpoints, clients attach `images` / `audio` 
 
 1. `class YamlAgentOS(AgentOS)` — subclass.
 2. Override `get_app()`: call `super().get_app()` (returns a fully wired `FastAPI` with lifespan, exception handlers, DB auto-discovery, JWT/RBAC, CORS, trailing-slash), THEN register yaml-agno extensions on the returned app via `app.include_router(...)` and `app.add_middleware(...)`.
-3. Pass native toggles (`authorization`, `enable_mcp_server`, `a2a_interface`, `mcp_config`, `scheduler`, `telemetry`, `registry`) to `super().__init__()` — do NOT extend `AgnoAPISettings` for those toggles (the useful switches live on `__init__`, not on settings).
+3. Pass native toggles (`authorization`, `mcp_server`, `a2a_interface`, `mcp_config`, `scheduler`, `telemetry`, `registry`) to `super().__init__()` — do NOT extend `AgnoAPISettings` for those toggles (the useful switches live on `__init__`, not on settings).
 
 > @ai-directive: yaml-agno MUST follow AgentOS's design and coding patterns exactly — not merely "equivalent" ones. That means: factory routers `get_*_router(...) -> APIRouter`, Google-style docstrings, `async` + `sync` where Agno uses them, `_add_router`-style mounting, and the same Pydantic-model-on-the-boundary discipline Agno uses.
 
@@ -117,7 +117,7 @@ def load_site_from_config(cfg: ConfigManager) -> dict[str, Any]:
 
 Inherits AgentOS (agno/os/app.py:221). Overrides get_app() to register the few
 extensions AgentOS lacks (§4) AFTER super().get_app() has mounted every native
-router. Native toggles (authorization, enable_mcp_server, a2a_interface) are
+router. Native toggles (authorization, mcp_server, a2a_interface) are
 passed to super().__init__, NOT to AgnoAPISettings.
 """
 
@@ -176,7 +176,7 @@ class YamlAgentOS(AgentOS):
             # Native MCP server carries run_agent/run_team/run_workflow over MCP
             # (os/mcp.py:227-264). AX discovery path is MCP, not a parallel REST
             # endpoint (§5).
-            enable_mcp_server=enable_mcp,
+            mcp_server=enable_mcp,
             a2a_interface=enable_a2a,
             # Multi-tenancy ALWAYS ON: composite user_id + native user_isolation.
             authorization=True,
@@ -534,9 +534,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 ## 5. AX DISCOVERY = NATIVE MCP SERVER
 
-AgentOS exposes `run_agent` / `run_team` / `run_workflow` ONLY over its native MCP server (`os/mcp.py:227-264`), enabled by `enable_mcp_server=True` on `AgentOS.__init__`. yaml-agno enables the native MCP server (passed to `super().__init__()` in §2.3) for agent/tool discovery. There is NO parallel `GET /ax/tools` REST endpoint — that would reinvent MCP.
+AgentOS exposes `run_agent` / `run_team` / `run_workflow` ONLY over its native MCP server (`os/mcp.py:227-264`), enabled by `mcp_server=True` on `AgentOS.__init__`. yaml-agno enables the native MCP server (passed to `super().__init__()` in §2.3) for agent/tool discovery. There is NO parallel `GET /ax/tools` REST endpoint — that would reinvent MCP.
 
-> @ai-directive: the supported AX discovery path is the NATIVE MCP server. yaml-agno enables it via `enable_mcp_server=True` and does NOT add its own REST discovery endpoint. A thin REST JSON-schema surface is OPTIONAL and supported ONLY for non-MCP clients; if ever added it MUST be a read-only factory router that publishes the same callable names as the MCP surface, never an execution path. Execution stays on the native AgentOS run endpoints (§1) or MCP.
+> @ai-directive: the supported AX discovery path is the NATIVE MCP server. yaml-agno enables it via `mcp_server=True` and does NOT add its own REST discovery endpoint. A thin REST JSON-schema surface is OPTIONAL and supported ONLY for non-MCP clients; if ever added it MUST be a read-only factory router that publishes the same callable names as the MCP surface, never an execution path. Execution stays on the native AgentOS run endpoints (§1) or MCP.
 
 ```mermaid
 flowchart LR
@@ -618,7 +618,7 @@ AND the response detail mentions "User rate limit exceeded"
 #### Scenario 5: AX discovery is via native MCP
 
 ```gherkin
-GIVEN YamlAgentOS is initialized with enable_mcp_server=True
+GIVEN YamlAgentOS is initialized with mcp_server=True
 WHEN a client connects to the MCP server
 THEN the client can discover run_agent, run_team, and run_workflow tools
 AND yaml-agno exposes NO parallel GET /ax/tools REST endpoint
@@ -830,7 +830,7 @@ AND every user-scoped DB read carries the composite user_id filter
 
 **¿Cómo descubrir herramientas/agentes llamables?**
 
-**Resolución**: yaml-agno habilita el MCP server nativo de AgentOS (`enable_mcp_server=True` en `super().__init__()`), que expone `run_agent` / `run_team` / `run_workflow` (`os/mcp.py:227-264`). No se agrega un endpoint REST paralelo de AX — eso sería reinventar MCP. Una superficie REST opcional read-only se menciona sólo para clientes non-MCP, pero el path soportado es MCP.
+**Resolución**: yaml-agno habilita el MCP server nativo de AgentOS (`mcp_server=True` en `super().__init__()`), que expone `run_agent` / `run_team` / `run_workflow` (`os/mcp.py:227-264`). No se agrega un endpoint REST paralelo de AX — eso sería reinventar MCP. Una superficie REST opcional read-only se menciona sólo para clientes non-MCP, pero el path soportado es MCP.
 
 ---
 

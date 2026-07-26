@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_06"]
 Group: "G4-Memoria-Aprendizaje"
 Read_Order: 8
 Last_Updated: "2026-07-02"
-Revision_Note: "Iter 4. Unified user_id as a single composite {tenant_id}:{principal_id} across all of yaml-agno (HTTP + autonomous). resolve_user_id() is now THE single resolver (SPEC_06 TenantContextMiddleware calls it instead of building the composite inline). Signature takes principal_id + tenant_id; returns f'{tenant_id}:{principal_id}', never bare, never None. system_user_id is documented as the principal part only (tenant prefixed at resolve time). TASK_005 updated to assert the composite. Iter 3. Collapsed the repeated 'no Engram / no Port / no adapter / no external backend' directives and the PII/secret pointers into ONE canonical @ai-directive block at the top (single source of truth), removing redundant repetitions from body sections. Added system_user_id (Agno user_id=None silently collapses to a shared 'default' bucket; yaml-agno always injects an explicit user_id and fails fast at config-build time when none resolves). Added configurable retention: block (replacing the fixed 30/90/7-day architecture constants; Agno has no native retention). Added memory scopes mapping (namespace taxonomy: org/tenant/agent/user/team) with the entity_memory/learned_knowledge namespace-inheritance gotcha. Marked compression_threshold as a task-dependent configurable example owned by SPEC_15. Rewrote Section 8 strategic questions as RESOLVED with their configured mechanism. Iter 3 (factual follow-up): corrected Agno version references v2.6.14 -> v2.6.18 throughout (verified against agno/libs/agno/pyproject.toml)."
+Revision_Note: "Iter 4. Unified user_id as a single composite {tenant_id}:{principal_id} across all of yaml-agno (HTTP + autonomous). resolve_user_id() is now THE single resolver (SPEC_06 TenantContextMiddleware calls it instead of building the composite inline). Signature takes principal_id + tenant_id; returns f'{tenant_id}:{principal_id}', never bare, never None. system_user_id is documented as the principal part only (tenant prefixed at resolve time). TASK_005 updated to assert the composite. Iter 3. Collapsed the repeated 'no Engram / no Port / no adapter / no external backend' directives and the PII/secret pointers into ONE canonical @ai-directive block at the top (single source of truth), removing redundant repetitions from body sections. Added system_user_id (Agno user_id=None silently collapses to a shared 'default' bucket; yaml-agno always injects an explicit user_id and fails fast at config-build time when none resolves). Added configurable retention: block (replacing the fixed 30/90/7-day architecture constants; Agno has no native retention). Added memory scopes mapping (namespace taxonomy: org/tenant/agent/user/team) with the entity_memory/learned_knowledge namespace-inheritance gotcha. Marked compression_threshold as a task-dependent configurable example owned by SPEC_15. Rewrote Section 8 strategic questions as RESOLVED with their configured mechanism. Iter 3 (factual follow-up): corrected Agno version references v2.6.14 -> 2.8.3 throughout (verified against agno/libs/agno/pyproject.toml)."
 ---
 
 # SPEC_04_MEMORY_ARCHITECTURE
@@ -154,7 +154,7 @@ agent:
 
 ### 1.4 User Identity & Memory Scoping — composite user_id, no anonymous "default" bucket
 
-**Footgun (verified against Agno v2.6.18 source).** `user_id` is `Optional[str]=None` in `Agent.run`/`arun` (agno/agent/agent.py:1288,1342,1448) and in `Workflow.run`/`arun` (agno/workflow/workflow.py:405,468,495). When `user_id` is `None`, `MemoryManager` converts it to the literal string `"default"` in EVERY method (agno/memory/manager.py:177,191,205,239...). The result: **all anonymous runs across ALL agents in the process read/write the SAME shared `"default"` memory bucket**. This is cross-talk. Agno has NO concept of a "system user" or "agent user"; the only special `user_id` is `"default"` (the `None` fallback).
+**Footgun (verified against Agno 2.8.3 source).** `user_id` is `Optional[str]=None` in `Agent.run`/`arun` (agno/agent/agent.py:1288,1342,1448) and in `Workflow.run`/`arun` (agno/workflow/workflow.py:405,468,495). When `user_id` is `None`, `MemoryManager` converts it to the literal string `"default"` in EVERY method (agno/memory/manager.py:177,191,205,239...). The result: **all anonymous runs across ALL agents in the process read/write the SAME shared `"default"` memory bucket**. This is cross-talk. Agno has NO concept of a "system user" or "agent user"; the only special `user_id` is `"default"` (the `None` fallback).
 
 **yaml-agno rule — ONE composite user_id EVERYWHERE.** yaml-agno has a SINGLE user_id mechanism: the composite `"{tenant_id}:{principal_id}"`, ALWAYS. There is no bare principal and no tenant-less `system_user_id` reaching Agno. The composite flows through Agno's native `user_isolation` (SPEC_06), so tenant isolation covers BOTH HTTP requests AND autonomous/workflow runs (which carry their config's `tenant_id` into the composite).
 
@@ -169,7 +169,7 @@ agent:
 #                Returns the COMPOSITE "{tenant_id}:{principal_id}", NEVER a bare
 #                principal, NEVER None. TenantContextMiddleware (SPEC_06) calls
 #                this instead of building the composite inline.
-#                Verified against Agno v2.6.18: MemoryManager coerces user_id=None
+#                Verified against Agno 2.8.3: MemoryManager coerces user_id=None
 #                to the literal "default" string (agno/memory/manager.py:177,191,
 #                205,239...), causing cross-talk between anonymous runs.
 
@@ -260,7 +260,7 @@ def resolve_user_id(memory_cfg: Any,
 
 ### 1.5 Memory Scopes & Sharing — namespace mapping
 
-**Agno namespace facts (verified v2.6.18).** Of the 6 `LearningMachine` stores, only **`learned_knowledge`** and **`entity_memory`** accept a free-string `namespace` (`agno/learn/machine.py:88`, default `"global"`; configurable on `LearnedKnowledgeConfig.namespace` at config.py:272 and `EntityMemoryConfig.namespace` at config.py:347). The other 4 stores have FIXED scopes: `user_profile`/`user_memory` → `user_id`; `session_context` → `session_id`; `decision_log` → `agent_id`. For `namespace="user"` WITHOUT a `user_id`, Agno does **NOT** raise — it logs a warning and returns `False` (silent drop), so yaml-agno MUST validate before calling.
+**Agno namespace facts (verified 2.8.3).** Of the 6 `LearningMachine` stores, only **`learned_knowledge`** and **`entity_memory`** accept a free-string `namespace` (`agno/learn/machine.py:88`, default `"global"`; configurable on `LearnedKnowledgeConfig.namespace` at config.py:272 and `EntityMemoryConfig.namespace` at config.py:347). The other 4 stores have FIXED scopes: `user_profile`/`user_memory` → `user_id`; `session_context` → `session_id`; `decision_log` → `agent_id`. For `namespace="user"` WITHOUT a `user_id`, Agno does **NOT** raise — it logs a warning and returns `False` (silent drop), so yaml-agno MUST validate before calling.
 
 **Gotcha.** `LearningMachine.namespace` (top-level) is inherited by `entity_memory` but **NOT** by `learned_knowledge` (which defaults back to `"global"`). If YAML sets a top-level `namespace`/`scope`, it MUST also be set explicitly on `learned_knowledge.scope`, or the two stores diverge silently.
 
@@ -434,7 +434,7 @@ async def recall_on_start(agent,
     """
     if learning_cfg.enabled:
         # Rich path: LearningMachine.arecall returns a dict per store.
-        # See agno/learn/machine.py (Agno v2.6.18).
+        # See agno/learn/machine.py (Agno 2.8.3).
         recalled = await agent.learning_machine.arecall(
             user_id=user_id,
             message=message,
@@ -448,7 +448,7 @@ async def recall_on_start(agent,
         ]
 
     # Simple path: MemoryManager.aget_user_memories returns List[UserMemory].
-    # See agno/memory/manager.py (Agno v2.6.18).
+    # See agno/memory/manager.py (Agno 2.8.3).
     memories = await agent.memory.aget_user_memories(user_id=user_id)
     return [
         {"store": "user_memory", "data": {"memory": m.memory, "input": m.input}}
@@ -464,7 +464,7 @@ async def recall_on_start(agent,
 # yaml-agno/src/memory/autosave.py
 # @ai-directive: Write routes are selected by the learning.enabled flag and by
 #                artifact type. There is NO Port and NO adapter; yaml-agno calls
-#                the real Agno v2.6.18 APIs directly.
+#                the real Agno 2.8.3 APIs directly.
 
 from uuid import uuid4
 
@@ -486,7 +486,7 @@ class AutosaveManager:
         (agno/learn/stores/learned_knowledge.py).
       * learning.enabled is False -> ``MemoryManager.add_user_memory(memory=UserMemory(...), user_id)``
         (agno/memory/manager.py). NOTE: this method is SYNCHRONOUS in Agno
-        v2.6.18 (no async variant), so it is called WITHOUT await.
+        2.8.3 (no async variant), so it is called WITHOUT await.
     """
 
     def __init__(self, agent, learning_cfg, user_id: str | None = None):
@@ -510,7 +510,7 @@ class AutosaveManager:
             # Rich path: DecisionLogStore.asave takes a DecisionLog object
             # (id and decision are required; reasoning optional). The required
             # scalar is ``decision`` (NOT ``content``). See agno/learn/stores/
-            # decision_log.py and agno/learn/schemas.py (Agno v2.6.18).
+            # decision_log.py and agno/learn/schemas.py (Agno 2.8.3).
             await self.agent.learning_machine.decision_log_store.asave(
                 decision=DecisionLog(
                     id=str(uuid4()),
@@ -523,7 +523,7 @@ class AutosaveManager:
             return
 
         # Simple path: MemoryManager.add_user_memory is SYNCHRONOUS in Agno
-        # v2.6.18 (no async variant). Call it without await.
+        # 2.8.3 (no async variant). Call it without await.
         self.agent.memory.add_user_memory(
             memory=UserMemory(
                 memory=f"Decision by {agent_name}: {decision}",
@@ -548,7 +548,7 @@ class AutosaveManager:
             # Rich path: LearnedKnowledgeStore.asave signature is
             # (title, learning, context=None, tags=None, user_id=None,
             #  agent_id=None, team_id=None, namespace=None).
-            # See agno/learn/stores/learned_knowledge.py (Agno v2.6.18).
+            # See agno/learn/stores/learned_knowledge.py (Agno 2.8.3).
             await self.agent.learning_machine.learned_knowledge_store.asave(
                 title=title,
                 learning=content,
@@ -558,7 +558,7 @@ class AutosaveManager:
             return
 
         # Simple path: MemoryManager.add_user_memory is SYNCHRONOUS in Agno
-        # v2.6.18 (no async variant). Call it without await.
+        # 2.8.3 (no async variant). Call it without await.
         self.agent.memory.add_user_memory(
             memory=UserMemory(memory=f"{title}: {content}"),
             user_id=self.user_id,
@@ -716,7 +716,7 @@ AND no Port or adapter is involved
       await mgr.on_agent_decision(agent_name="a", decision="d", reasoning="r")
       fake_agent_simple.memory.add_user_memory.assert_called_once()
       # NOTE: assert_called_once (NOT assert_awaited_once) because
-      # MemoryManager.add_user_memory is synchronous in Agno v2.6.18.
+      # MemoryManager.add_user_memory is synchronous in Agno 2.8.3.
   ```
 - **GREEN**: Implement `AutosaveManager` routing writes to LearningMachine stores
   (`decision_log_store.asave(DecisionLog(...))` / `learned_knowledge_store.asave(...)`)

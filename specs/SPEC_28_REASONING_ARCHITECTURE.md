@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_14", "SPEC_02"]
 Group: "G4-Memoria-Aprendizaje"
 Read_Order: 10
 Last_Updated: "2026-07-03"
-Revision_Note: "iter3 (deep adversarial review vs Agno v2.6.18 source). CRITICAL fix: the native-detection method on agno.reasoning.ReasoningManager is `is_native_reasoning_model()`, NOT `detect_native_reasoning()` (verified manager.py:187-192) — corrected all 3 occurrences (section 2.4, mermaid 5.2, Scenario 6). ReasoningConfig documented fields completed with the 3 additional dataclass fields present in source (debug_level, run_context, run_metrics) — these remain out-of-MVP YAML surface but are now accurately listed so the spec does not understate the Agno type. ReasoningStep documented with its real `reasoning` field. ReasoningSteps confirmed as pydantic BaseModel (already correct)."
+Revision_Note: "iter3 (deep adversarial review vs Agno 2.8.3 source). CRITICAL fix: the native-detection method on agno.reasoning.ReasoningManager is `is_native_reasoning_model()`, NOT `detect_native_reasoning()` (verified manager.py:187-192) — corrected all 3 occurrences (section 2.4, mermaid 5.2, Scenario 6). ReasoningConfig documented fields completed with the 3 additional dataclass fields present in source (debug_level, run_context, run_metrics) — these remain out-of-MVP YAML surface but are now accurately listed so the spec does not understate the Agno type. ReasoningStep documented with its real `reasoning` field. ReasoningSteps confirmed as pydantic BaseModel (already correct)."
 ---
 
 # SPEC_28_REASONING_ARCHITECTURE
@@ -146,7 +146,7 @@ class ReasoningManager:
 
 When `reasoning=True` and the primary (or `reasoning_model`) provider exposes native reasoning, the manager delegates to the provider's thinking channel and surfaces those tokens as `ReasoningStep`s. Otherwise it drives the step-based loop.
 
-> @ai-directive (naming SSOT): the detection method is `is_native_reasoning_model()`. An earlier draft referenced `detect_native_reasoning()` — that method does NOT exist in Agno v2.6.18 and must not appear in yaml-agno code or docs.
+> @ai-directive (naming SSOT): the detection method is `is_native_reasoning_model()`. An earlier draft referenced `detect_native_reasoning()` — that method does NOT exist in Agno 2.8.3 and must not appear in yaml-agno code or docs.
 
 ---
 

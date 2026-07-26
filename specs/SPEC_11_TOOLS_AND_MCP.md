@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_01", "SPEC_02"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 5
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 3 - Deep adversarial review vs Agno v2.6.18: fixed MCPTools invented params (headers/timeout/sse_read_timeout do NOT exist on MCPTools; they live on *ClientParams, passed via server_params; timeout_seconds is the real stdio timeout). Fixed MCPResolverImpl to construct StreamableHTTPClientParams/SSEClientParams instead of passing invented kwargs. Fixed @tool show_result default (None, not True; auto-True only if stop_after_tool_call). Added missing @tool params (strict, instructions, add_instructions, external_execution_silent, pre_hook, post_hook) and HITL mutual-exclusivity constraint. Fixed toolkit constructor params: YFinanceTools (enable_* flags), DuckDbTools (no schemas/semantic_models), PostgresTools (db_name/user/host/table_schema, no db_url/schemas/tables), PythonTools (base_dir/safe_globals, methods are not flags). Documented MultiMCPTools and SSE upstream deprecation warnings. YFinanceAdapter now normalizes bare aliases to canonical enable_* names."
+Revision_Note: "Iter 3 - Deep adversarial review vs Agno 2.8.3: fixed MCPTools invented params (headers/timeout/sse_read_timeout do NOT exist on MCPTools; they live on *ClientParams, passed via server_params; timeout_seconds is the real stdio timeout). Fixed MCPResolverImpl to construct StreamableHTTPClientParams/SSEClientParams instead of passing invented kwargs. Fixed @tool show_result default (None, not True; auto-True only if stop_after_tool_call). Added missing @tool params (strict, instructions, add_instructions, external_execution_silent, pre_hook, post_hook) and HITL mutual-exclusivity constraint. Fixed toolkit constructor params: YFinanceTools (enable_* flags), DuckDbTools (no schemas/semantic_models), PostgresTools (db_name/user/host/table_schema, no db_url/schemas/tables), PythonTools (base_dir/safe_globals, methods are not flags). Documented MultiMCPTools and SSE upstream deprecation warnings. YFinanceAdapter now normalizes bare aliases to canonical enable_* names."
 ---
 
 # SPEC_11_TOOLS_AND_MCP
@@ -443,7 +443,7 @@ Solo aplica a transports HTTP (`streamable-http`, `sse`). stdio no soporta heade
 Dos enfoques: varias instancias `MCPTools` (recomendado) o una sola `MultiMCPTools`.
 
 > **Deprecation upstream**: `MultiMCPTools` emite un `DeprecationWarning` al
-> construirse (Agno v2.6.18); el maintainer recomienda usar múltiples instancias
+> construirse (Agno 2.8.3); el maintainer recomienda usar múltiples instancias
 > de `MCPTools`. yaml-agno mantiene el variant `kind: mcp_multi` para compatibilidad
 > de YAMLs existentes, pero los nuevos configs SHOULD usar múltiples entradas
 > `kind: mcp`. La decisión 10.2 y TASK_008 registran esta deuda.

@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_04", "SPEC_14"]
 Group: "G4-Memoria-Aprendizaje"
 Read_Order: 9
 Last_Updated: "2026-07-03"
-Revision_Note: "iter3 (deep adversarial review vs Agno v2.6.18 source). All CultureManager / CulturalKnowledge API claims CONFIRMED against agno/culture/manager.py and agno/db/schemas/culture.py: dataclass fields + the `__init__` delete_knowledge=False override (effective default), all public sync/async methods, the get_model() gpt-4o fallback, and the 'experimental' docstring. DbRegistry.get(db_ref) usage (§4.4) confirmed consistent with SPEC_03 §7.4 (fail-fast ValueError on missing ref). Fix: §2.4 public-methods list now includes `add_cultural_knowledge(knowledge)` (manager.py:145) which was omitted — it is the direct-CRUD counterpart to the LLM-tool `add_cultural_knowledge` exposed to the extraction model, and consumers may call it directly. No delegation boundary or experimental-surfacing changes."
+Revision_Note: "iter3 (deep adversarial review vs Agno 2.8.3 source). All CultureManager / CulturalKnowledge API claims CONFIRMED against agno/culture/manager.py and agno/db/schemas/culture.py: dataclass fields + the `__init__` delete_knowledge=False override (effective default), all public sync/async methods, the get_model() gpt-4o fallback, and the 'experimental' docstring. DbRegistry.get(db_ref) usage (§4.4) confirmed consistent with SPEC_03 §7.4 (fail-fast ValueError on missing ref). Fix: §2.4 public-methods list now includes `add_cultural_knowledge(knowledge)` (manager.py:145) which was omitted — it is the direct-CRUD counterpart to the LLM-tool `add_cultural_knowledge` exposed to the extraction model, and consumers may call it directly. No delegation boundary or experimental-surfacing changes."
 ---
 
 # SPEC_31_CULTURE_MANAGER

@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_06", "SPEC_09", "SPEC_13"]
 Group: "G7-ControlPlane-API"
 Read_Order: 19
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 3 (deep review vs agno v2.6.18). Reconciled the parameter table with the REAL agno.os.AgentOS.__init__ signature: added a2a_interface, mcp_config (MCPServerConfig, not just the enable bool), on_route_conflict, telemetry, registry, scheduler_base_url, internal_service_token, checkpoint, id/description/version; the table is now an explicit subset (not a hard 18-count claim) and flags which kwargs AgentOSFactory forwards vs which are native-only. Fixed AgentOSConfig.to_agno_kwargs to exclude None so unresolved refs do not override AgentOS defaults. Wave 3 fixes from iter2 verified intact (ResyncSettings ordering, injected ConfigManager, rate-based CircuitBreaker, plain-prose sequence Note)."
+Revision_Note: "Iter 3 (deep review vs agno 2.8.3). Reconciled the parameter table with the REAL agno.os.AgentOS.__init__ signature: added a2a_interface, mcp_config (MCPServerConfig, not just the enable bool), on_route_conflict, telemetry, registry, scheduler_base_url, internal_service_token, checkpoint, id/description/version; the table is now an explicit subset (not a hard 18-count claim) and flags which kwargs AgentOSFactory forwards vs which are native-only. Fixed AgentOSConfig.to_agno_kwargs to exclude None so unresolved refs do not override AgentOS defaults. Wave 3 fixes from iter2 verified intact (ResyncSettings ordering, injected ConfigManager, rate-based CircuitBreaker, plain-prose sequence Note)."
 ---
 
 # SPEC_12_AGENTOS_CONTROL_PLANE
@@ -62,7 +62,7 @@ flowchart LR
 
 ## 2. AGENTOS CONSTRUCTOR - PARÁMETROS
 
-> @ai-directive: The `agno.os.AgentOS.__init__` (verified against agno v2.6.18,
+> @ai-directive: The `agno.os.AgentOS.__init__` (verified against agno 2.8.3,
 > `libs/agno/agno/os/app.py`) exposes ~32 parameters. yaml-agno does NOT forward
 > all of them. The table below is the EXPLICIT SUBSET that the `AgentOSFactory`
 > resolves from YAML. Native-only parameters (auto-managed by AgentOS, not
@@ -86,7 +86,7 @@ Cada parámetro mapea a un campo del aggregate `AgentOSConfig`. La columna "YAML
 | 10 | `lifespan` | `Any` | `None` | `agentos.lifespan` | `LifespanAdapter` |
 | 11 | `authorization` | `bool` | `False` | `agentos.authorization.enabled` | `AuthorizationAdapter` |
 | 12 | `authorization_config` | `AuthorizationConfig` | `None` | `agentos.authorization.config` | `AuthorizationAdapter` |
-| 13 | `enable_mcp_server` | `bool` | `False` | `agentos.mcp.enabled` | `MCPServerLifecycle` |
+| 13 | `mcp_server` | `bool` | `False` | `agentos.mcp.enabled` | `MCPServerLifecycle` |
 | 14 | `mcp_config` | `MCPServerConfig` | `None` | `agentos.mcp.config` | `MCPServerLifecycle` |
 | 15 | `a2a_interface` | `bool` | `False` | `agentos.a2a_interface` | `A2AInterfaceFactory` (SPEC_26) |
 | 16 | `cors_allowed_origins` | `List[str]` | `None` | `agentos.cors_allowed_origins` | `FastAPIAppBuilder` |
@@ -142,7 +142,7 @@ class MCPServerSettings(BaseModel):
     port: Optional[int] = None
     # mcp_config passthrough: when present, AgentOSFactory builds an
     # agno.os.config.MCPServerConfig and forwards it as the `mcp_config` kwarg
-    # (NOT just enable_mcp_server). tools_to_expose maps to MCPServerConfig.tools.
+    # (NOT just mcp_server). tools_to_expose maps to MCPServerConfig.tools.
 
 class SchedulerSettings(BaseModel):
     enabled: bool = False
@@ -297,9 +297,9 @@ agentos:
 
 RBAC con JWT. Ver Sección 9. Integración con SPEC_19.
 
-### 2.13 `enable_mcp_server` / `mcp_config`
+### 2.13 `mcp_server` / `mcp_config`
 
-Ver Sección 5 (MCP server mode). `enable_mcp_server` es el bool de activación;
+Ver Sección 5 (MCP server mode). `mcp_server` es el bool de activación;
 `mcp_config` (`MCPServerConfig` de Agno) scopa los built-in tools y registra
 tools custom. El `MCPServerSettings.tools_to_expose` se traduce a
 `MCPServerConfig.tools` y se pasa como `mcp_config=` (NO solo el flag).
@@ -539,7 +539,7 @@ class MCPServerPort(Protocol):
     def stop(self) -> None: ...
 
 class MCPServerLifecycle:
-    """When enable_mcp_server=True, AgentOS itself is exposed as an MCP server,
+    """When mcp_server=True, AgentOS itself is exposed as an MCP server,
     so external MCP clients can invoke its agents/teams/tools."""
 
     def enable(self, agentos, settings: MCPServerSettings) -> None:
@@ -563,7 +563,7 @@ agentos:
 
 - `start()` se conecta en el `lifespan` de startup.
 - `stop()` se invoca en shutdown.
-- Si `run_hooks_in_background` y `enable_mcp_server` están ambos activos, el MCP server reusa el bus de hooks para notificaciones.
+- Si `run_hooks_in_background` y `mcp_server` están ambos activos, el MCP server reusa el bus de hooks para notificaciones.
 
 ```mermaid
 sequenceDiagram

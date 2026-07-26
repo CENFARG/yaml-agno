@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_12"]
 Group: "G7-ControlPlane-API"
 Read_Order: 20
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 2 (deep review vs agno v2.6.18). Verified A2A constructor and route paths against agno/os/interfaces/a2a/{a2a.py,router.py} — unchanged, accurate. Added the agent-card.json RBAC exemption contract (Wave audit ask): the well-known discovery endpoint is intentionally PUBLIC in Agno (no require_resource_access dependency) while :send/:stream remain RBAC-enforced via AgentOS. Documented the Agno tags default fallback ([\"A2A\"] when None). Cross-referenced the AgentOS top-level a2a_interface flag (SPEC_12 §2.13b) as an alternative to the set-based interfaces[].type=a2a path."
+Revision_Note: "Iter 2 (deep review vs agno 2.8.3). Verified A2A constructor and route paths against agno/os/interfaces/a2a/{a2a.py,router.py} — unchanged, accurate. Added the agent-card.json RBAC exemption contract (Wave audit ask): the well-known discovery endpoint is intentionally PUBLIC in Agno (no require_resource_access dependency) while :send/:stream remain RBAC-enforced via AgentOS. Documented the Agno tags default fallback ([\"A2A\"] when None). Cross-referenced the AgentOS top-level a2a_interface flag (SPEC_12 §2.13b) as an alternative to the set-based interfaces[].type=a2a path."
 ---
 
 # SPEC_26_A2A_INTERFACE

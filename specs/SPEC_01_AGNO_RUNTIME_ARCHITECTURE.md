@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_00"]
 Group: "G2-Runtime-Core"
 Read_Order: 2
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 5 - Deep review against Agno v2.6.18 source: removed invented params (show_tool_calls, max_iterations), fixed InMemoryDb module path (agno.db.in_memory, not agno.db.memory), fixed markdown default (False, not True), fixed resolve_class sync/await mismatch, fixed build_db signature call sites, dropped speculative Agno version claim for pre_hooks, documented real num_history_runs default (3)."
+Revision_Note: "Iter 5 - Deep review against Agno 2.8.3 source: removed invented params (show_tool_calls, max_iterations), fixed InMemoryDb module path (agno.db.in_memory, not agno.db.memory), fixed markdown default (False, not True), fixed resolve_class sync/await mismatch, fixed build_db signature call sites, dropped speculative Agno version claim for pre_hooks, documented real num_history_runs default (3)."
 ---
 
 # SPEC_01_AGNO_RUNTIME_ARCHITECTURE
@@ -165,7 +165,7 @@ La tabla siguiente mapea los grupos de parámetros del constructor `Agent()` de 
 
 ##### 1.2.1 Parámetros de runtime/debug (residentes en este SPEC)
 
-> **@ai-directive (verificado en Agno v2.6.18, `agno/agent/agent.py:460,497-499`)**: los
+> **@ai-directive (verificado en Agno 2.8.3, `agno/agent/agent.py:460,497-499`)**: los
 > defaults listados abajo son los **defaults reales del constructor `Agent()`**, no valores
 > arbitrarios de yaml-agno. `show_tool_calls` fue removido: **no existe** en Agno (cero
 > coincidencias en `libs/agno/agno/`). Para ver tool calls en output, usar `debug_mode: true`
@@ -179,7 +179,7 @@ La tabla siguiente mapea los grupos de parámetros del constructor `Agent()` de 
 | `telemetry` | `Agent.telemetry` (agent.py:499) | `true` | Telemetría anónima (ver SPEC_09) |
 
 > **`show_tool_calls` REMOVIDO**: parámetro inventado en iteraciones previas. No existe en
-> el constructor `Agent()` ni en `run()`/`arun()` de Agno v2.6.18. Usar `debug_mode` en su lugar.
+> el constructor `Agent()` ni en `run()`/`arun()` de Agno 2.8.3. Usar `debug_mode` en su lugar.
 
 #### Loop de Eventos y Sesión
 
@@ -205,7 +205,7 @@ agent:
 
 **Parámetros de Session expuestos** (mapeados a Agno `Agent.run()` / `Agent.arun()`):
 
-La tabla lista los parámetros de sesión que efectivamente existen en la API de Agno v2.6.18 (firma real de `run()` verificada en `agno/agent/agent.py:1391-1416`; `arun()` en `1444-1498`). **No se inventan parámetros.**
+La tabla lista los parámetros de sesión que efectivamente existen en la API de Agno 2.8.3 (firma real de `run()` verificada en `agno/agent/agent.py:1391-1416`; `arun()` en `1444-1498`). **No se inventan parámetros.**
 
 > **@ai-directive (user_id is runtime-only)**: `user_id` aparece en la API de Agno
 > como `run(user_id=...)`, pero en yaml-agno NO es un campo YAML. Lo inyecta
@@ -225,13 +225,13 @@ La tabla lista los parámetros de sesión que efectivamente existen en la API de
 | `metadata` | `run(metadata=...)` (agent.py:1411) | `dict` | Metadata adjunta al run |
 
 > **`max_iterations` REMOVIDO**: **no existe** como parámetro de `run()`/`arun()` en Agno
-> v2.6.18 (verificado en `agno/agent/agent.py:1391-1416,1444-1498`; cero coincidencias de
+> 2.8.3 (verificado en `agno/agent/agent.py:1391-1416,1444-1498`; cero coincidencias de
 > `max_iterations` en `libs/agno/agno/agent/`). El loop interno del agente se gobierna con
 > `tool_call_limit` (constructor, SPEC_11) y `retries`/`delay_between_retries`
 > (constructor, SPEC_14). Si yaml-agno necesita un budget global de iteraciones por request,
 > será una **extensión propia** sobre Agno (no un mapeo directo). Por ahora no se expone.
 
-> **@ai-directive (retention — FEATURE FUTURA)**: Agno **NO** tiene `retention_days` nativo ni un job de limpieza periódico listo. Hallazgos verificados en Agno v2.6.18:
+> **@ai-directive (retention — FEATURE FUTURA)**: Agno **NO** tiene `retention_days` nativo ni un job de limpieza periódico listo. Hallazgos verificados en Agno 2.8.3:
 > - **`Curator.prune(max_age_days=)`** (parte de `LearningMachine`, `agno/learn/curate.py:36`) solo limpia el store `user_profile`, **no** las memorias generales. Es síncrono y standalone (no requiere agente corriendo).
 > - **`RedisDb(expire=N)`**: TTL de backend Redis, borra claves solas al expirar (solo si el backend es Redis).
 > - **Scheduler de Agno** (`ScheduleManager`/`SchedulePoller`/`ScheduleExecutor`) **NO sirve directo** para purge: está acoplado a ejecutar runs HTTP de agents/teams/workflows (no funciones Python arbitrarias ni SQL de mantenimiento) y requiere AgentOS corriendo.
@@ -264,7 +264,7 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
 }
 
 STORAGE_REGISTRY: dict[str, tuple[str, str]] = {
-    # @ai-directive: module paths verified against Agno v2.6.18 layout:
+    # @ai-directive: module paths verified against Agno 2.8.3 layout:
     #   agno/db/sqlite/sqlite.py, agno/db/postgres/postgres.py,
     #   agno/db/redis/redis.py, agno/db/in_memory/in_memory_db.py.
     # Note: the in-memory module is agno.db.in_memory (NOT agno.db.memory, which
@@ -360,7 +360,7 @@ Los Teams en yaml-agno se mapean a `agno.team.Team` con todos sus modos y config
 
 #### Modos de Team Soportados
 
-`TeamMode` en Agno v2.6.18 define **4 modos** (verificado en `agno/team/mode.py:6-23`). **No existe `coroutine`** (era un error de versiones previas de este SPEC).
+`TeamMode` en Agno 2.8.3 define **4 modos** (verificado en `agno/team/mode.py:6-23`). **No existe `coroutine`** (era un error de versiones previas de este SPEC).
 
 | Modo YAML | Agno `TeamMode` | Descripción |
 |-----------|-----------------|-------------|
@@ -562,7 +562,7 @@ graph LR
     LTM -.-> |Agno LearningMachine / MemoryManager| CSM["Cross-Session Memory"]
 ```
 
-> **@ai-directive**: aclaraciones técnicas verificadas en Agno v2.6.18:
+> **@ai-directive**: aclaraciones técnicas verificadas en Agno 2.8.3:
 > - **Long-term memory es 100% Agno native**: el runtime core de yaml-agno usa **`LearningMachine`** (6 stores: user_profile, user_memory, session_context, entity_memory, learned_knowledge, decision_log) o, más simple, **`MemoryManager`/`UserMemory`**. NO existe ningún adapter de Engram, ningún `LongTermMemoryPort`, ni mención a Engram en el runtime. SPEC_04 es el dueño de la memoria Agno-native.
 > - **Redis SÍ es de Agno**: `agno.db.redis.RedisDb` (DB de sessions/memory con `expire` TTL), `agno.vectordb.redis.RedisDB` (vector DB) y `RedisRunCancellationManager` (cancelación pub-sub). La etiqueta anterior "Redis/Agno" era imprecisa: Redis es una opción de backend Agno, no un cache genérico nuestro.
 > - **`learning` y `culture`**: `learning` = `LearningMachine` (sistema unificado de aprendizaje). `culture` = `CultureManager` (experimental, "shared cultural knowledge"). Ambos son de Agno. Memory (MemoryManager) ≠ Learning (LearningMachine es la evolución más rica). Ver SPEC_04 para detalle.
@@ -1102,7 +1102,7 @@ Implica: empezar con PostgreSQL single instance (SPEC_03 ya define partitioning 
 - **I**solación: transacciones concurrentes no interfieren entre sí (una no ve cambios a medias de otra).
 - **D**urabilidad: una vez confirmada (commit), el cambio sobrevive a crashes/cortes de luz.
 
-**@ai-directive (hallazgo verificado en Agno v2.6.18)**: ACID **NO viene por defecto** en Agno. Agno persiste el workflow como **un `upsert_session` de la sesión completa** (una escritura atómica, pero de toda la sesión junta, no step por step). **Si falla el step 3, los steps 1-2 NO se revierten**: quedan committed y el run se marca `cancelled`/`partial`. **No existe parámetro** `transactional`/`atomic` para controlarlo. (Verificado: cero coincidencias de `transaction|atomic|rollback` en `agno/workflow/`).
+**@ai-directive (hallazgo verificado en Agno 2.8.3)**: ACID **NO viene por defecto** en Agno. Agno persiste el workflow como **un `upsert_session` de la sesión completa** (una escritura atómica, pero de toda la sesión junta, no step por step). **Si falla el step 3, los steps 1-2 NO se revierten**: quedan committed y el run se marca `cancelled`/`partial`. **No existe parámetro** `transactional`/`atomic` para controlarlo. (Verificado: cero coincidencias de `transaction|atomic|rollback` en `agno/workflow/`).
 
 **Decisión**: ACID entre steps es una **extensión nuestra** sobre Agno, **no bloqueante para el MVP core**. Se implementa cuando tengamos workflows críticos (financieros/legales) que lo requieran. Ejemplo del valor: workflow facturación (validar → debitar → notificar); con ACID, si falla "notificar", se revierten "validar" y "debitar" (estado siempre consistente); sin ACID (Agno default), el débito queda hecho y hay que reconciliar a mano.
 

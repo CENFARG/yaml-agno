@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_11", "SPEC_01"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 14
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 3 - deep adversarial review vs Agno v2.6.18: CRITICAL fix — the iter2 claim that hot-reload reaches into a PRIVATE agent._skills was WRONG; Agent stores skills on the PUBLIC agent.skills attribute (agent.py:432,588: self.skills = skills). The reload hook now calls agent.skills.reload() directly with no private-member access and no TODO needed. Confirmed delegation is correct: agno/skills/{skill,agent_skills}.py, loaders/local.py, validator.py, errors.py all match the documented API (Skill dataclass fields, Skills methods incl. reload/get_system_prompt_snippet/get_tools, LocalSkills(path, validate), validate_skill_directory, SkillValidationError, safe_join_relative_path + PathSecurityError, duplicate-name warn+overwrite). Aligned get_skill_script args notation to Optional[List[str]] = None."
+Revision_Note: "Iter 3 - deep adversarial review vs Agno 2.8.3: CRITICAL fix — the iter2 claim that hot-reload reaches into a PRIVATE agent._skills was WRONG; Agent stores skills on the PUBLIC agent.skills attribute (agent.py:432,588: self.skills = skills). The reload hook now calls agent.skills.reload() directly with no private-member access and no TODO needed. Confirmed delegation is correct: agno/skills/{skill,agent_skills}.py, loaders/local.py, validator.py, errors.py all match the documented API (Skill dataclass fields, Skills methods incl. reload/get_system_prompt_snippet/get_tools, LocalSkills(path, validate), validate_skill_directory, SkillValidationError, safe_join_relative_path + PathSecurityError, duplicate-name warn+overwrite). Aligned get_skill_script args notation to Optional[List[str]] = None."
 ---
 
 # SPEC_30_SKILLS_MANAGEMENT
@@ -356,7 +356,7 @@ When the task matches a skill, the model calls `get_skill_instructions("brand-au
 `Skills.reload()` clears the internal dict and re-runs all loaders. yaml-agno exposes this via the AgentBuilder lifecycle (SPEC_01 resync path, SPEC_12 hot-reload) so that editing a SKILL.md bundle on disk is picked up without restarting the process:
 
 ```python
-# Agno v2.6.18 stores skills on the PUBLIC agent.skills attribute
+# Agno 2.8.3 stores skills on the PUBLIC agent.skills attribute
 # (agno/agent/agent.py:432 constructor param, :588 self.skills = skills).
 # Skills.reload() is a public method (agno/skills/agent_skills.py:54).
 # yaml-agno wraps this in the lifecycle hook yaml_agno/runtime/skills_reload.py

@@ -174,7 +174,7 @@ agent-ui usa exactamente el stack que el plan iter1 proponía construir desde ce
 | Componentes UI | shadcn/ui (Radix) | Accesible |
 | Estado | Zustand | Sin boilerplate |
 | Animación | Framer Motion | Transiciones |
-| Compatibilidad | Agno v2.x (`main` branch) | Match con AgentOS 2.6.18 |
+| Compatibilidad | Agno v2.x (`main` branch) | Match con AgentOS 2.8.3 |
 
 @ai-directive: When extending the fork, follow agent-ui's existing stack and patterns (Zustand stores, shadcn primitives, Tailwind tokens). Do not introduce a competing state library or UI kit.
 

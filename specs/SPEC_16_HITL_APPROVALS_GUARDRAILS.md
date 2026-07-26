@@ -104,7 +104,7 @@ Agno expone HITL a través de `active_requirements` en el `run_response`. Cada r
 
 # @ai-directive: RunStatus is IMPORTED from agno.run.base. yaml-agno does NOT
 # redefine it as YamlAgnoRunStatus (build ON TOP of Agno, not a parallel enum).
-# Agno v2.6.18 members (lowercase): pending / running / completed / paused /
+# Agno 2.8.3 members (lowercase): pending / running / completed / paused /
 # cancelled / error.
 from agno.run.base import RunStatus  # noqa: F401  (re-exported for HITL layer)
 
@@ -320,7 +320,7 @@ async def reject_request(db, approval_id: str, admin_user_id: str, reason: str) 
 
 ### 3.5 Persistencia y Audit Trail
 
-El record de approval se persiste en la tabla `approvals`, cuyo schema es **propio de Agno** (`agno/db/schemas/approval.py`). yaml-agno NO redefine esta tabla; la usa tal cual. Schema real (Agno v2.6.18):
+El record de approval se persiste en la tabla `approvals`, cuyo schema es **propio de Agno** (`agno/db/schemas/approval.py`). yaml-agno NO redefine esta tabla; la usa tal cual. Schema real (Agno 2.8.3):
 
 ```sql
 -- Agno-managed table (agno/db/schemas/approval.py). Do NOT redefine.

@@ -107,7 +107,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 
 ### 2.4 Owner SPEC_04 - Agno Native Memory Configuration
 
-> @ai-directive: yaml-agno does NOT own a session runtime, a memory FIFO, a `LongTermMemoryPort`, or any adapter. Long-term memory is 100% Agno native; yaml-agno only CONFIGURES it from YAML (Agent constructor flags + `learning:` block) and drives the REAL Agno v2.6.18 APIs. The rich path (`learning.enabled=true`) uses `LearningMachine` (recall via `arecall`, writes via `decision_log_store.asave(DecisionLog)` / `learned_knowledge_store.asave(...)`); the simple path uses `MemoryManager` (`aget_user_memories` for recall, the SYNCHRONOUS `add_user_memory(UserMemory, user_id)` for writes). Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
+> @ai-directive: yaml-agno does NOT own a session runtime, a memory FIFO, a `LongTermMemoryPort`, or any adapter. Long-term memory is 100% Agno native; yaml-agno only CONFIGURES it from YAML (Agent constructor flags + `learning:` block) and drives the REAL Agno 2.8.3 APIs. The rich path (`learning.enabled=true`) uses `LearningMachine` (recall via `arecall`, writes via `decision_log_store.asave(DecisionLog)` / `learned_knowledge_store.asave(...)`); the simple path uses `MemoryManager` (`aget_user_memories` for recall, the SYNCHRONOUS `add_user_memory(UserMemory, user_id)` for writes). Compression (`ContextCompressor`) lives in SPEC_15; PII/secret sanitization lives in SPEC_16 - NOT here.
 
 | Catalog ID | Owner SPEC task | Component | File | Test |
 |------------|-----------------|-----------|------|------|
@@ -135,7 +135,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 
 ### 2.6 Owner SPEC_06 - API and AX (inheritance layer over AgentOS)
 
-> @ai-directive: yaml-agno does NOT own `/run`, `/sessions`, `/agents` config, or `/health` endpoints — those are AgentOS native. SPEC_06 defines `class YamlAgentOS(AgentOS)` (subclass) and overrides `get_app()` to register extensions AFTER `super().get_app()`. It adds: config loading (via core-cenf-py ConfigManager), readiness/liveness routers, RateLimitMiddleware, TenantContextMiddleware (composite `user_id` on AgentOS native `user_isolation`), and AX discovery via the NATIVE MCP server (`enable_mcp_server`). No `gaps/` folder (SOTA `src/api/` layout). `AgentRunRequest`/`AgentRunResponse` DTOs were removed (native multipart/{id} wire contract). `MediaInput` is an internal model (maps to `agno.media.*`), shared with SPEC_17.
+> @ai-directive: yaml-agno does NOT own `/run`, `/sessions`, `/agents` config, or `/health` endpoints — those are AgentOS native. SPEC_06 defines `class YamlAgentOS(AgentOS)` (subclass) and overrides `get_app()` to register extensions AFTER `super().get_app()`. It adds: config loading (via core-cenf-py ConfigManager), readiness/liveness routers, RateLimitMiddleware, TenantContextMiddleware (composite `user_id` on AgentOS native `user_isolation`), and AX discovery via the NATIVE MCP server (`mcp_server`). No `gaps/` folder (SOTA `src/api/` layout). `AgentRunRequest`/`AgentRunResponse` DTOs were removed (native multipart/{id} wire contract). `MediaInput` is an internal model (maps to `agno.media.*`), shared with SPEC_17.
 
 | Catalog ID | Owner SPEC task | Component | File | Test |
 |------------|-----------------|-----------|------|------|
@@ -144,7 +144,7 @@ The following classes were removed in iteration 1 of SPEC_00-02 and MUST NOT app
 | S06-T03 | SPEC_06 TASK_003 | `get_readiness_router()` + `get_liveness_router()` (DB-gated readiness; factory style mirroring `get_health_router`) | `src/api/health.py` | `tests/integration/api/test_health_endpoints.py` |
 | S06-T04 | SPEC_06 TASK_004 | `RateLimitMiddleware` (keyed on composite user_id; AgentOS has none) | `src/api/middleware/rate_limit.py` | `tests/unit/api/test_rate_limit.py` |
 | S06-T05 | SPEC_06 TASK_005 | `TenantContextMiddleware` (extracts tenant+principal, DELEGATES to `resolve_user_id()` (SPEC_04) for composite `{tenant_id}:{principal_id}` -> `request.state.user_id`; `user_isolation=True` always-on; no RLS) | `src/api/middleware/tenant_context.py` | `tests/unit/api/test_tenant_context.py` |
-| S06-T06 | SPEC_06 TASK_006 | AX discovery via native MCP server (`enable_mcp_server=True`; exposes `run_agent`/`run_team`/`run_workflow`) | (config wiring in `YamlAgentOS`) | `tests/integration/api/test_mcp_discovery.py` |
+| S06-T06 | SPEC_06 TASK_006 | AX discovery via native MCP server (`mcp_server=True`; exposes `run_agent`/`run_team`/`run_workflow`) | (config wiring in `YamlAgentOS`) | `tests/integration/api/test_mcp_discovery.py` |
 | S06-T07 | SPEC_06 TASK_007 | Document native AgentOS multipart/{id} wire contract + backend sanitization/validation rule | `docs/api/wire_contract.md` | `tests/contract/test_wire_contract.py` |
 | S06-T08 | SPEC_06 TASK_008 | Contract: no own `/run`/`/sessions`/`/agents` routes AND `user_isolation` always-on + user_id never None (NULL-bucket guard) | `tests/contract/test_no_duplicate_routes.py` | (same) |
 
