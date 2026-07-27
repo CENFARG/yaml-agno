@@ -77,6 +77,21 @@ graph TD
     Native --> N10[Meta]
     Native --> N11[DashScope]
     Native --> N12[Vercel]
+    Native --> N13[Cerebras]
+    Native --> N14[Cloudflare]
+    Native --> N15[DeepInfra]
+    Native --> N16[HuggingFace]
+    Native --> N17[IBM]
+    Native --> N18[Inception]
+    Native --> N19[InternLM]
+    Native --> N20[Minimax]
+    Native --> N21[Moonshot]
+    Native --> N22[N1N]
+    Native --> N23[Neosantara]
+    Native --> N24[Nexus]
+    Native --> N25[NVIDIA]
+    Native --> N26[SiliconFlow]
+    Native --> N27[Xiaomi]
 
     Local --> L1[Ollama]
     Local --> L2[LlamaCpp]
@@ -93,6 +108,12 @@ graph TD
     Gateways --> G4[Fireworks]
     Gateways --> G5[LangDB]
     Gateways --> G6[Nebius]
+    Gateways --> G7[LiteLLM]
+    Gateways --> G8[Portkey]
+    Gateways --> G9[Requesty]
+    Gateways --> G10[SambaNova]
+    Gateways --> G11[TokenLab]
+    Gateways --> G12[TuningEngines]
 ```
 
 ### 2.2 Matriz maestra de providers
@@ -124,9 +145,32 @@ graph TD
 | Gateway | `fireworks` | `agno.models.fireworks.Fireworks` | `FIREWORKS_API_KEY` | partial | yes | yes | no |
 | Gateway | `langdb` | `agno.models.langdb.LangDB` | `LANGDB_API_KEY` | yes | yes | yes | no |
 | Gateway | `nebius` | `agno.models.nebius.Nebius` | `NEBIUS_API_KEY` | partial | yes | yes | no |
-| Gateway | `mistral_gateway` | (alias mistral via gateway) | `MISTRAL_API_KEY` | partial | yes | yes | no |
+| Gateway | `litellm` | `agno.models.litellm.LiteLLM` | `LITELLM_API_KEY` | partial | yes | yes | no |
+| Gateway | `portkey` | `agno.models.portkey.Portkey` | `PORTKEY_API_KEY` | partial | yes | yes | no |
+| Gateway | `requesty` | `agno.models.requesty.Requesty` | `REQUESTY_API_KEY` | partial | yes | yes | no |
+| Gateway | `sambanova` | `agno.models.sambanova.SambaNova` | `SAMBANOVA_API_KEY` | partial | yes | yes | no |
+| Gateway | `tokenlab` | `agno.models.tokenlab.TokenLab` | `TOKENLAB_API_KEY` | partial | yes | yes | no |
+| Gateway | `tuning_engines` | `agno.models.tuning_engines.TuningEngines` | `TUNING_ENGINES_API_KEY` | partial | yes | yes | no |
+| Native | `aimlapi` | `agno.models.aimlapi.AimlApi` | `AIMLAPI_API_KEY` | partial | yes | yes | no |
+| Native | `cerebras` | `agno.models.cerebras.Cerebras` | `CEREBRAS_API_KEY` | no | yes | yes | no |
+| Native | `cloudflare` | `agno.models.cloudflare.Cloudflare` | `CLOUDFLARE_API_KEY` | partial | yes | yes | no |
+| Native | `cometapi` | `agno.models.cometapi.CometApi` | `COMETAPI_API_KEY` | partial | yes | yes | no |
+| Native | `deepinfra` | `agno.models.deepinfra.DeepInfra` | `DEEPINFRA_API_KEY` | partial | yes | yes | no |
+| Native | `huggingface` | `agno.models.huggingface.HuggingFace` | `HF_API_KEY` | no | yes | yes | no |
+| Native | `ibm` | `agno.models.ibm.IBM` | `IBM_API_KEY` | no | yes | yes | no |
+| Native | `inception` | `agno.models.inception.Inception` | `INCEPTION_API_KEY` | no | yes | yes | no |
+| Native | `internlm` | `agno.models.internlm.InternLM` | `INTERNLM_API_KEY` | partial | yes | yes | no |
+| Native | `minimax` | `agno.models.minimax.MiniMax` | `MINIMAX_API_KEY` | partial | yes | yes | no |
+| Native | `moonshot` | `agno.models.moonshot.Moonshot` | `MOONSHOT_API_KEY` | no | yes | yes | no |
+| Native | `n1n` | `agno.models.n1n.N1N` | `N1N_API_KEY` | no | yes | yes | no |
+| Native | `neosantara` | `agno.models.neosantara.Neosantara` | `NEOSANTARA_API_KEY` | partial | yes | yes | no |
+| Native | `nexus` | `agno.models.nexus.Nexus` | `NEXUS_API_KEY` | no | yes | yes | no |
+| Native | `nvidia` | `agno.models.nvidia.NVIDIA` | `NVIDIA_API_KEY` | partial | yes | yes | no |
+| Native | `siliconflow` | `agno.models.siliconflow.SiliconFlow` | `SILICONFLOW_API_KEY` | partial | yes | yes | no |
+| Native | `xiaomi` | `agno.models.xiaomi.Xiaomi` | `XIAOMI_API_KEY` | no | yes | yes | no |
+| Native | `mistral_gateway` | (alias mistral via gateway) | `MISTRAL_API_KEY` | partial | yes | yes | no |
 
-> **Nota**: La columna "API key env var" es la convención default de yaml-agno. Override vía `SecretManager` (SPEC_23). Los providers locales NO requieren API key.
+> **v2.8.x note**: 46 providers total (was 26 in v2.6.18). `models/defaults.py` was removed upstream; per-model defaults are class-level. New providers from v2.7+: aimlapi, cerebras, cloudflare, cometapi, deepinfra, huggingface, ibm, inception, internlm, litellm, minimax, moonshot, n1n, neosantara, nexus, nvidia, portkey, requesty, sambanova, siliconflow, tokenlab, tuning_engines, xiaomi. Caps listed as `partial` are best-effort; verified per-provider docs.
 
 ### 2.3 Capabilities matrix (resolución declarativa)
 
@@ -783,7 +827,30 @@ class ProviderFactory:
         "fireworks": ("agno.models.fireworks", "Fireworks"),
         "langdb": ("agno.models.langdb", "LangDB"),
         "nebius": ("agno.models.nebius", "Nebius"),
-        # ... tabla 2.2
+        # --- new in 2.7+/2.8.x (46 providers total) ---
+        "aimlapi": ("agno.models.aimlapi", "AimlApi"),
+        "cerebras": ("agno.models.cerebras", "Cerebras"),
+        "cloudflare": ("agno.models.cloudflare", "Cloudflare"),
+        "cometapi": ("agno.models.cometapi", "CometApi"),
+        "deepinfra": ("agno.models.deepinfra", "DeepInfra"),
+        "huggingface": ("agno.models.huggingface", "HuggingFace"),
+        "ibm": ("agno.models.ibm", "IBM"),
+        "inception": ("agno.models.inception", "Inception"),
+        "internlm": ("agno.models.internlm", "InternLM"),
+        "litellm": ("agno.models.litellm", "LiteLLM"),
+        "minimax": ("agno.models.minimax", "MiniMax"),
+        "moonshot": ("agno.models.moonshot", "Moonshot"),
+        "n1n": ("agno.models.n1n", "N1N"),
+        "neosantara": ("agno.models.neosantara", "Neosantara"),
+        "nexus": ("agno.models.nexus", "Nexus"),
+        "nvidia": ("agno.models.nvidia", "NVIDIA"),
+        "portkey": ("agno.models.portkey", "Portkey"),
+        "requesty": ("agno.models.requesty", "Requesty"),
+        "sambanova": ("agno.models.sambanova", "SambaNova"),
+        "siliconflow": ("agno.models.siliconflow", "SiliconFlow"),
+        "tokenlab": ("agno.models.tokenlab", "TokenLab"),
+        "tuning_engines": ("agno.models.tuning_engines", "TuningEngines"),
+        "xiaomi": ("agno.models.xiaomi", "Xiaomi"),
     }
     _resolved: dict[str, type] = {}   # cache of already-imported classes
 
