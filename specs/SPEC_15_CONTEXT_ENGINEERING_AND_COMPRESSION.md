@@ -10,7 +10,7 @@ Dependency_Hashes: ["SPEC_02", "SPEC_04", "SPEC_08", "SPEC_14"]
 Group: "G3-Capacidades-Agente"
 Read_Order: 7
 Last_Updated: "2026-07-03"
-Revision_Note: "Iter 4 - deep adversarial review vs Agno 2.8.3: renamed flag add_instruction_tags -> use_instruction_tags to match the real Agno Agent param (agent.py:246); clarified that TokenCounter/count_part is a yaml-agno OWN layer (Agno has no compression/token-counting module — token counting in Agno happens via Model.count_tokens); documented that CompressionManager params mirror agno/compression/manager.py exactly (compress_tool_results default True in Agno); added a note that add_member_tools_to_context is Team-only (matches Agno team.py:177). Q8 remains RESUELTA (history compression = SPEC_15)."
+Revision_Note: "Iter 4 - deep adversarial review vs Agno v2.6.18: renamed flag add_instruction_tags -> use_instruction_tags to match the real Agno Agent param (agent.py:246); clarified that TokenCounter/count_part is a yaml-agno OWN layer (Agno has no compression/token-counting module — token counting in Agno happens via Model.count_tokens); documented that CompressionManager params mirror agno/compression/manager.py exactly (compress_tool_results default True in Agno); added a note that add_member_tools_to_context is Team-only (matches Agno team.py:177). Q8 remains RESUELTA (history compression = SPEC_15)."
 ---
 
 # SPEC_15_CONTEXT_ENGINEERING_AND_COMPRESSION
@@ -590,7 +590,7 @@ Return a structured summary that lets the agent continue its task effectively.
 ### 8.1 TokenCounter
 
 > **Capa PROPIA de yaml-agno** (NO existe un módulo `compression/token-counting` en Agno).
-> En Agno 2.8.3 el conteo de tokens se hace vía `Model.count_tokens(messages, tools, response_format)`
+> En Agno v2.6.18 el conteo de tokens se hace vía `Model.count_tokens(messages, tools, response_format)`
 > (ver `agno/compression/manager.py`, que delega al modelo). yaml-agno introduce `TokenCounter` como
 > capa de estimación independiente porque necesita contar partes multimodales (image/audio payloads)
 > que `Model.count_tokens` no expone de forma granular. El conteo incluye messages, tool definitions y
@@ -1463,7 +1463,7 @@ def test_old_import_emits_deprecation():
 
 ## 15. REFERENCIAS
 
-- Agno source (2.8.3): `agno/agent/agent.py` (flags `add_*_to_context`, `use_instruction_tags`, `dependencies`, `additional_context`, `system_message`, `build_context`), `agno/team/team.py` (`add_member_tools_to_context`), `agno/run/base.py` (`RunContext`), `agno/compression/manager.py` (`CompressionManager` dataclass), `agno/utils/safe_formatter.py` (template substitution `SafeFormatter`), `agno/utils/callables.py` (callable resolution). El conteo nativo de tokens en Agno es `Model.count_tokens(messages, tools, response_format)`; **NO** existe un módulo `compression/token-counting` en Agno (TokenCounter en §8 es capa propia de yaml-agno).
+- Agno source (v2.6.18): `agno/agent/agent.py` (flags `add_*_to_context`, `use_instruction_tags`, `dependencies`, `additional_context`, `system_message`, `build_context`), `agno/team/team.py` (`add_member_tools_to_context`), `agno/run/base.py` (`RunContext`), `agno/compression/manager.py` (`CompressionManager` dataclass), `agno/utils/safe_formatter.py` (template substitution `SafeFormatter`), `agno/utils/callables.py` (callable resolution). El conteo nativo de tokens en Agno es `Model.count_tokens(messages, tools, response_format)`; **NO** existe un módulo `compression/token-counting` en Agno (TokenCounter en §8 es capa propia de yaml-agno).
 - SPEC_02 (Domain Model): RunContext en el dominio.
 - SPEC_04 (Memory Architecture): modelo de memoria (qué se persiste); PII referenciado a SPEC_16.
 - SPEC_08 (TDD Microtasks): convenciones de test.

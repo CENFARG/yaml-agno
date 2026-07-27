@@ -1,16 +1,16 @@
 ---
 Spec_ID: "SPEC_18"
-Title: "Evals, Scorers, Environments, Eval Suites and Observability Integrations"
-Version: "0.3.0-iter5"
+Title: "Evals and Observability Integrations - Agno Evals and OTel Provider Catalog"
+Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
-Context_Tags: ["#Evals", "#Scorer", "#Environments", "#EvalSuite", "#AccuracyEval", "#PerformanceEval", "#ReliabilityEval", "#AgentAsJudge", "#OpenTelemetry", "#Langfuse", "#Langsmith", "#Tracing", "#ObservabilityManager", "#CodeScorer", "#JudgeScorer", "#ToolCallScorer"]
-Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_01", "SPEC_14", "SPEC_27"]
+Context_Tags: ["#Evals", "#AccuracyEval", "#PerformanceEval", "#ReliabilityEval", "#AgentAsJudge", "#OpenTelemetry", "#Langfuse", "#Langsmith", "#Tracing", "#ObservabilityManager"]
+Dependency_Hashes: ["SPEC_09", "SPEC_03", "SPEC_01", "SPEC_27"]
 Group: "G8-Ops-Observabilidad"
 Read_Order: 24
-Last_Updated: "2026-07-26"
-Revision_Note: "iter5 - Updated to Agno 2.8.3. Added three new sections: Scorers (§X), Environments (§Y), Eval Suites (§Z). Agno v2.8.x introduces `agno.scorer` (CodeScorer, JudgeScorer, ToolCallScorer), `agno.environments` (Environment, Task, fingerprints), and `agno.eval.suite` (Case, SuiteResult, CLI runner). These are complementary to the existing eval types (AccuracyEval, AgentAsJudgeEval, PerformanceEval, ReliabilityEval). New dependency: SPEC_14 (model providers used by JudgeScorer). Cross-references added to SPEC_09 (fingerprints), SPEC_11 (ToolCallScorer), SPEC_05 (suite runner). Iter4 content otherwise stands."
+Last_Updated: "2026-07-03"
+Revision_Note: "iter4 - Deep adversarial review vs agno/eval real source. (1) ReliabilityEvalAdapter fixed: run()/arun() take ONLY print_results; the response is a CONSTRUCTOR field, so build() now accepts the response and evaluate() constructs a fresh eval per response (reliability.py:216,302). (2) Removed false 'pip install memory_profiler' claim — Agno PerformanceEval uses stdlib tracemalloc (performance.py:2). (3) Resolved two internal contradictions with section 2.3: Mermaid section 7.1 node M and BDD Scenario 1 now reference yamlagno_eval_runs (schema yamlagno) instead of agno_* tables. Eval constructors (AccuracyEval, AgentAsJudgeEval, PerformanceEval, ReliabilityEval), run/arun pairs, run_with_output, AccuracyResult.avg_score, assert_passed, and AgnoInstrumentor.instrument all verified against real source."
 ---
 
 # SPEC_18_EVALS_AND_OBSERVABILITY
@@ -1966,139 +1966,4 @@ Implica: el registry soporta N, pero el costo de export se multiplica.
 
 ---
 
-## SCORERS (nuevo en Agno 2.8.x)
-
-### ¿Qué es un Scorer?
-
-Un Scorer es cualquier objeto con `async def ascore(run, expected) -> Score(valor, passed, reason, detail)`. Más simple y componible que los evals legacy. Agno expone tres implementaciones nativas.
-
-> **@ai-directive (delegation)**: Los scorers son objetos Agno nativos. yaml-agno solo los referencia desde YAML y los delega a `agno.scorer`. No se reimplementa la lógica de scoring.
-
-### CodeScorer
-
-Envuelve cualquier callable `(run, expected) -> bool | float | Score`. Ideal para reglas de negocio custom.
-
-```yaml
-eval:
-  scorer:
-    type: code
-    module: "myapp.scorers.check_compliance"
-    pass_threshold: 0.5
-```
-
-- `sync` o `async` automático
-- `pass_threshold` define el corte para floats (default 0.5)
-- `bool` → Score(1.0, True) / Score(0.0, False)
-
-### JudgeScorer
-
-LLM-as-judge con criterios free-text. Similar a `AgentAsJudgeEval` pero más liviano.
-
-```yaml
-eval:
-  scorer:
-    type: judge
-    criteria: "La respuesta debe usar tono profesional y citar fuentes"
-    mode: numeric          # binary (pass/fail) | numeric (1-10)
-    threshold: 7           # solo para numeric
-    model: "openai:gpt-4o" # requerido (via SPEC_14)
-```
-
-### ToolCallScorer
-
-Verifica tool calls esperados contra `RunOutput.tools`. Determinista, no usa LLM.
-
-```yaml
-eval:
-  scorer:
-    type: tool_call
-    expected_tools: ["search_web", "calculate"]  # names del registry (SPEC_11)
-    arguments:
-      search_web:
-        - query: "machine learning"
-    allow_additional: true
-```
-
----
-
-## ENVIRONMENTS (nuevo en Agno 2.8.x)
-
-### ¿Qué es un Environment?
-
-`Environment(name, tasks, scorer, agent)` es una unidad de evaluación **reproducible**. Combina un agente, un conjunto de tareas y un scorer. Proporciona **fingerprints** (hashes criptográficos) para detectar cambios:
-
-- `env_fingerprint`: cambia si cambia el agente, tareas, tools, scorer o prompt
-- `policy_fingerprint`: cambia solo si cambia el modelo o sus parámetros
-
-```yaml
-evaluation:
-  environment:
-    name: "facturacion-compliance"
-    agent_ref: "facturacion_afip"
-    tasks: "./tasks/compliance.jsonl"
-    scorer:
-      type: judge
-      criteria: "La factura debe cumplir normativa AFIP"
-      mode: binary
-    timeout_seconds: 120
-```
-
-### Tasks desde JSONL
-
-```jsonl
-{"input": "Emitir factura A por $5000", "expected": {"tipo": "A", "importe": 5000}}
-{"input": "Emitir factura B por $1000", "expected": {"tipo": "B", "importe": 1000}}
-```
-
-> **@ai-directive**: yaml-agno NO reimplementa fingerprints. Delega a `Environment.env_fingerprint()` y `Environment.policy_fingerprint()` de Agno.
-
----
-
-## EVAL SUITES (nuevo en Agno 2.8.x)
-
-### ¿Qué es un Eval Suite?
-
-`Case` + `SuiteResult` + `arun_cases()` = framework de evaluación secuencial con judge checks, reliability checks, scorer checks, timeout por caso, hooks de ciclo de vida, y CLI embebido.
-
-```yaml
-eval_suite:
-  cases:
-    - name: "factura_A_valida"
-      agent_ref: "facturacion_afip"
-      input: "Emitir factura A por $5000"
-      criteria: "La factura debe ser tipo A y tener importe $5000"
-      judge_mode: binary
-      expected_tool_calls: ["emitir_factura", "validar_cuit"]
-    - name: "factura_sin_tools"
-      agent_ref: "facturacion_afip"
-      input: "¿Qué es una factura A?"
-      criteria: "Debe explicar claramente qué es una factura A"
-      judge_mode: numeric
-      judge_threshold: 7
-```
-
-### Integración CI/CD
-
-```bash
-python -m myapp.eval_suite --tag smoke --json-output results.json
-# Exit code 0 = all passed, 1 = failures, 2 = no cases matched
-```
-
-> **@ai-directive**: `SuiteResult.to_dict()` es un contrato estable para CI consumers. yaml-agno no modifica su estructura.
-
----
-
-### Referencias cruzadas de Scorers/Environments/Suites
-
-| SPEC | Relación |
-|------|----------|
-| **SPEC_09** | Circuit Breaker aplica a llamadas de judge model en JudgeScorer. Métricas de eval runs. |
-| **SPEC_11** | ToolCallScorer verifica tools declaradas en SPEC_11. `expected_tool_calls` referencia names del registry. |
-| **SPEC_14** | JudgeScorer requiere un `model` (providers de SPEC_14). `policy_fingerprint` hashea identidad del modelo. |
-| **SPEC_05** | Suite runner ejecuta agents/teams secuencialmente como mini-workflows. |
-| **SPEC_27** | Eval runs generan traces (`session_id` en CaseResult), exportables via SPEC_27. |
-| **SPEC_33** | Templates pueden incluir `eval:` blocks predefinidos para CI validation. |
-
----
-
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente (ej. scoring avanzado, adapters de scorers, o el adapter de un provider específico) o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
+*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente (ej. scoring avanzado de AgentAsJudge, o el adapter de un provider específico) o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
