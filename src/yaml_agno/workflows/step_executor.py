@@ -16,7 +16,10 @@ from typing import Any
 
 from core_infrastructure.errors import ErrorHandlingManager
 
-from yaml_agno.resilience.circuit_breaker import CircuitBreaker
+from yaml_agno.resilience.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerOpenError,
+)
 from yaml_agno.workflows.retry_policy import RetryPolicy
 
 __all__ = ["StepExecutor"]
@@ -89,10 +92,19 @@ class StepExecutor:
             # Each retry re-enters the CB, so the CB counts every attempt.
             # Local bind to help mypy narrow the type through the lambda capture.
             cb = self.circuit_breaker
-            return await self.retry_policy.execute_with_retry(
-                lambda: cb.execute(work),
-                self.error_manager,
-            )
+            try:
+                return await self.retry_policy.execute_with_retry(
+                    lambda: cb.execute(work),
+                    self.error_manager,
+                )
+            except CircuitBreakerOpenError as exc:
+                # Structural CB-open state is classified PERMANENT by the
+                # retry policy → fail-fast. Report for observability before
+                # re-raising so the error manager records the open circuit.
+                self.error_manager.report(
+                    exc, context={"circuit_breaker": "open"}
+                )
+                raise
 
         if self.circuit_breaker is not None:
             return await self.circuit_breaker.execute(work)

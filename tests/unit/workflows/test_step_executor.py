@@ -103,6 +103,65 @@ def test_cb_open_rejects_immediately_no_work_invoked() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 2.2b — CB OPEN + RetryPolicy combined: fail-fast, no retry
+# ---------------------------------------------------------------------------
+
+
+def test_cb_open_with_retry_policy_fails_fast() -> None:
+    """CB OPEN + RetryPolicy active: CircuitBreakerOpenError is PERMANENT.
+
+    When both CircuitBreaker and RetryPolicy are composed and the CB is
+    OPEN, the ``CircuitBreakerOpenError`` is classified PERMANENT so the
+    retry policy fails immediately — work is never invoked, the error is
+    reported exactly once for observability, and exactly one attempt is
+    made (no retries).
+
+    This verifies the CONTRACT that ``error_manager.classify`` determines
+    retry eligibility: a structural CB-open state must not be treated as a
+    transient failure.
+
+    Scenario: CB-OPEN + RetryPolicy combined path
+    (REQ: CB-then-RetryPolicy composition, fail-fast on structural CB-open).
+    """
+    clock: dict[str, float] = {"now": 1000.0}
+    cb = CircuitBreaker(recovery_timeout=60.0, time_fn=lambda: clock["now"])
+    # Force OPEN state.
+    cb.state = CircuitState.OPEN
+    cb.last_failure_time = 1000.0
+
+    call_count = 0
+
+    async def work() -> str:
+        nonlocal call_count
+        call_count += 1
+        return "should-not-run"
+
+    from yaml_agno.workflows.retry_policy import RetryPolicy
+    from yaml_agno.workflows.step_executor import StepExecutor
+
+    rp = RetryPolicy(max_retries=3, base_delay=0.0)
+    error_manager = _make_error_manager(ErrorClassification.PERMANENT)
+
+    executor = StepExecutor(
+        error_manager=error_manager,
+        circuit_breaker=cb,
+        retry_policy=rp,
+    )
+
+    with pytest.raises(CircuitBreakerOpenError):
+        asyncio.run(executor.execute_step(work))
+
+    # Work was never invoked (CB rejected before calling work).
+    assert call_count == 0
+    # Exactly one classification call → one attempt, zero retries.
+    assert error_manager.classify.call_count == 1
+    # CB-open error was reported exactly once for observability.
+    error_manager.report.assert_called_once()
+    reported_exc = error_manager.report.call_args[0][0]
+    assert isinstance(reported_exc, CircuitBreakerOpenError)
+
+
+# ---------------------------------------------------------------------------
 # Task 2.3 — TRANSIENT retries through CB re-entry
 # ---------------------------------------------------------------------------
 
