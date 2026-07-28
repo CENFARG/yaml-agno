@@ -13,12 +13,14 @@ exist yet (RED phase). They MUST fail on ImportError until the GREEN phase.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # --- Target import ---
 from yaml_agno.api.middleware.tenant_context import TenantContextMiddleware
@@ -75,6 +77,73 @@ def _client(app: FastAPI) -> TestClient:
     """Create a TestClient that respects the app's raise_server_exceptions flag."""
     flag: bool = getattr(app.state, "_raise_server_exceptions", False)
     return TestClient(app, raise_server_exceptions=flag)
+
+
+# ---------------------------------------------------------------------------
+# JWT-stamping helpers (JD-01: cover the previously-untested JWT path)
+# ---------------------------------------------------------------------------
+
+
+def _stamp_jwt_claims_middleware(
+    *,
+    tenant_claim: str | None = None,
+    user_sub: str | None = None,
+) -> type[BaseHTTPMiddleware]:
+    """Build a middleware that stamps JWT-derived claims on ``request.state``.
+
+    Mirrors what the AgentOS JWT middleware (``authorization=True``) does in
+    production: after validating the JWT it stamps ``tenant_claim`` (from the
+    ``tnt`` claim) and ``user_sub`` (from the ``sub`` claim) on
+    ``request.state``. Only non-None values are stamped so a JWT that
+    authenticates a user but carries no ``tnt`` claim can be modelled.
+
+    Must be added AFTER ``TenantContextMiddleware`` so it is the OUTERMOST
+    layer and runs first (Starlette wraps the last-added middleware outermost).
+    """
+
+    class _StampJwtClaimsMiddleware(BaseHTTPMiddleware):
+        async def dispatch(
+            self,
+            request: Request,
+            call_next: Callable[[Request], Awaitable[Response]],
+        ) -> Response:
+            if tenant_claim is not None:
+                request.state.tenant_claim = tenant_claim
+            if user_sub is not None:
+                request.state.user_sub = user_sub
+            return await call_next(request)
+
+    return _StampJwtClaimsMiddleware
+
+
+def _build_jwt_test_app(
+    *,
+    tenant_claim: str | None = None,
+    user_sub: str | None = None,
+    memory_cfg: SimpleNamespace | None = None,
+) -> FastAPI:
+    """Build a FastAPI app whose request carries JWT-derived claims.
+
+    Adds ``TenantContextMiddleware`` first (inner) then a stamping middleware
+    (outer, runs first) so the middleware under test sees JWT claims on
+    ``request.state`` exactly as it would behind AgentOS JWT auth.
+    """
+    app = FastAPI()
+    app.state._raise_server_exceptions = False
+
+    if memory_cfg is None:
+        memory_cfg = _memory_cfg()
+
+    app.add_middleware(TenantContextMiddleware, memory_cfg=memory_cfg)
+    app.add_middleware(
+        _stamp_jwt_claims_middleware(tenant_claim=tenant_claim, user_sub=user_sub)
+    )
+
+    @app.get("/spy")
+    async def spy_endpoint(request: Request) -> dict[str, str | None]:
+        return {"user_id": getattr(request.state, "user_id", None)}
+
+    return app
 
 
 # ---------------------------------------------------------------------------
@@ -254,3 +323,117 @@ class TestTenantContextMiddlewareEdgeCases:
 
         assert resp.status_code == 200
         assert "user_id" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Scenario B.5 - JWT claim precedence + anti-spoofing (Judgment Day JD-01)
+# ---------------------------------------------------------------------------
+
+
+class TestTenantContextMiddlewareJwtPrecedence:
+    """JWT claims are authoritative; the header is a fallback only without JWT.
+
+    Covers the two Judgment-Day findings (JD-01):
+      1. The JWT extraction path (``request.state.tenant_claim`` /
+         ``request.state.user_sub``) was completely untested - every previous
+         test exercised the ``X-Tenant-Id`` header fallback only.
+      2. Anti-spoofing: when a JWT is active but carries no ``tnt`` claim, the
+         client-controlled ``X-Tenant-Id`` header MUST NOT be trusted (a
+         tenant_A JWT must not impersonate tenant_B via the header).
+    """
+
+    def test_jwt_claims_used_when_header_absent(self) -> None:
+        """JWT tenant_claim + user_sub drive the composite when no header is set.
+
+        This is the previously-untested primary production path under
+        ``authorization=True``.
+        """
+        app = _build_jwt_test_app(tenant_claim="jwt_tenant", user_sub="jwt_user")
+        client = _client(app)
+
+        resp = client.get("/spy")  # no X-Tenant-Id header
+
+        assert resp.status_code == 200
+        # principal comes from user_sub, NOT memory_cfg.system_user_id
+        assert resp.json()["user_id"] == "jwt_tenant:jwt_user"
+
+    def test_jwt_tenant_wins_over_disagreeing_header(self) -> None:
+        """A spoofing X-Tenant-Id header is ignored when a JWT tnt is present.
+
+        tenant_A JWT + ``X-Tenant-Id: tenant_B`` -> the composite MUST use
+        tenant_A (JWT is authoritative).
+        """
+        app = _build_jwt_test_app(tenant_claim="tenant_A", user_sub="alice")
+        client = _client(app)
+
+        resp = client.get("/spy", headers={"X-Tenant-Id": "tenant_B"})
+
+        assert resp.status_code == 200
+        body = resp.json()["user_id"]
+        assert body == "tenant_A:alice"
+        assert not body.startswith("tenant_B:")
+
+    def test_jwt_principal_used_over_system_fallback(self) -> None:
+        """user_sub (JWT sub claim) is the principal, not system_user_id."""
+        cfg = _memory_cfg("agent:fallback")
+        app = _build_jwt_test_app(
+            tenant_claim="jwt_tenant", user_sub="real_human", memory_cfg=cfg
+        )
+        client = _client(app)
+
+        resp = client.get("/spy")
+
+        assert resp.status_code == 200
+        assert resp.json()["user_id"] == "jwt_tenant:real_human"
+
+    def test_jwt_active_without_tnt_rejects_spoofing_header(self) -> None:
+        """Anti-spoofing: authenticated JWT without a tnt claim must not trust the header.
+
+        A valid JWT authenticates the user (``user_sub`` set) but carries no
+        tenant (``tenant_claim`` absent). A client-supplied
+        ``X-Tenant-Id: tenant_B`` must NOT be honoured - otherwise a tenant_A
+        user impersonates tenant_B. The middleware fails fast (500) rather than
+        trusting the client-controlled header.
+        """
+        # user_sub set => JWT is active; tenant_claim intentionally absent.
+        app = _build_jwt_test_app(user_sub="alice")
+        client = _client(app)
+
+        resp = client.get("/spy", headers={"X-Tenant-Id": "tenant_B"})
+
+        assert resp.status_code == 500
+
+    def test_no_jwt_falls_back_to_header(self) -> None:
+        """Without any JWT (no user_sub), the header is the legitimate source.
+
+        Regression guard: the anti-spoofing logic must not break the local-dev
+        / non-JWT path that relies on ``X-Tenant-Id``.
+        """
+        app = _build_jwt_test_app()  # no claims stamped at all
+
+        client = _client(app)
+
+        resp = client.get("/spy", headers={"X-Tenant-Id": "tenant_42"})
+
+        assert resp.status_code == 200
+        assert resp.json()["user_id"] == "tenant_42:agent:fallback"
+
+    @patch("yaml_agno.api.middleware.tenant_context.resolve_user_id")
+    def test_jwt_values_forwarded_to_resolve_user_id(self, mock_resolve) -> None:
+        """resolve_user_id receives the JWT tenant + JWT principal, not the header."""
+        mock_resolve.return_value = "tenant_A:alice"
+
+        cfg = _memory_cfg("agent:fallback")
+        app = _build_jwt_test_app(
+            tenant_claim="tenant_A", user_sub="alice", memory_cfg=cfg
+        )
+        client = _client(app)
+
+        client.get("/spy", headers={"X-Tenant-Id": "tenant_B"})  # spoof attempt
+
+        mock_resolve.assert_called_once_with(
+            memory_cfg=cfg,
+            principal_id="alice",
+            tenant_id="tenant_A",
+            context=None,
+        )
