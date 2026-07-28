@@ -94,20 +94,43 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
     def _extract_tenant_id(request: Request) -> str | None:
         """Extract ``tenant_id`` from JWT ``tnt`` claim or ``X-Tenant-Id`` header.
 
-        When AgentOS JWT middleware is active (``authorization=True``), it
-        populates JWT claims on ``request.state``. This method reads the
-        validated ``tnt`` claim first; if absent, it falls back to the
-        ``X-Tenant-Id`` header for non-JWT setups (local dev, integration tests).
+        Precedence (anti-spoofing, JD-01):
+          1. JWT ``tnt`` claim (``request.state.tenant_claim``) is AUTHORITATIVE
+             when present. The client-controlled ``X-Tenant-Id`` header is
+             ignored so a tenant_A JWT cannot impersonate tenant_B via the
+             header.
+          2. If a JWT authenticated the user (``request.state.user_sub`` is set)
+             but carries no ``tnt`` claim, the header is STILL NOT trusted: the
+             request is JWT-authenticated, so a client-supplied tenant would be a
+             spoofing vector. Returns ``None`` so ``resolve_user_id`` fails fast
+             (UserIdentityResolutionError -> 500) instead of trusting the header.
+          3. Only when NO JWT is active (no ``user_sub``) is ``X-Tenant-Id`` the
+             legitimate tenant source (local dev, integration tests, non-JWT
+             setups).
+
+        The middleware cannot read AgentOS' ``authorization`` flag, so JWT
+        activity is inferred from ``user_sub`` (the validated ``sub`` claim),
+        which the JWT middleware stamps on ``request.state``.
 
         Args:
             request: Incoming request.
 
         Returns:
-            The tenant_id string, or ``None`` if neither source is present.
+            The tenant_id string, or ``None`` if no trustworthy source is
+            present (``resolve_user_id`` then raises to avoid a NULL bucket).
         """
-        return getattr(request.state, "tenant_claim", None) or request.headers.get(
-            "X-Tenant-Id"
-        )
+        jwt_tenant: str | None = getattr(request.state, "tenant_claim", None)
+        if jwt_tenant:
+            # JWT provided an authoritative tenant claim -> ignore the header.
+            return jwt_tenant
+        # No tenant in the JWT. If a JWT authenticated a user, the request is
+        # JWT-authenticated and the client-controlled header MUST NOT be trusted
+        # as a tenant source (would allow cross-tenant impersonation). Fail fast
+        # rather than fall through to the header.
+        if getattr(request.state, "user_sub", None):
+            return None
+        # No JWT active: X-Tenant-Id is the legitimate tenant source.
+        return request.headers.get("X-Tenant-Id")
 
     @staticmethod
     def _extract_raw_user_id(request: Request) -> str | None:
