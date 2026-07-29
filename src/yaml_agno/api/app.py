@@ -42,11 +42,13 @@ from agno.agent.factory import AgentFactory as AgnoAgentFactory
 from agno.agent.protocol import AgentProtocol
 from agno.agent.remote import RemoteAgent
 from agno.os import AgentOS
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from yaml_agno.api.health import get_liveness_router, get_readiness_router
 from yaml_agno.api.middleware.tenant_context import TenantContextMiddleware
 from yaml_agno.factories.agent_factory import AgentFactory
+from yaml_agno.memory.user_identity import UserIdentityResolutionError
 from yaml_agno.models.config.agent_config import AgentConfig
 
 __all__ = ["AgentEntry", "YamlAgentOS"]
@@ -223,5 +225,18 @@ class YamlAgentOS(AgentOS):
 
         if self._mount_tenant_context:
             app.add_middleware(TenantContextMiddleware, memory_cfg=self._memory_cfg)
+
+            # A missing/empty tenant_id is an authentication failure (SPEC_06
+            # §3.2): resolve_user_id raises UserIdentityResolutionError inside
+            # the middleware. Without this handler it surfaces as a raw 500.
+            # Map it to 401 Unauthorized with a structured JSON body.
+            @app.exception_handler(UserIdentityResolutionError)
+            async def _tenant_context_error_handler(
+                request: Request, exc: UserIdentityResolutionError
+            ) -> JSONResponse:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": str(exc)},
+                )
 
         return app

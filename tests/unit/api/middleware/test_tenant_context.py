@@ -19,11 +19,13 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # --- Target import ---
 from yaml_agno.api.middleware.tenant_context import TenantContextMiddleware
+from yaml_agno.memory.user_identity import UserIdentityResolutionError
 
 pytestmark = pytest.mark.unit
 
@@ -39,6 +41,21 @@ def _memory_cfg(system_user_id: str | None = "agent:fallback") -> SimpleNamespac
     Mirrors the pattern from tests/yaml_agno/memory/test_user_identity.py.
     """
     return SimpleNamespace(system_user_id=system_user_id)
+
+
+def _register_tenant_error_handler(app: FastAPI) -> None:
+    """Register the 401 handler for ``UserIdentityResolutionError``.
+
+    Mirrors what ``YamlAgentOS.get_app()`` registers in production so the
+    test app reflects real behaviour: a missing tenant returns 401 with a
+    structured JSON body, not a raw 500.
+    """
+
+    @app.exception_handler(UserIdentityResolutionError)
+    async def _handler(
+        request: Request, exc: UserIdentityResolutionError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=401, content={"detail": str(exc)})
 
 
 def _build_test_app(
@@ -65,6 +82,7 @@ def _build_test_app(
         memory_cfg = _memory_cfg()
 
     app.add_middleware(TenantContextMiddleware, memory_cfg=memory_cfg)
+    _register_tenant_error_handler(app)
 
     @app.get("/spy")
     async def spy_endpoint(request: Request) -> dict[str, str | None]:
@@ -135,6 +153,7 @@ def _build_jwt_test_app(
         memory_cfg = _memory_cfg()
 
     app.add_middleware(TenantContextMiddleware, memory_cfg=memory_cfg)
+    _register_tenant_error_handler(app)
     app.add_middleware(
         _stamp_jwt_claims_middleware(tenant_claim=tenant_claim, user_sub=user_sub)
     )
@@ -215,29 +234,50 @@ class TestTenantContextMiddlewareGoldenPath:
 class TestTenantContextMiddlewareFailFast:
     """RED scenarios — the middleware refuses to build a tenant-less user_id."""
 
-    def test_missing_tenant_id_raises_500(self) -> None:
+    def test_missing_tenant_id_returns_401(self) -> None:
         """No X-Tenant-Id and no JWT tnt claim → resolve_user_id raises.
 
-        The error propagates as a 500 Internal Server Error because
-        resolve_user_id raises UserIdentityResolutionError when tenant_id
-        is missing. This is the CORRECT fail-fast behaviour — it prevents
-        a None user_id from ever reaching Agno handlers.
+        The middleware catches ``UserIdentityResolutionError`` and returns
+        401 Unauthorized. This is the CORRECT fail-fast behaviour — it
+        prevents a None user_id from ever reaching Agno handlers while
+        signalling the client that authentication is required.
         """
         app = _build_test_app()
         client = _client(app)
 
         resp = client.get("/spy")  # no headers at all
 
-        assert resp.status_code == 500
+        assert resp.status_code == 401
 
-    def test_empty_tenant_header_raises_500(self) -> None:
+    def test_empty_tenant_header_returns_401(self) -> None:
         """Empty X-Tenant-Id header → resolve_user_id raises (empty is falsy)."""
         app = _build_test_app()
         client = _client(app)
 
         resp = client.get("/spy", headers={"X-Tenant-Id": ""})
 
-        assert resp.status_code == 500
+        assert resp.status_code == 401
+
+    def test_missing_tenant_returns_401_with_json_body(self) -> None:
+        """No tenant → 401 Unauthorized with structured JSON body (not 500).
+
+        A missing tenant is an authentication/authorization failure: the
+        middleware cannot build a composite user_id, so it refuses rather
+        than risk a NULL bucket. The correct HTTP status is 401 and the
+        body MUST be a JSON object with a non-empty ``detail`` key so
+        clients can present a meaningful error.
+        """
+        app = _build_test_app()
+        client = _client(app)
+
+        resp = client.get("/spy")  # no headers at all
+
+        assert resp.status_code == 401
+        assert resp.headers["content-type"] == "application/json"
+        body = resp.json()
+        assert "detail" in body
+        assert isinstance(body["detail"], str)
+        assert body["detail"]  # non-empty message
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +432,7 @@ class TestTenantContextMiddlewareJwtPrecedence:
         A valid JWT authenticates the user (``user_sub`` set) but carries no
         tenant (``tenant_claim`` absent). A client-supplied
         ``X-Tenant-Id: tenant_B`` must NOT be honoured - otherwise a tenant_A
-        user impersonates tenant_B. The middleware fails fast (500) rather than
+        user impersonates tenant_B. The middleware fails fast (401) rather than
         trusting the client-controlled header.
         """
         # user_sub set => JWT is active; tenant_claim intentionally absent.
@@ -401,7 +441,7 @@ class TestTenantContextMiddlewareJwtPrecedence:
 
         resp = client.get("/spy", headers={"X-Tenant-Id": "tenant_B"})
 
-        assert resp.status_code == 500
+        assert resp.status_code == 401
 
     def test_no_jwt_falls_back_to_header(self) -> None:
         """Without any JWT (no user_sub), the header is the legitimate source.

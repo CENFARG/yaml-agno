@@ -26,9 +26,13 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from yaml_agno.memory.user_identity import resolve_user_id  # SPEC_04 §1.4
+from yaml_agno.memory.user_identity import (  # SPEC_04 §1.4
+    UserIdentityResolutionError,
+    resolve_user_id,
+)
 
 __all__ = ["TenantContextMiddleware"]
 
@@ -64,13 +68,23 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         """Delegate to ``resolve_user_id`` and stamp ``request.state``.
 
+        A missing/empty tenant_id is an authentication failure: the
+        composite user_id cannot be built and a NULL bucket must never
+        reach Agno. ``resolve_user_id`` raises
+        ``UserIdentityResolutionError`` in that case. Because this
+        middleware inherits ``BaseHTTPMiddleware``, the exception would
+        surface as a raw 500 — it never reaches FastAPI's
+        ``ExceptionMiddleware`` where ``@app.exception_handler`` lives.
+        We catch it HERE and return 401 with a structured JSON body.
+        ``get_app()`` also registers a handler as defense-in-depth.
+
         Args:
             request: Incoming request; may carry JWT claims or ``X-Tenant-Id``.
             call_next: Next ASGI handler.
 
         Returns:
-            The downstream response. Native AgentOS handlers and
-            ``get_scoped_user_id`` read ``request.state.user_id`` for scoping.
+            The downstream response, or a 401 ``JSONResponse`` when the
+            tenant cannot be resolved.
         """
         tenant_id = self._extract_tenant_id(request)
         principal_id = self._extract_raw_user_id(request)
@@ -78,12 +92,18 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         # Single source of truth: resolve_user_id (SPEC_04) builds the
         # composite and fails fast if tenant_id or principal is missing.
         # Never None.
-        request.state.user_id = resolve_user_id(
-            memory_cfg=self.memory_cfg,
-            principal_id=principal_id,
-            tenant_id=tenant_id,
-            context=None,
-        )
+        try:
+            request.state.user_id = resolve_user_id(
+                memory_cfg=self.memory_cfg,
+                principal_id=principal_id,
+                tenant_id=tenant_id,
+                context=None,
+            )
+        except UserIdentityResolutionError as exc:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": str(exc)},
+            )
         return await call_next(request)
 
     # ------------------------------------------------------------------
@@ -103,7 +123,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
              but carries no ``tnt`` claim, the header is STILL NOT trusted: the
              request is JWT-authenticated, so a client-supplied tenant would be a
              spoofing vector. Returns ``None`` so ``resolve_user_id`` fails fast
-             (UserIdentityResolutionError -> 500) instead of trusting the header.
+             (UserIdentityResolutionError -> 401) instead of trusting the header.
           3. Only when NO JWT is active (no ``user_sub``) is ``X-Tenant-Id`` the
              legitimate tenant source (local dev, integration tests, non-JWT
              setups).
