@@ -107,7 +107,17 @@ class StepExecutor:
                 raise
 
         if self.circuit_breaker is not None:
-            return await self.circuit_breaker.execute(work)
+            try:
+                return await self.circuit_breaker.execute(work)
+            except CircuitBreakerOpenError as exc:
+                # Structural CB-open state → fail-fast. Report for
+                # observability before re-raising so the error manager
+                # records the open circuit (parity with the combined
+                # CB+RetryPolicy path, JD-02).
+                self.error_manager.report(
+                    exc, context={"circuit_breaker": "open"}
+                )
+                raise
 
         if self.retry_policy is not None:
             return await self.retry_policy.execute_with_retry(

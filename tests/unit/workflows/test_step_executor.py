@@ -73,6 +73,9 @@ def test_cb_closed_succeeds() -> None:
 def test_cb_open_rejects_immediately_no_work_invoked() -> None:
     """Forced OPEN; assert CircuitBreakerOpenError + work counter == 0.
 
+    The CB-only path must also report the open-circuit error for
+    observability, mirroring the combined CB+RetryPolicy path (JD-02).
+
     Scenario: CB open rejects immediately (REQ: CB-then-RetryPolicy composition).
     """
     clock: dict[str, float] = {"now": 1000.0}
@@ -90,8 +93,10 @@ def test_cb_open_rejects_immediately_no_work_invoked() -> None:
 
     from yaml_agno.workflows.step_executor import StepExecutor
 
+    error_manager = _make_error_manager(ErrorClassification.TRANSIENT)
+
     executor = StepExecutor(
-        error_manager=_make_error_manager(ErrorClassification.TRANSIENT),
+        error_manager=error_manager,
         circuit_breaker=cb,
     )
 
@@ -100,6 +105,11 @@ def test_cb_open_rejects_immediately_no_work_invoked() -> None:
 
     assert call_count == 0
     assert cb.total_requests == 0
+    # CB-only path must report the open-circuit error exactly once for
+    # observability (parity with combined CB+RetryPolicy path, JD-02).
+    error_manager.report.assert_called_once()
+    reported_exc = error_manager.report.call_args[0][0]
+    assert isinstance(reported_exc, CircuitBreakerOpenError)
 
 
 # ---------------------------------------------------------------------------
