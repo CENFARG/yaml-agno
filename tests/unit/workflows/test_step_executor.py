@@ -297,3 +297,96 @@ def test_parallel_one_failure_cancels_siblings() -> None:
     assert any(isinstance(e, ValueError) for e in errors)
     # The failing task did start.
     assert "failing" in started
+
+
+# ---------------------------------------------------------------------------
+# Task 2.6 — RetryPolicy only (no CircuitBreaker): TRANSIENT retry path
+# ---------------------------------------------------------------------------
+
+
+def test_retry_policy_only_path() -> None:
+    """RetryPolicy WITHOUT CircuitBreaker: classification-driven retry, no CB gate.
+
+    No ``circuit_breaker`` is provided, so ``work`` is retried directly
+    through ``RetryPolicy.execute_with_retry``. Work fails twice with
+    TRANSIENT then succeeds on the third attempt.
+
+    Asserts the RP-only branch of ``execute_step``: work is invoked on
+    every retry, each transient failure is classified and reported, and
+    the final success propagates.
+
+    Scenario: RetryPolicy-only path (REQ: resilience composition, RP-only
+    branch of execute_step).
+    """
+    call_count = 0
+
+    async def flaky_work() -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise TimeoutError(f"transient-{call_count}")
+        return "recovered"
+
+    from yaml_agno.workflows.retry_policy import RetryPolicy
+    from yaml_agno.workflows.step_executor import StepExecutor
+
+    rp = RetryPolicy(max_retries=3, base_delay=0.0)
+    error_manager = _make_error_manager(ErrorClassification.TRANSIENT)
+
+    executor = StepExecutor(
+        error_manager=error_manager,
+        retry_policy=rp,
+    )
+
+    result: str = asyncio.run(executor.execute_step(flaky_work))
+
+    assert result == "recovered"
+    assert call_count == 3
+    # No circuit breaker configured for this path.
+    assert executor.circuit_breaker is None
+    # Each transient failure was classified (2 failures → 2 classifications).
+    assert error_manager.classify.call_count == 2
+    # RetryPolicy reported each transient failure (2 failures → 2 reports).
+    assert error_manager.report.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 2.7 — Bare-work path (no CB, no RetryPolicy)
+# ---------------------------------------------------------------------------
+
+
+def test_bare_work_path() -> None:
+    """Neither CircuitBreaker nor RetryPolicy: bare ``await work()``.
+
+    No resilience primitives are configured (``cb`` and ``retry_policy``
+    both None), so ``execute_step`` awaits ``work()`` directly. Work is
+    called exactly once and the error_manager is never consulted.
+
+    Scenario: Bare-work path (REQ: resilience composition, no-resilience
+    branch of execute_step).
+    """
+    call_count = 0
+
+    async def work() -> str:
+        nonlocal call_count
+        call_count += 1
+        return "bare-done"
+
+    from yaml_agno.workflows.step_executor import StepExecutor
+
+    error_manager = _make_error_manager(ErrorClassification.TRANSIENT)
+
+    executor = StepExecutor(
+        error_manager=error_manager,
+    )
+
+    result: str = asyncio.run(executor.execute_step(work))
+
+    assert result == "bare-done"
+    assert call_count == 1
+    # No resilience primitives configured.
+    assert executor.circuit_breaker is None
+    assert executor.retry_policy is None
+    # The error manager was never consulted on the bare-work path.
+    error_manager.classify.assert_not_called()
+    error_manager.report.assert_not_called()
