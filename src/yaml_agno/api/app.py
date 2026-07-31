@@ -34,7 +34,7 @@ Corrects the four SPEC_06 defects the exploration surfaced:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from agno.agent import Agent
@@ -50,6 +50,10 @@ from yaml_agno.api.middleware.tenant_context import TenantContextMiddleware
 from yaml_agno.factories.agent_factory import AgentFactory
 from yaml_agno.memory.user_identity import UserIdentityResolutionError
 from yaml_agno.models.config.agent_config import AgentConfig
+
+if TYPE_CHECKING:
+    from yaml_agno.factories.agentos_factory import AgentOSFactory
+    from yaml_agno.models.config.agentos_config import AgentOSConfig
 
 __all__ = ["AgentEntry", "YamlAgentOS"]
 
@@ -92,6 +96,8 @@ class YamlAgentOS(AgentOS):
         mount_health: bool = True,
         mount_tenant_context: bool = True,
         memory_cfg: Any = None,
+        agentos_factory: AgentOSFactory | None = None,
+        agentos_config: AgentOSConfig | None = None,
         **agentos_kwargs: Any,
     ) -> None:
         """Initialize ``YamlAgentOS`` from a pre-built agent list OR a YAML config path.
@@ -111,6 +117,16 @@ class YamlAgentOS(AgentOS):
         requires at least one of ``teams``, ``workflows``, ``knowledge``, or
         ``db`` via ``**agentos_kwargs`` (verified Agno 2.6.22 behavior).
 
+        **AgentOSFactory integration stub (SPEC_12 Slice 1)**:
+
+        - ``agentos_factory`` and ``agentos_config`` are stored as instance
+          attributes for future S3 wiring (``yaml-agno serve``). They do NOT
+          alter the existing constructor behavior — the additive path preserves
+          backward compatibility with all existing callers.
+        - When both are provided, the caller has opted into the factory path.
+          The actual ``AgentOSFactory.build(agentos_config)`` call is deferred
+          to the S3 wiring. For now, the attributes are stored and documented.
+
         Args:
             config_path: Optional path to a YAML agent-definition file. Mutually
                 exclusive with ``agents``.
@@ -129,6 +145,10 @@ class YamlAgentOS(AgentOS):
                 ``system_user_id`` used by ``resolve_user_id`` when no human
                 principal is present on the request. Required when
                 ``mount_tenant_context=True`` and no JWT auth is active.
+            agentos_factory: Optional ``AgentOSFactory`` instance (SPEC_12
+                Slice 1 integration stub). Stored for S3 wiring.
+            agentos_config: Optional ``AgentOSConfig`` instance (SPEC_12
+                Slice 1 integration stub). Stored for S3 wiring.
             **agentos_kwargs: Extra keyword arguments forwarded verbatim to
                 ``super().__init__`` (e.g. ``mcp_server``,
                 ``telemetry``, ``teams``, ``workflows``, ``db``...).
@@ -152,6 +172,10 @@ class YamlAgentOS(AgentOS):
         self._mount_health = mount_health
         self._mount_tenant_context = mount_tenant_context
         self._memory_cfg = memory_cfg
+
+        # SPEC_12 Slice 1 integration stub — stored for S3 wiring.
+        self._agentos_factory = agentos_factory
+        self._agentos_config = agentos_config
 
         super().__init__(
             agents=resolved_agents,
