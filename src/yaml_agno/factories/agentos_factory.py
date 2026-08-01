@@ -1,9 +1,9 @@
 """AgentOSFactory — builds ``agno.os.AgentOS`` from ``AgentOSConfig``.
 
-Slice 1 (PR 2) resolves string refs via injected registries, maps nested
-settings to Agno-native config objects, and forwards primitives as-is.
-Complex parameters deferred to Slice 2/3 (interfaces, resync) are logged
-at WARNING and excluded from kwargs.
+Slice 2 (PR 3) integrates InterfaceRegistry and MCPServerLifecycle into
+the build pipeline. Interfaces are resolved via ``InterfaceRegistry.build_all``
+when config declares them; MCP lifecycle registration is called post-build
+when mcp.enabled.
 
 Design:
     - Constructor-injected registries (SOLID DI — no global state).
@@ -25,6 +25,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 from agno.os import AgentOS
 from agno.os.config import AuthorizationConfig, MCPServerConfig
 
+from yaml_agno.agentos.interfaces import InterfaceRegistry, InterfaceSpec
+from yaml_agno.agentos.mcp_lifecycle import MCPServerLifecycle
+
 if TYPE_CHECKING:
     from yaml_agno.models.config.agentos_config import AgentOSConfig
 
@@ -32,7 +35,6 @@ __all__ = [
     "AgentOSFactory",
     "AgentRegistry",
     "DatabaseManager",
-    "InterfaceRegistry",
     "KnowledgeRegistry",
     "TeamRegistry",
     "WorkflowRegistry",
@@ -81,16 +83,6 @@ class KnowledgeRegistry(Protocol):
         ...
 
 
-class InterfaceRegistry(Protocol):
-    """Placeholder — Slice 2 wires interface resolution.
-
-    Slice 1 does NOT call this registry; it exists so the constructor
-    contract is stable across slices.
-    """
-
-    ...
-
-
 class DatabaseManager(Protocol):
     """Resolves a database ref string to an ``agno.db.BaseDb`` instance.
 
@@ -110,18 +102,15 @@ class DatabaseManager(Protocol):
 class AgentOSFactory:
     """Builds ``agno.os.AgentOS`` from a validated ``AgentOSConfig``.
 
-    Constructor receives six registries via dependency injection. Each
+    Constructor receives registries via dependency injection. Each
     registry resolves string references into live Agno objects. The
     ``build()`` method orchestrates resolution and constructs the
     ``AgentOS`` instance.
 
-    Slice 1 scope:
-        - Resolves agents, teams, workflows, knowledge, db.
-        - Maps authorization → ``AuthorizationConfig``.
-        - Maps mcp → ``MCPServerConfig``.
-        - Maps scheduler → ``scheduler`` + ``scheduler_poll_interval``.
-        - Forwards primitives (name, base_app, lifespan, cors, tracing…).
-        - Deferred: interfaces, resync (logged at WARNING).
+    Slice 2 scope (PR 3):
+        - InterfaceRegistry.build_all() resolves interface specs.
+        - MCPServerLifecycle.register() wires MCP post-build.
+        - Both are OPTIONAL (``None`` → graceful skip).
 
     Raises:
         ValueError: Duplicate refs in target lists.
@@ -134,21 +123,27 @@ class AgentOSFactory:
         team_registry: TeamRegistry,
         workflow_registry: WorkflowRegistry,
         knowledge_registry: KnowledgeRegistry,
-        interface_registry: InterfaceRegistry,
         db_manager: DatabaseManager,
+        interface_registry: InterfaceRegistry | None = None,
+        mcp_lifecycle: MCPServerLifecycle | None = None,
     ) -> None:
         """Wire the factory with its dependency registries.
 
-        All six registries are REQUIRED. Passing ``None`` for any results
-        in a ``ValueError`` at build time when that registry is needed.
+        The five core registries are REQUIRED. ``interface_registry`` and
+        ``mcp_lifecycle`` are optional (Slice 2 integration).
 
         Args:
             agent_registry: Resolves agent ref strings → Agent objects.
             team_registry: Resolves team ref strings → Team objects.
             workflow_registry: Resolves workflow ref strings → Workflow objects.
             knowledge_registry: Resolves knowledge ref strings → Knowledge.
-            interface_registry: Placeholder for Slice 2 (not consumed yet).
             db_manager: Resolves db ref strings → BaseDb instances.
+            interface_registry: Optional InterfaceRegistry for resolving
+                interface specs (Slice 2). If ``None``, interfaces in config
+                are logged at WARNING and skipped.
+            mcp_lifecycle: Optional MCPServerLifecycle for MCP server
+                registration post-build (Slice 2). If ``None``, MCP config
+                is still mapped to ``MCPServerConfig`` (Slice 1 behavior).
         """
         self._agent_registry = agent_registry
         self._team_registry = team_registry
@@ -156,6 +151,7 @@ class AgentOSFactory:
         self._knowledge_registry = knowledge_registry
         self._interface_registry = interface_registry
         self._db_manager = db_manager
+        self._mcp_lifecycle = mcp_lifecycle
 
     # ------------------------------------------------------------------
     # Public API
@@ -167,11 +163,13 @@ class AgentOSFactory:
         Resolution pipeline:
 
         1. ``config.to_agno_kwargs()`` → raw dict (primitives + unresolved refs).
-        2. Extract target lists, validate no duplicates.
+        2. Strip factory-owned keys, validate no duplicate targets.
         3. Resolve each ref via the corresponding registry.
         4. Map nested settings → Agno-native config objects.
-        5. Strip Slice-1-deferred fields (log at WARNING).
-        6. ``AgentOS(**resolved_kwargs)``.
+        5. Resolve interfaces via ``InterfaceRegistry.build_all`` (Slice 2).
+        6. Strip Slice-3-deferred fields (resync — log at WARNING).
+        7. ``AgentOS(**resolved_kwargs)``.
+        8. Post-build: ``MCPServerLifecycle.register(agentos)`` (Slice 2).
 
         Args:
             config: A validated ``AgentOSConfig``.
@@ -224,15 +222,21 @@ class AgentOSFactory:
         kwargs["scheduler"] = config.scheduler.enabled
         kwargs["scheduler_poll_interval"] = config.scheduler.poll_interval
 
-        # --- 5. Deferred fields (Sl 2/3) — log and exclude ---
-        if config.interfaces:
+        # --- 5. Resolve interfaces (Slice 2) ---
+        if config.interfaces and self._interface_registry is not None:
+            specs = [InterfaceSpec(**iface) for iface in config.interfaces]
+            kwargs["interfaces"] = self._interface_registry.build_all(
+                specs, self._resolve_target
+            )
+        elif config.interfaces and self._interface_registry is None:
             logger.warning(
-                "AgentOSFactory: %d interface(s) deferred to Slice 2; "
-                "not forwarded to AgentOS.",
+                "AgentOSFactory: %d interface(s) in config but no "
+                "InterfaceRegistry injected — skipping interface resolution.",
                 len(config.interfaces),
             )
-        kwargs.pop("interfaces", None)
+        # When no interfaces declared, nothing to forward.
 
+        # --- 6. Deferred fields (Sl 3) — log and exclude ---
         if config.resync.enabled:
             logger.warning(
                 "AgentOSFactory: resync enabled but deferred to Slice 3; "
@@ -244,12 +248,41 @@ class AgentOSFactory:
         # AgentOS's "config" parameter. Strip it to avoid collision.
         kwargs.pop("config", None)
 
-        # --- 6. Construct ---
-        return AgentOS(**kwargs)
+        # --- 7. Construct ---
+        agentos = AgentOS(**kwargs)
+
+        # --- 8. Post-build: MCP lifecycle registration (Slice 2) ---
+        if self._mcp_lifecycle is not None and config.mcp.enabled:
+            self._mcp_lifecycle.register(agentos)
+
+        return agentos
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _resolve_target(self, ref: str) -> Any:
+        """Resolve an interface target ref to an agent, team, or workflow.
+
+        Tries each registry in order: agent → team → workflow. The first
+        registry that returns a result for the ref wins. This is used as
+        the ``resolve_target`` callable passed to ``InterfaceRegistry``.
+
+        Args:
+            ref: The target reference name (e.g. "researcher").
+
+        Returns:
+            The resolved Agno object (Agent, Team, or Workflow).
+
+        Raises:
+            ValueError: When the ref is not found in any registry.
+        """
+        for registry in (self._agent_registry, self._team_registry, self._workflow_registry):
+            try:
+                return registry.get(ref)
+            except (KeyError, AttributeError):
+                continue
+        raise ValueError(f"Unresolved target ref: {ref!r}")
 
     @staticmethod
     def _pop_owned_keys(kwargs: dict[str, Any]) -> None:

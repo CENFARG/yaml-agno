@@ -502,3 +502,282 @@ class TestEmptyConfig:
         config = AgentOSConfig(name="wf-only-os", workflows=["w1"])
         # Should not raise
         factory.build(config)
+
+
+# ---------------------------------------------------------------------------
+# 8. InterfaceRegistry integration (Slice 2, PR 3 — TASK_009)
+# ---------------------------------------------------------------------------
+
+
+class TestInterfaceRegistryIntegration:
+    """Scenario 8: InterfaceRegistry.build_all called when config has interfaces."""
+
+    def test_interfaces_resolved_via_registry(
+        self, mock_agent_registry, mock_team_registry, mock_workflow_registry,
+        mock_knowledge_registry, mock_db_manager, mocker,
+    ) -> None:
+        """When config has interfaces, call interface_registry.build_all."""
+        from yaml_agno.agentos.interfaces import InterfaceRegistry, InterfaceSpec, InterfaceType
+
+        # Build a real InterfaceRegistry (not mocked — we verify call-through)
+        mock_iface_registry = mocker.Mock(spec=InterfaceRegistry)
+        fake_iface = mocker.Mock(name="interface:slack_main")
+        mock_iface_registry.build_all.return_value = [fake_iface]
+
+        # Need a stub MCPServerLifecycle too (new param in TASK_009)
+        mock_mcp_lifecycle = mocker.Mock()
+        mock_mcp_lifecycle._settings.enabled = True  # keep mcp register happy
+
+        factory_with_iface = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_iface_registry,
+            db_manager=mock_db_manager,
+            mcp_lifecycle=mock_mcp_lifecycle,
+        )
+
+        captured: dict = {}
+
+        def _fake_init(self, **kwargs):
+            captured.update(kwargs)
+
+        mocker.patch.object(AgentOS, "__init__", _fake_init)
+
+        config = AgentOSConfig(
+            name="iface-os",
+            agents=["researcher"],
+            interfaces=[
+                {"type": "slack", "target": "researcher", "config": {"bot_token": "xoxb-test"}},
+            ],
+        )
+        factory_with_iface.build(config)
+
+        # build_all MUST have been called with a list of InterfaceSpec
+        mock_iface_registry.build_all.assert_called_once()
+        call_args = mock_iface_registry.build_all.call_args[0]
+        assert len(call_args[0]) == 1
+        assert isinstance(call_args[0][0], InterfaceSpec)
+        assert call_args[0][0].type == InterfaceType.SLACK
+        assert call_args[0][0].target == "researcher"
+
+        # Resolved interfaces forwarded as kwarg
+        assert captured.get("interfaces") == [fake_iface]
+
+    def test_interfaces_not_called_when_empty(
+        self, mock_agent_registry, mock_team_registry, mock_workflow_registry,
+        mock_knowledge_registry, mock_db_manager, mocker,
+    ) -> None:
+        """When config has no interfaces, build_all is NOT called."""
+        mock_iface_registry = mocker.Mock()
+        mock_mcp_lifecycle = mocker.Mock()
+        mock_mcp_lifecycle._settings.enabled = False
+
+        factory_no_iface = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_iface_registry,
+            db_manager=mock_db_manager,
+            mcp_lifecycle=mock_mcp_lifecycle,
+        )
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(name="no-iface-os", agents=["researcher"])
+        factory_no_iface.build(config)
+
+        # Interface registry was never called
+        mock_iface_registry.build_all.assert_not_called()
+
+    def test_interfaces_not_called_when_registry_none(
+        self, mock_agent_registry, mock_team_registry, mock_workflow_registry,
+        mock_knowledge_registry, mock_db_manager, mocker,
+    ) -> None:
+        """When interface_registry is None, build_all is NOT called (graceful)."""
+        mock_mcp_lifecycle = mocker.Mock()
+        mock_mcp_lifecycle._settings.enabled = False
+
+        factory_no_registry = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=None,
+            db_manager=mock_db_manager,
+            mcp_lifecycle=mock_mcp_lifecycle,
+        )
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(
+            name="no-registry-os",
+            agents=["researcher"],
+            interfaces=[{"type": "agui", "target": "researcher"}],
+        )
+        # Should NOT raise — gracefully skips when registry is None
+        factory_no_registry.build(config)
+
+    def test_interfaces_logs_warning_when_registry_none(self, factory, mocker, caplog) -> None:
+        """When interfaces exist but registry is None, log a warning."""
+        mock_mcp_lifecycle = mocker.Mock()
+        mock_mcp_lifecycle._settings.enabled = False
+
+        factory_no_registry = AgentOSFactory(
+            agent_registry=factory._agent_registry,
+            team_registry=factory._team_registry,
+            workflow_registry=factory._workflow_registry,
+            knowledge_registry=factory._knowledge_registry,
+            interface_registry=None,
+            db_manager=factory._db_manager,
+            mcp_lifecycle=mock_mcp_lifecycle,
+        )
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(
+            name="warn-os",
+            agents=["researcher"],
+            interfaces=[{"type": "agui", "target": "researcher"}],
+        )
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            factory_no_registry.build(config)
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) >= 1
+        assert any("interface" in r.message.lower() for r in warnings)
+
+
+# ---------------------------------------------------------------------------
+# 9. MCPServerLifecycle integration (Slice 2, PR 3 — TASK_009)
+# ---------------------------------------------------------------------------
+
+
+class TestMCPServerLifecycleIntegration:
+    """Scenario 9: MCPServerLifecycle.register called when mcp.enabled."""
+
+    def test_mcp_lifecycle_register_called(
+        self, mock_agent_registry, mock_team_registry, mock_workflow_registry,
+        mock_knowledge_registry, mock_interface_registry, mock_db_manager, mocker,
+    ) -> None:
+        """When mcp.enabled, call mcp_lifecycle.register(agentos) after build."""
+        mock_mcp = mocker.Mock()
+        # MCPServerLifecycle.register must exist and be callable
+        mock_mcp.register = mocker.Mock()
+
+        factory_with_mcp = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_interface_registry,
+            db_manager=mock_db_manager,
+            mcp_lifecycle=mock_mcp,
+        )
+
+        captured: dict = {}
+
+        def _fake_init(self, **kwargs):
+            captured.update(kwargs)
+
+        mocker.patch.object(AgentOS, "__init__", _fake_init)
+
+        config = AgentOSConfig(
+            name="mcp-os",
+            agents=["researcher"],
+            mcp=MCPServerSettings(enabled=True, name="mcp-srv", port=9090),
+        )
+        result = factory_with_mcp.build(config)
+
+        # register() called with the AgentOS instance
+        mock_mcp.register.assert_called_once()
+        assert mock_mcp.register.call_args[0][0] is result
+
+    def test_mcp_lifecycle_not_called_when_disabled(
+        self, mock_agent_registry, mock_team_registry, mock_workflow_registry,
+        mock_knowledge_registry, mock_interface_registry, mock_db_manager, mocker,
+    ) -> None:
+        """When mcp is disabled, register() is NOT called."""
+        mock_mcp = mocker.Mock()
+        mock_mcp.register = mocker.Mock()
+
+        factory_with_mcp = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_interface_registry,
+            db_manager=mock_db_manager,
+            mcp_lifecycle=mock_mcp,
+        )
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(
+            name="no-mcp-os",
+            agents=["researcher"],
+            mcp=MCPServerSettings(enabled=False),
+        )
+        factory_with_mcp.build(config)
+
+        # register() never called
+        mock_mcp.register.assert_not_called()
+
+    def test_mcp_lifecycle_not_called_when_none(
+        self, mock_agent_registry, mock_team_registry, mock_workflow_registry,
+        mock_knowledge_registry, mock_interface_registry, mock_db_manager, mocker,
+    ) -> None:
+        """When mcp_lifecycle is None, no crash (graceful)."""
+        factory_no_mcp = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_interface_registry,
+            db_manager=mock_db_manager,
+            mcp_lifecycle=None,
+        )
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(
+            name="no-lifecycle-os",
+            agents=["researcher"],
+            mcp=MCPServerSettings(enabled=True),
+        )
+        # Should NOT raise
+        factory_no_mcp.build(config)
+
+    def test_mcp_lifecycle_not_called_when_mcp_disabled_but_lifecycle_present(
+        self, mock_agent_registry, mock_team_registry, mock_workflow_registry,
+        mock_knowledge_registry, mock_interface_registry, mock_db_manager, mocker,
+    ) -> None:
+        """Lifecycle present but mcp disabled → register() not called."""
+        mock_mcp = mocker.Mock()
+        mock_mcp.register = mocker.Mock()
+
+        factory_mcp = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_interface_registry,
+            db_manager=mock_db_manager,
+            mcp_lifecycle=mock_mcp,
+        )
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(
+            name="disabled-mcp-os",
+            agents=["researcher"],
+            mcp=MCPServerSettings(enabled=False),
+        )
+        factory_mcp.build(config)
+
+        mock_mcp.register.assert_not_called()
