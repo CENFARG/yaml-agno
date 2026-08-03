@@ -10,6 +10,7 @@ Covers:
     4. TenantContextMiddleware: X-Tenant-Id header → composite user_id
     5. AgentOSConfig → to_agno_kwargs() → kwargs dict
     6. InterfaceSpec(A2A) → A2AInterfaceConfig → A2AInterfaceFactory
+    7. Real team.yaml → AgentFactory + TeamFactory + AgnoResolver + ProviderFactory
 """
 
 from __future__ import annotations
@@ -32,8 +33,10 @@ from yaml_agno.agentos.a2a_interface import (
 from yaml_agno.agentos.interfaces import InterfaceRegistry, InterfaceSpec
 from yaml_agno.api.app import YamlAgentOS
 from yaml_agno.factories.agent_factory import AgentFactory
+from yaml_agno.factories.team_factory import TeamFactory
 from yaml_agno.models.config.agent_config import AgentConfig
 from yaml_agno.models.config.agentos_config import AgentOSConfig
+from yaml_agno.models.config.team_config import TeamConfig, TeamMemberConfig
 
 pytestmark = [pytest.mark.integration]
 
@@ -408,3 +411,423 @@ class TestInterfaceRegistryA2APipeline:
         from yaml_agno.agentos.interfaces import InterfaceType
 
         assert InterfaceType.A2A in registry._builders
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 7. Real strategic-gestion-team/team.yaml → full yaml-agno pipeline
+# ═══════════════════════════════════════════════════════════════════════════
+
+TEAM_YAML = """\
+# Strategic Gestion Team — yaml-agno configuration
+# Proof-of-concept: CENF strategic evaluation team as Agno coordinate-mode team.
+# Run via: python run_team.py "Evaluar proyecto X"
+#
+# PROVIDER: OpenRouter (set OPENROUTER_API_KEY env var)
+# Model IDs use OpenRouter format: "provider/model-name"
+
+agents:
+  - name: strategic-pm
+    model: openrouter:deepseek/deepseek-v4-flash
+    tool_call_limit: 20
+    tools:
+      - kind: builtin
+        name: duckduckgo
+      - kind: custom
+        name: read_project_file
+      - kind: custom
+        name: list_project_files
+    description: "Strategic Project Manager — team leader and final decision maker."
+
+  - name: cost-analyst
+    model: openrouter:deepseek/deepseek-v4-flash
+    tool_call_limit: 10
+    tools:
+      - kind: builtin
+        name: duckduckgo
+      - kind: custom
+        name: read_project_file
+      - kind: custom
+        name: list_project_files
+    description: "Cost Governance Analyst — token economics and rate limit management."
+
+  - name: fractal-validator
+    model: openrouter:deepseek/deepseek-v4-flash
+    tool_call_limit: 10
+    tools:
+      - kind: builtin
+        name: duckduckgo
+      - kind: custom
+        name: read_project_file
+      - kind: custom
+        name: list_project_files
+    description: "Fractal Validator — recursive depth analysis and hidden complexity detection."
+
+  - name: gtm-strategist
+    model: openrouter:deepseek/deepseek-v4-flash
+    tool_call_limit: 10
+    tools:
+      - kind: builtin
+        name: duckduckgo
+      - kind: custom
+        name: read_project_file
+      - kind: custom
+        name: list_project_files
+    description: "Go-to-Market Strategist — distribution, growth, and channel strategy."
+
+  - name: risk-officer
+    model: openrouter:deepseek/deepseek-v4-flash
+    tool_call_limit: 10
+    tools:
+      - kind: builtin
+        name: duckduckgo
+      - kind: custom
+        name: read_project_file
+      - kind: custom
+        name: list_project_files
+    description: "Risk & Compliance Officer — risk identification, classification, mitigation."
+
+  - name: pmf-analyst
+    model: openrouter:deepseek/deepseek-v4-flash
+    tool_call_limit: 10
+    tools:
+      - kind: builtin
+        name: duckduckgo
+      - kind: custom
+        name: read_project_file
+      - kind: custom
+        name: list_project_files
+    description: "Product-Market Fit Analyst — market validation, competitive analysis, pricing."
+
+team:
+  name: strategic-gestion-team
+  mode: coordinate
+  max_iterations: 5
+  instructions: |
+    Strategic Gestion Team — evaluates project viability, risks, costs, and
+    market for CENF projects. Produces actionable strategic decisions.
+
+    The team leader (strategic-pm) coordinates the evaluation by consulting
+    each specialist. All members provide their analysis; the leader consolidates
+    into a final GO/NO-GO/PENDING decision.
+  members:
+    - member: leader
+      agent: strategic-pm
+      role: "Team leader — consolidates and decides"
+    - member: cost
+      agent: cost-analyst
+      role: "Cost analysis and projections"
+    - member: validator
+      agent: fractal-validator
+      role: "Depth validation and complexity assessment"
+    - member: gtm
+      agent: gtm-strategist
+      role: "Go-to-market strategy"
+    - member: risk
+      agent: risk-officer
+      role: "Risk assessment and compliance"
+    - member: pmf
+      agent: pmf-analyst
+      role: "Product-market fit validation"
+"""  # noqa: E501
+
+
+_AGENT_NAMES = [
+    "strategic-pm",
+    "cost-analyst",
+    "fractal-validator",
+    "gtm-strategist",
+    "risk-officer",
+    "pmf-analyst",
+]
+
+
+def _extract_agent_entries(yaml_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract agent entries from the YAML dict, filtering to builtin tools only
+    and injecting inline test instructions."""
+    entries: list[dict[str, Any]] = []
+    for agent in yaml_data["agents"]:
+        builtin_tools = [t for t in agent.get("tools", []) if t.get("kind") == "builtin"]
+        entries.append({
+            "name": agent["name"],
+            "model": agent["model"],
+            "tool_call_limit": agent.get("tool_call_limit"),
+            "description": agent.get("description"),
+            "tools": builtin_tools,
+            # instructions_file references external files — inline test instructions
+            "instructions": f"Test instructions for {agent['name']}.",
+        })
+    return entries
+
+
+class TestStrategicGestionTeamE2E:
+    """7. Real strategic-gestion-team/team.yaml → full yaml-agno pipeline.
+
+    Validates that the real 6-agent coordinate-mode team can be built
+    end-to-end using yaml-agno's AgentFactory, TeamFactory, AgnoResolver,
+    and ProviderFactory.
+    """
+
+    @pytest.fixture
+    def team_data(self) -> dict[str, Any]:
+        """Parse the real team.yaml into a dict."""
+        return yaml.safe_load(TEAM_YAML)
+
+    @staticmethod
+    def _build_agents(
+        entries: list[dict[str, Any]],
+        resolver: Any | None = None,
+        provider_factory: Any | None = None,
+    ) -> dict[str, Agent]:
+        """Build agents from extracted entries via AgentFactory."""
+        agents: dict[str, Agent] = {}
+        for entry in entries:
+            ac = AgentConfig(
+                name=entry["name"],
+                model=entry["model"],
+                instructions=entry["instructions"],
+                description=entry.get("description"),
+                tools=entry.get("tools", []),
+                tool_call_limit=entry.get("tool_call_limit"),
+            )
+            agents[entry["name"]] = AgentFactory.build(
+                ac,
+                resolver=resolver,
+                provider_factory=provider_factory,
+            )
+        return agents
+
+    # ── 7.1 Parse team YAML structure ────────────────────────────────────
+
+    def test_parse_team_yaml_has_six_agents(self, team_data: dict[str, Any]) -> None:
+        """The real team.yaml must define exactly 6 agents."""
+        assert "agents" in team_data
+        assert len(team_data["agents"]) == 6
+        parsed_names = {a["name"] for a in team_data["agents"]}
+        assert parsed_names == set(_AGENT_NAMES)
+
+    def test_parse_team_yaml_has_coordinate_team(self, team_data: dict[str, Any]) -> None:
+        """The real team.yaml must define one team in coordinate mode."""
+        assert "team" in team_data
+        assert team_data["team"]["name"] == "strategic-gestion-team"
+        assert team_data["team"]["mode"] == "coordinate"
+        assert len(team_data["team"]["members"]) == 6
+
+    # ── 7.2 Build all 6 agents (model string passthrough) ────────────────
+
+    def test_build_all_six_agents(self, team_data: dict[str, Any]) -> None:
+        """Every agent in the team config builds successfully via AgentFactory."""
+        entries = _extract_agent_entries(team_data)
+        agents = self._build_agents(entries)
+
+        assert len(agents) == 6
+        for name in _AGENT_NAMES:
+            assert name in agents
+            assert isinstance(agents[name], Agent)
+            assert agents[name].name == name
+
+    # ── 7.3 Agent model validation ───────────────────────────────────────
+
+    def test_agents_have_openrouter_deepseek_model(
+        self, team_data: dict[str, Any]
+    ) -> None:
+        """Every agent's model is openrouter:deepseek/deepseek-v4-flash.
+
+        Agno resolves the string to a Model instance; we validate the id.
+        """
+        entries = _extract_agent_entries(team_data)
+        agents = self._build_agents(entries)
+
+        for name, agent in agents.items():
+            assert isinstance(agent.model, object), f"{name} model is not set"
+            model_id = getattr(agent.model, "id", None)
+            assert model_id == "deepseek/deepseek-v4-flash", (
+                f"{name}: expected deepseek/deepseek-v4-flash, got {model_id}"
+            )
+
+    # ── 7.4 Agent tool_call_limit validation ─────────────────────────────
+
+    def test_strategic_pm_has_tool_call_limit_20(
+        self, team_data: dict[str, Any]
+    ) -> None:
+        """The team leader (strategic-pm) must have tool_call_limit=20."""
+        entries = _extract_agent_entries(team_data)
+        agents = self._build_agents(entries)
+
+        assert agents["strategic-pm"].tool_call_limit == 20
+
+    def test_other_agents_have_tool_call_limit_10(
+        self, team_data: dict[str, Any]
+    ) -> None:
+        """All non-leader agents must have tool_call_limit=10."""
+        entries = _extract_agent_entries(team_data)
+        agents = self._build_agents(entries)
+
+        for name in _AGENT_NAMES:
+            if name == "strategic-pm":
+                continue
+            assert agents[name].tool_call_limit == 10, (
+                f"{name}: expected 10, got {agents[name].tool_call_limit}"
+            )
+
+    # ── 7.5 Builtin tools (duckduckgo) via resolver ──────────────────────
+
+    def test_agents_have_duckduckgo_tool_when_resolver_provided(
+        self, team_data: dict[str, Any]
+    ) -> None:
+        """Each agent gets duckduckgo builtin tool when resolver is wired."""
+        from yaml_agno.di.agno_resolver import build_agno_resolver
+
+        resolver = build_agno_resolver()
+        entries = _extract_agent_entries(team_data)
+        agents = self._build_agents(entries, resolver=resolver)
+
+        from agno.tools.duckduckgo import DuckDuckGoTools
+
+        for name, agent in agents.items():
+            assert len(agent.tools) >= 1, f"{name}: expected >=1 tool, got {len(agent.tools)}"
+            # At least one tool must be DuckDuckGoTools
+            duck_tools = [t for t in agent.tools if isinstance(t, DuckDuckGoTools)]
+            assert len(duck_tools) >= 1, f"{name}: no DuckDuckGoTools found"
+
+    # ── 7.6 Build team via TeamFactory ───────────────────────────────────
+
+    def test_build_team_with_six_members(
+        self, team_data: dict[str, Any]
+    ) -> None:
+        """TeamFactory.build produces a Team with all 6 members in YAML order."""
+        entries = _extract_agent_entries(team_data)
+        agents = self._build_agents(entries)
+
+        team_cfg_data = team_data["team"]
+        members = [
+            TeamMemberConfig(member=m["member"], agent=m["agent"], role=m.get("role"))
+            for m in team_cfg_data["members"]
+        ]
+        tc = TeamConfig(
+            name=team_cfg_data["name"],
+            mode=team_cfg_data["mode"],
+            instructions=team_cfg_data.get("instructions"),
+            members=members,
+        )
+
+        team = TeamFactory.build(tc, agents)
+
+        assert team.name == "strategic-gestion-team"
+        assert len(team.members) == 6
+        # Member order matches YAML declaration order
+        member_names = [m.name for m in team.members]
+        assert member_names == _AGENT_NAMES
+
+    # ── 7.7 Team mode and leader ─────────────────────────────────────────
+
+    def test_team_mode_is_coordinate(
+        self, team_data: dict[str, Any]
+    ) -> None:
+        """The team must operate in coordinate mode."""
+        entries = _extract_agent_entries(team_data)
+        agents = self._build_agents(entries)
+
+        team_cfg_data = team_data["team"]
+        members = [
+            TeamMemberConfig(member=m["member"], agent=m["agent"], role=m.get("role"))
+            for m in team_cfg_data["members"]
+        ]
+        tc = TeamConfig(
+            name=team_cfg_data["name"],
+            mode=team_cfg_data["mode"],
+            instructions=team_cfg_data.get("instructions"),
+            members=members,
+        )
+
+        team = TeamFactory.build(tc, agents)
+
+        from agno.team.mode import TeamMode
+
+        assert team.mode is TeamMode.coordinate
+
+    def test_team_leader_is_strategic_pm(
+        self, team_data: dict[str, Any]
+    ) -> None:
+        """The team leader (first member) must be strategic-pm."""
+        entries = _extract_agent_entries(team_data)
+        agents = self._build_agents(entries)
+
+        team_cfg_data = team_data["team"]
+        members = [
+            TeamMemberConfig(member=m["member"], agent=m["agent"], role=m.get("role"))
+            for m in team_cfg_data["members"]
+        ]
+        tc = TeamConfig(
+            name=team_cfg_data["name"],
+            mode=team_cfg_data["mode"],
+            instructions=team_cfg_data.get("instructions"),
+            members=members,
+        )
+
+        team = TeamFactory.build(tc, agents)
+
+        assert team.members[0].name == "strategic-pm"
+
+    # ── 7.8 Full pipeline with ProviderFactory + AgnoResolver ────────────
+
+    def test_agent_factory_build_with_provider_factory(
+        self, team_data: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AgentFactory.build with resolver + ProviderFactory produces a real
+        Agno Model instance with api_key injected for openrouter provider."""
+        from core_infrastructure.config.adapters.in_memory_config_adapter import (
+            InMemoryConfigAdapter,
+        )
+        from core_infrastructure.dependency import ImportlibDependencyAdapter
+        from core_infrastructure.logger.adapters import InMemoryLoggerAdapter
+        from core_infrastructure.observability.adapters import NoopObservabilityAdapter
+
+        from yaml_agno.di.agno_resolver import build_agno_resolver
+        from yaml_agno.di.provider_factory import ProviderFactory
+        from yaml_agno.di.registries import AGNO_ALLOWLIST_PREFIXES
+        from yaml_agno.di.secret_resolver import ConfigSecretResolver
+        from yaml_agno.models.model_spec import parse_model_spec, ModelExpandedSpec
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-openrouter")
+
+        cfg = InMemoryConfigAdapter()
+        cfg.set_value("dependency.allowlist_paths", list(AGNO_ALLOWLIST_PREFIXES))
+        logger = InMemoryLoggerAdapter()
+        obs = NoopObservabilityAdapter()
+        adapter = ImportlibDependencyAdapter(cfg, logger, obs)
+        resolver = build_agno_resolver(adapter=adapter)
+        secret_resolver = ConfigSecretResolver(cfg)
+        pf = ProviderFactory(resolver, secret_resolver)
+
+        # Build strategic-pm with the full provider_factory pipeline
+        entries = _extract_agent_entries(team_data)
+        pm_entry = next(e for e in entries if e["name"] == "strategic-pm")
+
+        ac = AgentConfig(
+            name=pm_entry["name"],
+            model=pm_entry["model"],
+            instructions=pm_entry["instructions"],
+            description=pm_entry.get("description"),
+            tools=pm_entry.get("tools", []),
+            tool_call_limit=pm_entry.get("tool_call_limit"),
+        )
+
+        agent = AgentFactory.build(ac, resolver=resolver, provider_factory=pf)
+
+        assert isinstance(agent, Agent)
+        assert agent.name == "strategic-pm"
+        # Model was built by ProviderFactory (real Agno Model instance)
+        assert isinstance(agent.model, object)
+        assert agent.model.id == "deepseek/deepseek-v4-flash"
+        # api_key was injected via SecretResolver → env var
+        assert getattr(agent.model, "api_key", None) == "sk-test-openrouter"
+
+        # Verify ProviderFactory resolves the parsed model spec
+        parsed = parse_model_spec("openrouter:deepseek/deepseek-v4-flash")
+        if not isinstance(parsed, ModelExpandedSpec):
+            spec = ModelExpandedSpec.model_validate(parsed.model_dump())
+        else:
+            spec = parsed
+        built_model = pf.build(spec)
+        assert built_model.id == "deepseek/deepseek-v4-flash"
+        assert built_model.api_key == "sk-test-openrouter"
