@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 from fastapi import APIRouter, FastAPI
+from fastapi.testclient import TestClient
 from starlette.middleware.cors import CORSMiddleware
 
 from yaml_agno.api.fastapi_app_builder import EndpointGroup, FastAPIAppBuilder
@@ -207,13 +208,7 @@ class TestConditionalRouter:
     def test_conditional_router_mounted_when_enabled(
         self, config_scheduler_enabled: AgentOSConfig
     ) -> None:
-        """When scheduler.enabled is True, the schedules router IS mounted.
-
-        Given: a config with scheduler=SchedulerSettings(enabled=True)
-        And: an EndpointGroup with conditional="scheduler.enabled"
-        When: build() is called
-        Then: the schedules router IS included in the app routes
-        """
+        """When scheduler.enabled is True, the schedules router IS mounted."""
         schedules_router = APIRouter()
 
         @schedules_router.get("/schedules")
@@ -230,17 +225,13 @@ class TestConditionalRouter:
         builder = FastAPIAppBuilder(config=config_scheduler_enabled, endpoint_groups=groups)
         app = builder.build()
 
-        route_paths = [getattr(route, "path", None) for route in app.routes]
-        assert "/schedules/schedules" in route_paths
+        client = TestClient(app)
+        resp = client.get("/schedules/schedules")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
 
     def test_unconditional_router_always_mounted(self, basic_config: AgentOSConfig) -> None:
-        """When ``conditional`` is None, the router IS always mounted.
-
-        Given: a config (any valid config)
-        And: an EndpointGroup with conditional=None
-        When: build() is called
-        Then: the health router IS mounted
-        """
+        """When conditional is None, the router IS always mounted."""
         health_router = APIRouter()
 
         @health_router.get("/health")
@@ -257,8 +248,10 @@ class TestConditionalRouter:
         builder = FastAPIAppBuilder(config=basic_config, endpoint_groups=groups)
         app = builder.build()
 
-        route_paths = [getattr(route, "path", None) for route in app.routes]
-        assert "/health/health" in route_paths
+        client = TestClient(app)
+        resp = client.get("/health/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "alive"}
 
 
 # ---------------------------------------------------------------------------
