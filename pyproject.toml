@@ -34,12 +34,15 @@ dependencies = [
     # Transitive deps required by core-cenf-py at import time (CI fails without these):
     "aiofiles>=24.0,<25",
     "fastapi>=0.100",
-    "mcp>=1.0",
+    "mcp>=1.0,<1.28",
     "saq>=0.15,<1",
     "openai>=1.0",
 ]
 
 [project.optional-dependencies]
+cel = [
+    "cel-python>=1.4.5",
+]
 dev = [
     "pytest>=9.0",
     "pytest-asyncio>=0.24",

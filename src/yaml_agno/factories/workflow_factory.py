@@ -70,6 +70,7 @@ see the note above.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -87,6 +88,7 @@ from agno.workflow.types import StepType
 from agno.workflow.workflow import Workflow
 
 from yaml_agno.models.config.workflow_config import StepConfig, WorkflowConfig
+from yaml_agno.workflows.step_executor import StepExecutor
 
 __all__ = ["WorkflowFactory"]
 
@@ -147,6 +149,7 @@ class WorkflowFactory:
         agents: dict[str, Agent],
         teams: dict[str, Team],
         callables: dict[str, Callable[..., Any]] | None = None,
+        step_executor: StepExecutor | None = None,
     ) -> Workflow:
         """Build a native ``agno.Workflow`` from a validated ``WorkflowConfig``.
 
@@ -169,6 +172,11 @@ class WorkflowFactory:
             callables: An optional mapping from simple name (no dots) to a
                 callable executor. ``None`` is treated as an empty dict — any
                 unresolved callable ref will then raise ``ValueError``.
+            step_executor: An optional ``StepExecutor`` for resilience wrapping.
+                When provided, function-executor steps are wrapped in a closure
+                that calls ``step_executor.execute_step()``. When ``None``,
+                function steps behave as before (backward compatible). Agent,
+                team, and workflow steps are never wrapped.
 
         Returns:
             A constructed ``agno.Workflow``. Per ``agno/workflow/workflow.py:
@@ -200,6 +208,7 @@ class WorkflowFactory:
                     teams=teams,
                     callables=resolved_callables,
                     step_index=step_index,
+                    step_executor=step_executor,
                 )
             )
 
@@ -216,6 +225,7 @@ class WorkflowFactory:
         teams: dict[str, Team],
         callables: dict[str, Callable[..., Any]],
         step_index: dict[str, StepConfig],
+        step_executor: StepExecutor | None = None,
     ) -> _BuiltStep:
         """Dispatch a single ``StepConfig`` to its Agno primitive.
 
@@ -281,6 +291,7 @@ class WorkflowFactory:
                 agents=agents,
                 teams=teams,
                 callables=callables,
+                step_executor=step_executor,
             )
 
         # --- Steps (sequential pipeline) ---
@@ -292,6 +303,7 @@ class WorkflowFactory:
                     teams=teams,
                     callables=callables,
                     step_index=step_index,
+                    step_executor=step_executor,
                 )
                 for raw in step_cfg.steps
             ]
@@ -306,6 +318,7 @@ class WorkflowFactory:
                     teams=teams,
                     callables=callables,
                     step_index=step_index,
+                    step_executor=step_executor,
                 )
                 for raw in step_cfg.steps
             ]
@@ -322,6 +335,7 @@ class WorkflowFactory:
                         teams=teams,
                         callables=callables,
                         step_index=step_index,
+                        step_executor=step_executor,
                     )
                 )
             else_steps: list[Any] | None = None
@@ -333,6 +347,7 @@ class WorkflowFactory:
                         teams=teams,
                         callables=callables,
                         step_index=step_index,
+                        step_executor=step_executor,
                     )
                 ]
             # Open Item #1: resolve evaluator via _resolve_callable_or_cel.
@@ -371,6 +386,7 @@ class WorkflowFactory:
                     teams=teams,
                     callables=callables,
                     step_index=step_index,
+                    step_executor=step_executor,
                 )
                 # Override the .name to the case key so the Router can resolve
                 # the selector's returned string against _step_name_map.
@@ -400,6 +416,7 @@ class WorkflowFactory:
                     teams=teams,
                     callables=callables,
                     step_index=step_index,
+                    step_executor=step_executor,
                 )
                 for raw in step_cfg.steps
             ]
@@ -441,6 +458,7 @@ class WorkflowFactory:
         agents: dict[str, Agent],
         teams: dict[str, Team],
         callables: dict[str, Callable[..., Any]],
+        step_executor: StepExecutor | None = None,
     ) -> Step:
         """Build an ``agno.Step`` from the first available executor source.
 
@@ -504,6 +522,30 @@ class WorkflowFactory:
                     "requires a callable. Register the callable under a simple "
                     "name (no dots/operators) or use a Condition/Router/Loop."
                 )
+            # TD-06: Resilience binding — wrap the raw callable in a closure
+            # that calls step_executor.execute_step(). The wrapper is an async
+            # def so Agno's _is_async_callable detects it and awaits it.
+            if step_executor is not None:
+                raw_fn = executor
+
+                async def _resilient_executor(si: Any, **kwargs: Any) -> Any:
+                    """Resilience wrapper: delegate to step_executor.execute_step.
+
+                    Creates a thunk that calls raw_fn with the StepInput and any
+                    additional kwargs Agno passes (run_context, session_state).
+                    """
+                    if asyncio.iscoroutinefunction(raw_fn):
+                        # Async raw_fn: thunk returns a coroutine directly.
+                        return await step_executor.execute_step(
+                            lambda: raw_fn(si, **kwargs)
+                        )
+                    else:
+                        # Sync raw_fn: thunk must be an async def.
+                        async def _work() -> Any:
+                            return raw_fn(si, **kwargs)
+                        return await step_executor.execute_step(_work)
+
+                executor = _resilient_executor
             return Step(
                 name=step_cfg.step,
                 executor=executor,

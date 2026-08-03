@@ -43,7 +43,9 @@ expression (``is_cel_expression`` returns False) and MUST be resolved from the
 ``callables`` registry.
 """
 
+import asyncio
 import logging
+from unittest.mock import MagicMock
 
 import pytest
 from agno.agent import Agent
@@ -666,6 +668,104 @@ class TestOpaqueSlotsAndTrust:
         assert isinstance(cond, Condition)
         assert cond.steps[0].name == "s1"
         assert cond.else_steps[0].name == "s2"
+
+
+# --------------------------------------------------------------------------- #
+# TD-06 — StepExecutor resilience binding (RED tests).
+# --------------------------------------------------------------------------- #
+
+
+class TestStepExecutorBinding:
+    """RED→GREEN tests for TD-06: Agno Step.aexecute resilience binding.
+
+    When a ``StepExecutor`` is passed to ``WorkflowFactory.build()``, function-
+    executor steps are wrapped in a closure adapter that calls
+    ``step_executor.execute_step()``. Agent/team steps are unaffected.
+    """
+
+    def test_function_step_wrapped_when_step_executor_provided(self) -> None:
+        """RED: function-executor step is wrapped when step_executor is given.
+
+        The Step.executor must NOT be the raw callable — it must be a coroutine
+        function (async def wrapper) that delegates to step_executor.execute_step.
+        """
+        from yaml_agno.workflows.step_executor import StepExecutor
+
+        fn = _fn_factory("my_fn")
+        error_mgr = MagicMock()
+        step_exec = StepExecutor(error_manager=error_mgr)
+
+        cfg = _workflow_cfg([StepConfig(step="s", type="Step", function="my_fn")])
+        result = WorkflowFactory.build(
+            cfg,
+            agents={},
+            teams={},
+            callables={"my_fn": fn},
+            step_executor=step_exec,
+        )
+        step = result.steps[0]
+        assert isinstance(step, Step)
+        # The executor must NOT be the raw function — it must be wrapped.
+        assert step.executor is not fn
+        # The wrapper must be a coroutine function so Agno detects it as async.
+        assert asyncio.iscoroutinefunction(step.executor)
+
+    def test_function_step_unwrapped_when_step_executor_none(self) -> None:
+        """RED: backward compat — no wrapping when step_executor is None.
+
+        When step_executor is not passed (default None), the function executor
+        is passed directly to Step.executor unchanged.
+        """
+        fn = _fn_factory("my_fn")
+        cfg = _workflow_cfg([StepConfig(step="s", type="Step", function="my_fn")])
+        result = WorkflowFactory.build(
+            cfg,
+            agents={},
+            teams={},
+            callables={"my_fn": fn},
+            # step_executor omitted → default None
+        )
+        step = result.steps[0]
+        assert isinstance(step, Step)
+        assert step.executor is fn
+
+    def test_agent_step_unaffected_by_step_executor(self) -> None:
+        """RED: agent steps pass through unchanged when step_executor is given.
+
+        The resilience wrapper only applies to function-executor steps, not
+        agent, team, or workflow steps.
+        """
+        from yaml_agno.workflows.step_executor import StepExecutor
+
+        agent_a = _agent("a1")
+        error_mgr = MagicMock()
+        step_exec = StepExecutor(error_manager=error_mgr)
+
+        cfg = _workflow_cfg([StepConfig(step="s", type="Step", agent="a1")])
+        result = WorkflowFactory.build(
+            cfg,
+            agents={"a1": agent_a},
+            teams={},
+            step_executor=step_exec,
+        )
+        step = result.steps[0]
+        assert isinstance(step, Step)
+        assert step.agent is agent_a
+
+    def test_step_executor_none_accepted_by_build(self) -> None:
+        """RED: explicit step_executor=None is accepted (same as omitted)."""
+        fn = _fn_factory("my_fn")
+        cfg = _workflow_cfg([StepConfig(step="s", type="Step", function="my_fn")])
+        result = WorkflowFactory.build(
+            cfg,
+            agents={},
+            teams={},
+            callables={"my_fn": fn},
+            step_executor=None,
+        )
+        step = result.steps[0]
+        assert isinstance(step, Step)
+        assert step.executor is fn
 
 
 # --------------------------------------------------------------------------- #

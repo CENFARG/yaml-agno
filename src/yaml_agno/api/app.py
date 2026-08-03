@@ -1,12 +1,19 @@
-"""``YamlAgentOS`` — yaml-agno's ``AgentOS`` subclass (SPEC_06 slice A).
+"""``YamlAgentOS`` — yaml-agno's ``AgentOS`` subclass (SPEC_06 slice A+B).
 
 Inherits the full native Agno 2.6.22 router surface
 (``POST /agents/{agent_id}/runs``, ``GET /health``, ``GET /agents``, ...) from
-``agno.os.AgentOS``. Slice A adds only:
+``agno.os.AgentOS``. Slice A adds:
 
 1. Dual agent source resolution (pre-built list OR YAML config path).
 2. A ``get_app()`` override that calls ``super().get_app()`` and OPTIONALLY
    mounts the slice-A health extensions (``/health/liveness`` + ``/health/readiness``).
+
+Slice B adds:
+
+3. ``TenantContextMiddleware`` (SPEC_06 §3.2) — registered in ``get_app()``
+   when ``mount_tenant_context=True`` (default). Sets ``request.state.user_id``
+   to the composite ``"{tenant_id}:{principal_id}"`` via ``resolve_user_id()``
+   (SPEC_04).
 
 Corrects the four SPEC_06 defects the exploration surfaced:
 
@@ -27,7 +34,7 @@ Corrects the four SPEC_06 defects the exploration surfaced:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from agno.agent import Agent
@@ -35,11 +42,18 @@ from agno.agent.factory import AgentFactory as AgnoAgentFactory
 from agno.agent.protocol import AgentProtocol
 from agno.agent.remote import RemoteAgent
 from agno.os import AgentOS
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from yaml_agno.api.health import get_liveness_router, get_readiness_router
+from yaml_agno.api.middleware.tenant_context import TenantContextMiddleware
 from yaml_agno.factories.agent_factory import AgentFactory
+from yaml_agno.memory.user_identity import UserIdentityResolutionError
 from yaml_agno.models.config.agent_config import AgentConfig
+
+if TYPE_CHECKING:
+    from yaml_agno.factories.agentos_factory import AgentOSFactory
+    from yaml_agno.models.config.agentos_config import AgentOSConfig
 
 __all__ = ["AgentEntry", "YamlAgentOS"]
 
@@ -51,12 +65,12 @@ AgentEntry = Agent | RemoteAgent | AgentProtocol | AgnoAgentFactory
 
 
 class YamlAgentOS(AgentOS):
-    """yaml-agno's subclass of ``agno.os.AgentOS`` (SPEC_06 slice A).
+    """yaml-agno's subclass of ``agno.os.AgentOS`` (SPEC_06 slice A+B).
 
     Inherits every native router, middleware, and behaviour from ``AgentOS``.
     Slice A adds dual agent source resolution (pre-built list OR YAML config
-    path) and an optional pair of health extension routers mounted inside the
-    overridden ``get_app()``.
+    path) and an optional pair of health extension routers. Slice B adds the
+    ``TenantContextMiddleware`` (SPEC_06 §3.2) for composite user_id resolution.
 
     WARNING (slice A authorization default):
 
@@ -80,6 +94,10 @@ class YamlAgentOS(AgentOS):
         agents: list[AgentEntry] | None = None,
         authorization: bool = False,
         mount_health: bool = True,
+        mount_tenant_context: bool = True,
+        memory_cfg: Any = None,
+        agentos_factory: AgentOSFactory | None = None,
+        agentos_config: AgentOSConfig | None = None,
         **agentos_kwargs: Any,
     ) -> None:
         """Initialize ``YamlAgentOS`` from a pre-built agent list OR a YAML config path.
@@ -99,6 +117,16 @@ class YamlAgentOS(AgentOS):
         requires at least one of ``teams``, ``workflows``, ``knowledge``, or
         ``db`` via ``**agentos_kwargs`` (verified Agno 2.6.22 behavior).
 
+        **AgentOSFactory integration stub (SPEC_12 Slice 1)**:
+
+        - ``agentos_factory`` and ``agentos_config`` are stored as instance
+          attributes for future S3 wiring (``yaml-agno serve``). They do NOT
+          alter the existing constructor behavior — the additive path preserves
+          backward compatibility with all existing callers.
+        - When both are provided, the caller has opted into the factory path.
+          The actual ``AgentOSFactory.build(agentos_config)`` call is deferred
+          to the S3 wiring. For now, the attributes are stored and documented.
+
         Args:
             config_path: Optional path to a YAML agent-definition file. Mutually
                 exclusive with ``agents``.
@@ -110,6 +138,17 @@ class YamlAgentOS(AgentOS):
             mount_health: When ``True`` (default), mount ``/health/liveness`` and
                 ``/health/readiness`` inside ``get_app()``. Set to ``False`` for
                 unit tests that want the bare native surface.
+            mount_tenant_context: When ``True`` (default), register the
+                ``TenantContextMiddleware`` (SPEC_06 §3.2) inside ``get_app()``.
+                Set to ``False`` for unit tests that don't supply ``memory_cfg``.
+            memory_cfg: YAML ``memory:`` block (optional). Carries
+                ``system_user_id`` used by ``resolve_user_id`` when no human
+                principal is present on the request. Required when
+                ``mount_tenant_context=True`` and no JWT auth is active.
+            agentos_factory: Optional ``AgentOSFactory`` instance (SPEC_12
+                Slice 1 integration stub). Stored for S3 wiring.
+            agentos_config: Optional ``AgentOSConfig`` instance (SPEC_12
+                Slice 1 integration stub). Stored for S3 wiring.
             **agentos_kwargs: Extra keyword arguments forwarded verbatim to
                 ``super().__init__`` (e.g. ``mcp_server``,
                 ``telemetry``, ``teams``, ``workflows``, ``db``...).
@@ -131,6 +170,12 @@ class YamlAgentOS(AgentOS):
         resolved_agents = self._resolve_agents(agents=agents, config_path=config_path)
 
         self._mount_health = mount_health
+        self._mount_tenant_context = mount_tenant_context
+        self._memory_cfg = memory_cfg
+
+        # SPEC_12 Slice 1 integration stub — stored for S3 wiring.
+        self._agentos_factory = agentos_factory
+        self._agentos_config = agentos_config
 
         super().__init__(
             agents=resolved_agents,
@@ -177,13 +222,17 @@ class YamlAgentOS(AgentOS):
         return built
 
     def get_app(self) -> FastAPI:
-        """Return the FastAPI app with native routers plus the slice-A health extensions.
+        """Return the FastAPI app with native routers plus yaml-agno extensions.
 
         Overrides ``AgentOS.get_app``. Calls ``super().get_app()`` so the
         inherited lifespan, exception handlers, DB auto-discovery, and the full
         native router set (``POST /agents/{agent_id}/runs``, ``GET /health``,
-        ...) are preserved, then OPTIONALLY mounts the slice-A health extensions
-        on the returned app via ``app.include_router(...)``.
+        ...) are preserved, then mounts the yaml-agno extensions on the returned
+        app via ``app.include_router(...)`` and ``app.add_middleware(...)``.
+
+        Extension middleware is registered LAST so it runs FIRST (outermost).
+        ``TenantContextMiddleware`` must set ``request.state.user_id`` BEFORE
+        native AgentOS handlers read it.
 
         @ai-directive: register extensions ONLY here, AFTER ``super().get_app()``.
         Do NOT override ``_add_built_in_routes`` or ``_add_router`` — those are
@@ -197,5 +246,21 @@ class YamlAgentOS(AgentOS):
         if self._mount_health:
             app.include_router(get_liveness_router())
             app.include_router(get_readiness_router())
+
+        if self._mount_tenant_context:
+            app.add_middleware(TenantContextMiddleware, memory_cfg=self._memory_cfg)
+
+            # A missing/empty tenant_id is an authentication failure (SPEC_06
+            # §3.2): resolve_user_id raises UserIdentityResolutionError inside
+            # the middleware. Without this handler it surfaces as a raw 500.
+            # Map it to 401 Unauthorized with a structured JSON body.
+            @app.exception_handler(UserIdentityResolutionError)
+            async def _tenant_context_error_handler(
+                request: Request, exc: UserIdentityResolutionError
+            ) -> JSONResponse:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": str(exc)},
+                )
 
         return app
