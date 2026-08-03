@@ -831,3 +831,98 @@ class TestStrategicGestionTeamE2E:
         built_model = pf.build(spec)
         assert built_model.id == "deepseek/deepseek-v4-flash"
         assert built_model.api_key == "sk-test-openrouter"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Helper Registries for AgentOSFactory DI
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _DictRegistry:
+    """Simple dict-based registry matching AgentRegistry Protocol."""
+
+    def __init__(self, data: dict[str, Any] | None = None) -> None:
+        self._data: dict[str, Any] = data if data is not None else {}
+
+    def get(self, ref: str) -> Any:
+        if ref not in self._data:
+            raise KeyError(ref)
+        return self._data[ref]
+
+
+class _DictDBManager:
+    """Simple dict-based DB manager matching DatabaseManager Protocol."""
+
+    def __init__(self, data: dict[str, Any] | None = None) -> None:
+        self._data: dict[str, Any] = data if data is not None else {}
+
+    def get_db(self, ref: str) -> Any:
+        if ref not in self._data:
+            raise KeyError(ref)
+        return self._data[ref]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SPEC_12 Full Pipeline (AgentOSFactory → AgentOS → get_app)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestAgentOSFullPipeline:
+    """AgentOSFactory.build() end-to-end: Config → Factory → AgentOS → FastAPI."""
+
+    def test_full_agentos_pipeline_config_to_app(self) -> None:
+        """Build AgentOSConfig, AgentOSFactory, call build(), get AgentOS,
+        call get_app(), verify routes."""
+        from yaml_agno.factories.agentos_factory import AgentOSFactory
+
+        agent = _build_test_agent("researcher")
+        agent_registry = _DictRegistry({"researcher": agent})
+
+        config = AgentOSConfig(
+            name="e2e-agentos",
+            agents=["researcher"],
+        )
+
+        factory = AgentOSFactory(
+            agent_registry=agent_registry,
+            team_registry=_DictRegistry(),
+            workflow_registry=_DictRegistry(),
+            knowledge_registry=_DictRegistry(),
+            db_manager=_DictDBManager(),
+        )
+
+        agentos = factory.build(config)
+        app = agentos.get_app()
+
+        assert isinstance(app, FastAPI)
+
+        pairs = _route_paths_and_methods(app)
+        assert ("/health", "GET") in pairs
+        assert ("/agents", "GET") in pairs
+
+    def test_agentos_config_validators(self) -> None:
+        """AgentOSConfig validators: at-least-one-target + CORS wildcard under RBAC."""
+
+        with pytest.raises(
+            ValueError,
+            match="at least one of agents, teams, or workflows",
+        ):
+            AgentOSConfig(name="empty-targets")
+
+        with pytest.raises(
+            ValueError,
+            match="CORS wildcard",
+        ):
+            AgentOSConfig(
+                name="rbac-agentos",
+                agents=["researcher"],
+                authorization={"enabled": True},
+                cors_allowed_origins=["*"],
+            )
+
+    def test_agentos_with_a2a_interface_in_registry(self) -> None:
+        """InterfaceRegistry resolves A2A in its builder dispatch map."""
+        from yaml_agno.agentos.interfaces import InterfaceType
+
+        registry = InterfaceRegistry()
+        assert InterfaceType.A2A in registry._builders
