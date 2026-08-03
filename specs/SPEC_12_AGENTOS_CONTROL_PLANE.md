@@ -511,19 +511,18 @@ agentos:
 
 ### 4.7 A2A (Agent-to-Agent)
 
-Protocolo de interoperabilidad entre runtimes.
+Protocolo de interoperabilidad entre runtimes. `target` es opcional para `type=a2a` (set-based); la declaración completa vive en `config`.
 
 ```yaml
 agentos:
   interfaces:
     - type: a2a
-      target: research_team
       config:
-        endpoint: "https://corp.example.com/a2a"
-        agent_card:
-          name: "Research Team"
-          description: "Multi-agent research capability"
-          capabilities: ["streaming", "tools"]
+        agents: [researcher, summarizer]
+        teams: [research_team]
+        workflows: [content_pipeline]
+        prefix: "/a2a"
+        tags: ["public", "research"]
 ```
 
 ### 4.8 Resolución de targets

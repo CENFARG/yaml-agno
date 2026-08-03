@@ -22,7 +22,7 @@ from collections.abc import Callable
 from enum import StrEnum
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "InterfaceBuildError",
@@ -60,15 +60,28 @@ class InterfaceSpec(BaseModel):
 
     Fields:
         type: Interface type (agui, slack, whatsapp, telegram, a2a).
-        target: Agent/team/workflow reference name.
+        target: Agent/team/workflow reference name. Optional for set-based
+            interfaces (A2A); required for all other types.
         config: Type-specific configuration (credentials, webhook URLs, etc.).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     type: InterfaceType
-    target: str
+    target: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_target_required_for_non_a2a(self) -> InterfaceSpec:
+        """Ensure target is set for all interface types except A2A.
+
+        A2A is set-based (agents/teams/workflows in config), not single-target.
+        """
+        if self.type != InterfaceType.A2A and self.target is None:
+            raise ValueError(
+                f"target is required for interface type {self.type.value!r}"
+            )
+        return self
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -172,19 +185,28 @@ class InterfaceRegistry:
     # Public API
     # ------------------------------------------------------------------
 
-    def build(self, spec: InterfaceSpec, resolve_target: Callable[[str], Any]) -> Any:
+    def build(
+        self,
+        spec: InterfaceSpec,
+        resolve_target: Callable[[str], Any],
+        registries: Any = None,
+    ) -> Any:
         """Build a single interface from its spec.
 
         Pipeline:
             1. Resolve credentials (``${SECRET:...}`` → real values).
             2. Validate required credential keys are present.
-            3. Resolve the target ref via ``resolve_target``.
+            3. For non-A2A types: resolve the target ref via ``resolve_target``.
+               For A2A: skip target resolution (set-based dispatch via registries).
             4. Dispatch to the per-type builder.
 
         Args:
             spec: The interface specification.
             resolve_target: Callable ``(ref: str) -> Any`` resolving agent/team/
                 workflow reference names to live objects.
+            registries: Optional registry container with ``.agents.resolve()``,
+                ``.teams.resolve()``, ``.workflows.resolve()`` for A2A set-based
+                dispatch.
 
         Returns:
             An Agno ``BaseInterface`` subclass instance.
@@ -197,7 +219,11 @@ class InterfaceRegistry:
         config = self._resolve_credential_refs(spec.config)
         self._validate_credentials(spec.type, config)
 
-        target = resolve_target(spec.target)
+        target = (
+            None
+            if spec.type == InterfaceType.A2A
+            else resolve_target(spec.target)  # type: ignore[arg-type]
+        )
 
         builder = self._builders.get(spec.type)
         if builder is None:
@@ -206,21 +232,30 @@ class InterfaceRegistry:
                 f"Available types: {[t.value for t in self._builders]}."
             )
 
+        if spec.type == InterfaceType.A2A:
+            return builder(target, config, registries=registries)
         return builder(target, config)
 
     def build_all(
-        self, specs: list[InterfaceSpec], resolve_target: Callable[[str], Any]
+        self,
+        specs: list[InterfaceSpec],
+        resolve_target: Callable[[str], Any],
+        registries: Any = None,
     ) -> list[Any]:
         """Build all interface specs.
 
         Args:
             specs: List of interface specifications.
             resolve_target: Callable resolving ref strings to live objects.
+            registries: Optional registry container for A2A set-based dispatch.
 
         Returns:
             List of Agno ``BaseInterface`` subclass instances.
         """
-        return [self.build(spec, resolve_target) for spec in specs]
+        return [
+            self.build(spec, resolve_target, registries=registries)
+            for spec in specs
+        ]
 
     # ------------------------------------------------------------------
     # Credential Resolution
@@ -310,7 +345,18 @@ class InterfaceRegistry:
         Telegram = _import_telegram()  # noqa: N806
         return Telegram(agent=target, token=config["token"])
 
-    def _build_a2a(self, target: Any, config: dict[str, Any]) -> Any:
-        """Build an A2A interface (no credentials, supports plural agents/teams/workflows)."""
-        A2A = _import_a2a()  # noqa: N806
-        return A2A(agents=[target])
+    def _build_a2a(
+        self,
+        _target: Any,
+        config: dict[str, Any],
+        registries: Any = None,
+    ) -> Any:
+        """Build a set-based A2A interface (agents/teams/workflows).
+
+        Delegates to A2AInterfaceFactory which resolves refs through
+        registries and instantiates agno.os.interfaces.a2a.A2A.
+        """
+        from yaml_agno.agentos.a2a_interface import A2AInterfaceConfig, A2AInterfaceFactory
+
+        a2a_config = A2AInterfaceConfig(**config)
+        return A2AInterfaceFactory().build(a2a_config, registries)

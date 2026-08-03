@@ -120,6 +120,24 @@ class TestInterfaceSpec:
         assert spec.type == InterfaceType.AGUI
         assert spec.config == {}
 
+    # TASK_001: target optional for a2a, required for others
+
+    def test_target_required_for_non_a2a_types(self):
+        """ValidationError when target is missing for non-A2A types."""
+        with pytest.raises(ValidationError, match="target is required"):
+            InterfaceSpec(type="agui")  # no target
+
+    def test_target_optional_for_a2a(self):
+        """A2A interface does not require target — set-based, not single-target."""
+        spec = InterfaceSpec(type="a2a", config={"agents": ["researcher"]})
+        assert spec.target is None
+        assert spec.type == InterfaceType.A2A
+
+    def test_target_required_for_slack(self):
+        """ValidationError when target is missing for Slack type."""
+        with pytest.raises(ValidationError):
+            InterfaceSpec(type="slack", config={"bot_token": "xoxb-test"})
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Credential resolution
@@ -262,28 +280,89 @@ class TestBuildTelegram:
 
 
 class TestBuildA2a:
-    def test_build_a2a_supports_plural_lists(self, registry, mock_resolve_target, mocker):
-        """build() with A2A type handles plural agents/teams/workflows, no credentials."""
-        target_agent = mock_resolve_target("research_team")
-        mock_a2a_cls = mocker.patch(
-            "yaml_agno.agentos.interfaces._import_a2a", autospec=True
+    def test_build_a2a_with_config_and_registries(self, registry, mocker):
+        """build() with A2A type delegates to factory with registries, no credentials."""
+        mock_factory = mocker.patch(
+            "yaml_agno.agentos.a2a_interface.A2AInterfaceFactory"
         )
-        mock_a2a_cls.return_value = mocker.Mock(name="A2A-instance")
+        mock_factory_instance = mock_factory.return_value
+
+        fake_reg = mocker.Mock()
+        fake_reg.agents.resolve.return_value = mocker.Mock(name="agent_obj")
 
         spec = InterfaceSpec(
             type="a2a",
-            target="research_team",
-            config={
-                "endpoint": "https://corp.example.com/a2a",
-                "agent_card": {"name": "Research Team", "description": "Multi-agent"},
-            },
+            config={"agents": ["researcher"]},
         )
-        result = registry.build(spec, resolve_target=mock_resolve_target)
+        result = registry.build(
+            spec, resolve_target=mocker.Mock(), registries=fake_reg
+        )
 
-        assert target_agent is not None  # target was resolved
-        mock_a2a_cls.assert_called_once()
-        assert mock_a2a_cls.return_value.called
-        assert result is mock_a2a_cls.return_value.return_value
+        mock_factory.assert_called_once()
+        mock_factory_instance.build.assert_called_once()
+        assert result is mock_factory_instance.build.return_value
+
+    # TASK_003: set-based A2A dispatch via factory
+
+    def test_a2a_dispatch_uses_factory_not_single_target(self, mocker):
+        """_build_a2a delegates to A2AInterfaceFactory with registries."""
+        mock_factory = mocker.patch(
+            "yaml_agno.agentos.a2a_interface.A2AInterfaceFactory"
+        )
+        mock_factory_instance = mock_factory.return_value
+
+        registry = InterfaceRegistry(secret_manager=None)
+        fake_reg = mocker.Mock()
+        fake_reg.agents.resolve.return_value = mocker.Mock(name="agent_obj")
+
+        spec = InterfaceSpec(type="a2a", config={"agents": ["researcher"]})
+        # Call build with registries — should skip resolve_target for a2a
+        result = registry.build(spec, resolve_target=mocker.Mock(), registries=fake_reg)
+
+        mock_factory.assert_called_once()
+        mock_factory_instance.build.assert_called_once()
+
+    def test_build_skips_target_resolution_for_a2a(self, mocker):
+        """build() does NOT call resolve_target when type is A2A."""
+        mock_factory = mocker.patch(
+            "yaml_agno.agentos.a2a_interface.A2AInterfaceFactory"
+        )
+
+        registry = InterfaceRegistry(secret_manager=None)
+        resolve_target = mocker.Mock()
+        fake_reg = mocker.Mock()
+
+        spec = InterfaceSpec(type="a2a", config={"agents": ["a"]})
+        registry.build(spec, resolve_target=resolve_target, registries=fake_reg)
+
+        # resolve_target must NOT be called for a2a (set-based)
+        resolve_target.assert_not_called()
+
+    def test_build_all_passes_registries_for_a2a(self, mocker):
+        """build_all() forwards registries to build() for A2A dispatch."""
+        mock_factory = mocker.patch(
+            "yaml_agno.agentos.a2a_interface.A2AInterfaceFactory"
+        )
+        mock_factory_instance = mock_factory.return_value
+
+        # Also patch AGUI to avoid real import
+        mock_agui_cls = mocker.patch(
+            "yaml_agno.agentos.interfaces._import_agui", autospec=True
+        )
+        mock_agui_cls.return_value = mocker.Mock(name="AGUI-instance")
+
+        registry = InterfaceRegistry(secret_manager=None)
+        fake_reg = mocker.Mock()
+        fake_reg.agents.resolve.return_value = mocker.Mock(name="agent_obj")
+
+        specs = [
+            InterfaceSpec(type="agui", target="r1"),
+            InterfaceSpec(type="a2a", config={"agents": ["a"]}),
+        ]
+        results = registry.build_all(specs, resolve_target=mocker.Mock(), registries=fake_reg)
+
+        assert len(results) == 2
+        mock_factory_instance.build.assert_called_once()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -356,3 +435,70 @@ class TestBuildAll:
         assert len(results) == 2
         assert mock_agui_cls.call_count == 1
         assert mock_slack_cls.call_count == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TASK_008: Full A2A integration test — end-to-end pipeline
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestA2AIntegration:
+    def test_full_a2a_build_with_teams_and_workflows(self, mocker):
+        """Full pipeline: InterfaceSpec → Registry → Factory → Agno A2A.
+
+        Verifies that YAML-like config flows through the entire chain:
+        InterfaceSpec(type="a2a", config={agents, teams, workflows, prefix, tags})
+        → InterfaceRegistry.build() skips target resolution
+        → A2AInterfaceFactory resolves refs through registries
+        → agno.os.interfaces.a2a.A2A is instantiated with resolved objects.
+        """
+        # Set up fake a2a module (not shipped in Agno 2.8.3 yet)
+        import sys
+        from unittest.mock import MagicMock
+
+        if "agno.os.interfaces.a2a" not in sys.modules:
+            fake_a2a = MagicMock()
+            fake_a2a.__name__ = "agno.os.interfaces.a2a"
+            sys.modules["agno.os.interfaces.a2a"] = fake_a2a
+
+        mock_a2a_cls = mocker.MagicMock(name="A2A")
+        sys.modules["agno.os.interfaces.a2a"].A2A = mock_a2a_cls
+
+        mocker.patch(
+            "yaml_agno.agentos.a2a_interface._require_a2a_sdk"
+        )
+
+        # Set up registries with resolved objects
+        agent_a = mocker.Mock(name="agent_a")
+        team_t = mocker.Mock(name="team_t")
+        workflow_w = mocker.Mock(name="workflow_w")
+
+        registries = mocker.Mock()
+        registries.agents.resolve.side_effect = [agent_a]
+        registries.teams.resolve.side_effect = [team_t]
+        registries.workflows.resolve.side_effect = [workflow_w]
+
+        spec = InterfaceSpec(
+            type="a2a",
+            config={
+                "agents": ["a"],
+                "teams": ["t"],
+                "workflows": ["w"],
+                "prefix": "/v2",
+                "tags": ["v2", "prod"],
+            },
+        )
+
+        registry = InterfaceRegistry(secret_manager=None)
+        result = registry.build(
+            spec, resolve_target=mocker.Mock(), registries=registries
+        )
+
+        # Verify A2A constructor called with correct arguments
+        mock_a2a_cls.assert_called_once()
+        kwargs = mock_a2a_cls.call_args.kwargs
+        assert kwargs["agents"] == [agent_a]
+        assert kwargs["teams"] == [team_t]
+        assert kwargs["workflows"] == [workflow_w]
+        assert kwargs["prefix"] == "/v2"
+        assert kwargs["tags"] == ["v2", "prod"]
