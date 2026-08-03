@@ -200,7 +200,7 @@ class TestConditionalRouter:
         app = builder.build()
 
         # The schedules route should NOT be mounted
-        route_paths = [route.path for route in app.routes]
+        route_paths = [getattr(route, "path", None) for route in app.routes]
         assert "/schedules" not in route_paths
         assert "/schedules/" not in route_paths
 
@@ -230,7 +230,7 @@ class TestConditionalRouter:
         builder = FastAPIAppBuilder(config=config_scheduler_enabled, endpoint_groups=groups)
         app = builder.build()
 
-        route_paths = [route.path for route in app.routes]
+        route_paths = [getattr(route, "path", None) for route in app.routes]
         assert "/schedules/schedules" in route_paths
 
     def test_unconditional_router_always_mounted(self, basic_config: AgentOSConfig) -> None:
@@ -257,7 +257,7 @@ class TestConditionalRouter:
         builder = FastAPIAppBuilder(config=basic_config, endpoint_groups=groups)
         app = builder.build()
 
-        route_paths = [route.path for route in app.routes]
+        route_paths = [getattr(route, "path", None) for route in app.routes]
         assert "/health/health" in route_paths
 
 
