@@ -172,7 +172,7 @@ class TestResyncNow:
     @pytest.mark.asyncio
     async def test_resync_blocked_by_open_circuit(self, mocker: MockerFixture) -> None:
         """When breaker is OPEN, resync_now() raises ResyncBlockedError."""
-        from yaml_agno.agentos.resync_manager import ResyncManager, ResyncBlockedError
+        from yaml_agno.agentos.resync_manager import ResyncBlockedError, ResyncManager
 
         cfg = mocker.Mock()
         os_mock = mocker.Mock()
@@ -400,7 +400,7 @@ class TestWatch:
         )
 
         # Mock resync_now to prevent actual work; keep real asyncio.sleep
-        resync_spy = mocker.patch.object(mgr, "resync_now", new_callable=mocker.AsyncMock)
+        mocker.patch.object(mgr, "resync_now", new_callable=mocker.AsyncMock)
 
         # Start a debounce timer
         mgr._start_debounce_timer()

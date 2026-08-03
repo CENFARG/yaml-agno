@@ -184,7 +184,7 @@ class TestSecretResolution:
             },
         )
 
-        enabled, cfg = adapter.build(settings)
+        enabled, _cfg = adapter.build(settings)
 
         assert enabled is True
         assert sm.call_count == 2
@@ -285,7 +285,7 @@ class TestBasicAuth:
             basic_auth={"username": "admin", "password": "secret"},
         )
 
-        enabled, cfg = adapter.build(settings)
+        enabled, _cfg = adapter.build(settings)
 
         assert enabled is True
         sm.assert_not_called()

@@ -32,13 +32,13 @@ from yaml_agno.agentos.a2a_interface import (
 )
 from yaml_agno.agentos.interfaces import InterfaceRegistry, InterfaceSpec
 from yaml_agno.api.app import YamlAgentOS
+from yaml_agno.di import AgnoResolver, ProviderFactory, build_agno_resolver
+from yaml_agno.di.secret_resolver import ConfigSecretResolver
 from yaml_agno.factories.agent_factory import AgentFactory
 from yaml_agno.factories.team_factory import TeamFactory
 from yaml_agno.models.config.agent_config import AgentConfig
 from yaml_agno.models.config.agentos_config import AgentOSConfig
 from yaml_agno.models.config.team_config import TeamConfig, TeamMemberConfig
-from yaml_agno.di import AgnoResolver, build_agno_resolver, ProviderFactory
-from yaml_agno.di.secret_resolver import ConfigSecretResolver
 
 pytestmark = [pytest.mark.integration]
 
@@ -530,7 +530,7 @@ team:
     - member: pmf
       agent: pmf-analyst
       role: "Product-market fit validation"
-"""  # noqa: E501
+"""
 
 
 _AGENT_NAMES = [
@@ -788,7 +788,7 @@ class TestStrategicGestionTeamE2E:
         from yaml_agno.di.provider_factory import ProviderFactory
         from yaml_agno.di.registries import AGNO_ALLOWLIST_PREFIXES
         from yaml_agno.di.secret_resolver import ConfigSecretResolver
-        from yaml_agno.models.model_spec import parse_model_spec, ModelExpandedSpec
+        from yaml_agno.models.model_spec import ModelExpandedSpec, parse_model_spec
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-openrouter")
 

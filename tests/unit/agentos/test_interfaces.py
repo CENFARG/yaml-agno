@@ -317,14 +317,14 @@ class TestBuildA2a:
 
         spec = InterfaceSpec(type="a2a", config={"agents": ["researcher"]})
         # Call build with registries — should skip resolve_target for a2a
-        result = registry.build(spec, resolve_target=mocker.Mock(), registries=fake_reg)
+        registry.build(spec, resolve_target=mocker.Mock(), registries=fake_reg)
 
         mock_factory.assert_called_once()
         mock_factory_instance.build.assert_called_once()
 
     def test_build_skips_target_resolution_for_a2a(self, mocker):
         """build() does NOT call resolve_target when type is A2A."""
-        mock_factory = mocker.patch(
+        mocker.patch(
             "yaml_agno.agentos.a2a_interface.A2AInterfaceFactory"
         )
 
@@ -490,7 +490,7 @@ class TestA2AIntegration:
         )
 
         registry = InterfaceRegistry(secret_manager=None)
-        result = registry.build(
+        registry.build(
             spec, resolve_target=mocker.Mock(), registries=registries
         )
 

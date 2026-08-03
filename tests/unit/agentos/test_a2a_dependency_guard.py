@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from yaml_agno.agentos.a2a_interface import _require_a2a_sdk, A2ADependencyError
+from yaml_agno.agentos.a2a_interface import A2ADependencyError, _require_a2a_sdk
 
 pytestmark = pytest.mark.unit
 

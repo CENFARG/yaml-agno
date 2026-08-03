@@ -21,7 +21,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 try:
-    from agno.workflow.cel import CEL_AVAILABLE  # noqa: F401
+    from agno.workflow.cel import CEL_AVAILABLE
 except ImportError:
     CEL_AVAILABLE = False
 
