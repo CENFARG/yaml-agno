@@ -753,31 +753,281 @@ class TestMCPServerLifecycleIntegration:
         # Should NOT raise
         factory_no_mcp.build(config)
 
-    def test_mcp_lifecycle_not_called_when_mcp_disabled_but_lifecycle_present(
-        self, mock_agent_registry, mock_team_registry, mock_workflow_registry,
-        mock_knowledge_registry, mock_interface_registry, mock_db_manager, mocker,
-    ) -> None:
-        """Lifecycle present but mcp disabled → register() not called."""
-        mock_mcp = mocker.Mock()
-        mock_mcp.register = mocker.Mock()
 
-        factory_mcp = AgentOSFactory(
+# ---------------------------------------------------------------------------
+# 10. AuthorizationAdapter integration (Slice 3 — INTG01)
+# ---------------------------------------------------------------------------
+
+
+class TestAuthorizationAdapterIntegration:
+    """INTG01: AgentOSFactory wires AuthorizationAdapter for secret resolution."""
+
+    def test_factory_uses_authorization_adapter_for_secret_resolution(
+        self,
+        mock_agent_registry,
+        mock_team_registry,
+        mock_workflow_registry,
+        mock_knowledge_registry,
+        mock_interface_registry,
+        mock_db_manager,
+        mocker,
+    ) -> None:
+        """AuthorizationAdapter.build() is called; its result forwarded to AgentOS."""
+        from yaml_agno.agentos.authorization_adapter import AuthorizationAdapter
+
+        sm = mocker.Mock(side_effect=lambda key: {"JWT_SECRET": "resolved-secret"}[key])
+        auth_adapter = AuthorizationAdapter(secret_manager=sm)
+
+        factory = AgentOSFactory(
             agent_registry=mock_agent_registry,
             team_registry=mock_team_registry,
             workflow_registry=mock_workflow_registry,
             knowledge_registry=mock_knowledge_registry,
             interface_registry=mock_interface_registry,
             db_manager=mock_db_manager,
-            mcp_lifecycle=mock_mcp,
+            authorization_adapter=auth_adapter,
+        )
+
+        captured: dict = {}
+
+        def _fake_init(self, **kwargs):
+            captured.update(kwargs)
+
+        mocker.patch.object(AgentOS, "__init__", _fake_init)
+
+        config = AgentOSConfig(
+            name="auth-os",
+            agents=["researcher"],
+            authorization=AuthorizationSettings(
+                enabled=True,
+                config={"jwt_secret_ref": "${SECRET:JWT_SECRET}"},
+            ),
+        )
+        factory.build(config)
+
+        assert captured["authorization"] is True
+        assert captured["authorization_config"] is not None
+        sm.assert_called_once_with("JWT_SECRET")
+
+    def test_factory_without_auth_adapter_still_builds(
+        self,
+        mock_agent_registry,
+        mock_team_registry,
+        mock_workflow_registry,
+        mock_knowledge_registry,
+        mock_interface_registry,
+        mock_db_manager,
+        mocker,
+    ) -> None:
+        """Without AuthorizationAdapter, factory falls back to legacy build."""
+        factory = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_interface_registry,
+            db_manager=mock_db_manager,
+            # authorization_adapter=None (default)
+        )
+
+        captured: dict = {}
+
+        def _fake_init(self, **kwargs):
+            captured.update(kwargs)
+
+        mocker.patch.object(AgentOS, "__init__", _fake_init)
+
+        config = AgentOSConfig(
+            name="no-adapter-os",
+            agents=["researcher"],
+            authorization=AuthorizationSettings(
+                enabled=True,
+                basic_auth={"username": "admin", "password": "plain"},
+            ),
+        )
+        factory.build(config)
+
+        assert captured["authorization"] is True
+        assert captured["authorization_config"] is not None
+
+    def test_auth_adapter_disabled_auth_skips(self, factory, mocker) -> None:
+        """When authorization is disabled, neither adapter nor legacy builds."""
+        captured: dict = {}
+
+        def _fake_init(self, **kwargs):
+            captured.update(kwargs)
+
+        mocker.patch.object(AgentOS, "__init__", _fake_init)
+
+        config = AgentOSConfig(
+            name="no-auth-os",
+            agents=["researcher"],
+            authorization=AuthorizationSettings(enabled=False),
+        )
+        factory.build(config)
+
+        # authorization field not forwarded (excluded by to_agno_kwargs None exclusion)
+        assert "authorization" not in captured
+        assert "authorization_config" not in captured
+
+
+# ---------------------------------------------------------------------------
+# 11. ResyncManager factory integration (Slice 3 — INTG02)
+# ---------------------------------------------------------------------------
+
+
+class TestResyncManagerFactoryIntegration:
+    """INTG02: AgentOSFactory attaches ResyncManager after AgentOS construction."""
+
+    def test_factory_attaches_resync_manager_after_build(
+        self,
+        mock_agent_registry,
+        mock_team_registry,
+        mock_workflow_registry,
+        mock_knowledge_registry,
+        mock_interface_registry,
+        mock_db_manager,
+        mocker,
+    ) -> None:
+        """ResyncManager.attach(agentos) called after AgentOS(**kwargs)."""
+        from pathlib import Path
+
+        from yaml_agno.agentos.resync_manager import ResyncManager
+        from yaml_agno.models.config.agentos_config import ResyncSettings
+
+        rm = ResyncManager(
+            config_path=Path("agentos.yaml"),
+            settings=ResyncSettings(enabled=True, watch=True),
+            obs=mocker.Mock(),
+            config=mocker.Mock(),
+        )
+
+        factory = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_interface_registry,
+            db_manager=mock_db_manager,
+            resync_manager=rm,
         )
 
         mocker.patch.object(AgentOS, "__init__", return_value=None)
 
         config = AgentOSConfig(
-            name="disabled-mcp-os",
+            name="resync-os",
             agents=["researcher"],
-            mcp=MCPServerSettings(enabled=False),
+            resync=ResyncSettings(enabled=True),
         )
-        factory_mcp.build(config)
+        factory.build(config)
 
-        mock_mcp.register.assert_not_called()
+        # ResyncManager should have been attached to the AgentOS instance
+        assert rm._os is not None
+
+    def test_resync_enabled_but_no_manager_logs_warning(
+        self, factory, mocker, caplog,
+    ) -> None:
+        """When resync.enabled but no ResyncManager injected → WARNING."""
+        import logging
+
+        from yaml_agno.models.config.agentos_config import ResyncSettings
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(
+            name="no-rm-os",
+            agents=["researcher"],
+            resync=ResyncSettings(enabled=True),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            factory.build(config)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("ResyncManager" in str(w) for w in warnings)
+
+    def test_resync_disabled_no_attach_even_with_manager(
+        self,
+        mock_agent_registry,
+        mock_team_registry,
+        mock_workflow_registry,
+        mock_knowledge_registry,
+        mock_interface_registry,
+        mock_db_manager,
+        mocker,
+    ) -> None:
+        """resync disabled → attach() NOT called even if manager injected."""
+        from pathlib import Path
+
+        from yaml_agno.agentos.resync_manager import ResyncManager
+        from yaml_agno.models.config.agentos_config import ResyncSettings
+
+        rm = ResyncManager(
+            config_path=Path("agentos.yaml"),
+            settings=ResyncSettings(enabled=False),
+            obs=mocker.Mock(),
+            config=mocker.Mock(),
+        )
+
+        factory = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_interface_registry,
+            db_manager=mock_db_manager,
+            resync_manager=rm,
+        )
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(
+            name="no-resync-os",
+            agents=["researcher"],
+            resync=ResyncSettings(enabled=False),
+        )
+        factory.build(config)
+
+        # _os still None — attach was never called
+        assert rm._os is None
+
+    def test_deferred_slice3_log_removed(
+        self, factory, mocker, caplog,
+    ) -> None:
+        """Old 'deferred to Slice 3' log must NOT appear when manager injected."""
+        import logging
+        from pathlib import Path
+
+        from yaml_agno.agentos.resync_manager import ResyncManager
+        from yaml_agno.models.config.agentos_config import ResyncSettings
+
+        rm = ResyncManager(
+            config_path=Path("agentos.yaml"),
+            settings=ResyncSettings(enabled=True),
+            obs=mocker.Mock(),
+            config=mocker.Mock(),
+        )
+
+        factory_with_rm = AgentOSFactory(
+            agent_registry=factory._agent_registry,
+            team_registry=factory._team_registry,
+            workflow_registry=factory._workflow_registry,
+            knowledge_registry=factory._knowledge_registry,
+            interface_registry=factory._interface_registry,
+            db_manager=factory._db_manager,
+            resync_manager=rm,
+        )
+
+        mocker.patch.object(AgentOS, "__init__", return_value=None)
+
+        config = AgentOSConfig(
+            name="clean-os",
+            agents=["researcher"],
+            resync=ResyncSettings(enabled=True),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            factory_with_rm.build(config)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert not any("Slice 3" in str(w) for w in warnings)

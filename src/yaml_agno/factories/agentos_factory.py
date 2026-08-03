@@ -29,6 +29,8 @@ from yaml_agno.agentos.interfaces import InterfaceRegistry, InterfaceSpec
 from yaml_agno.agentos.mcp_lifecycle import MCPServerLifecycle
 
 if TYPE_CHECKING:
+    from yaml_agno.agentos.authorization_adapter import AuthorizationAdapter
+    from yaml_agno.agentos.resync_manager import ResyncManager
     from yaml_agno.models.config.agentos_config import AgentOSConfig
 
 __all__ = [
@@ -126,11 +128,13 @@ class AgentOSFactory:
         db_manager: DatabaseManager,
         interface_registry: InterfaceRegistry | None = None,
         mcp_lifecycle: MCPServerLifecycle | None = None,
+        authorization_adapter: AuthorizationAdapter | None = None,
+        resync_manager: ResyncManager | None = None,
     ) -> None:
         """Wire the factory with its dependency registries.
 
-        The five core registries are REQUIRED. ``interface_registry`` and
-        ``mcp_lifecycle`` are optional (Slice 2 integration).
+        The five core registries are REQUIRED. Optional integration points
+        are injected for Slice 2 (interfaces, MCP) and Slice 3 (auth, resync).
 
         Args:
             agent_registry: Resolves agent ref strings → Agent objects.
@@ -144,6 +148,11 @@ class AgentOSFactory:
             mcp_lifecycle: Optional MCPServerLifecycle for MCP server
                 registration post-build (Slice 2). If ``None``, MCP config
                 is still mapped to ``MCPServerConfig`` (Slice 1 behavior).
+            authorization_adapter: Optional AuthorizationAdapter for RBAC
+                secret resolution (Slice 3). If ``None``, legacy config
+                forwarding is used (no secret resolution).
+            resync_manager: Optional ResyncManager for hot-reload (Slice 3).
+                If ``None`` and ``config.resync.enabled``, a WARNING is logged.
         """
         self._agent_registry = agent_registry
         self._team_registry = team_registry
@@ -152,6 +161,8 @@ class AgentOSFactory:
         self._interface_registry = interface_registry
         self._db_manager = db_manager
         self._mcp_lifecycle = mcp_lifecycle
+        self._authorization_adapter = authorization_adapter
+        self._resync_manager = resync_manager
 
     # ------------------------------------------------------------------
     # Public API
@@ -236,12 +247,16 @@ class AgentOSFactory:
             )
         # When no interfaces declared, nothing to forward.
 
-        # --- 6. Deferred fields (Sl 3) — log and exclude ---
+        # --- 6. ResyncManager wiring (Slice 3) ---
         if config.resync.enabled:
-            logger.warning(
-                "AgentOSFactory: resync enabled but deferred to Slice 3; "
-                "not forwarded to AgentOS."
-            )
+            if self._resync_manager is not None:
+                # attach() called AFTER AgentOS construction (Step 7)
+                pass
+            else:
+                logger.warning(
+                    "AgentOSFactory: resync enabled but no ResyncManager "
+                    "injected."
+                )
         kwargs.pop("resync", None)
 
         # "config" is our internal YAML config reference, NOT the same as
@@ -254,6 +269,10 @@ class AgentOSFactory:
         # --- 8. Post-build: MCP lifecycle registration (Slice 2) ---
         if self._mcp_lifecycle is not None and config.mcp.enabled:
             self._mcp_lifecycle.register(agentos)
+
+        # --- 9. Post-build: ResyncManager attach (Slice 3) ---
+        if self._resync_manager is not None and config.resync.enabled:
+            self._resync_manager.attach(agentos)
 
         return agentos
 
@@ -382,14 +401,12 @@ class AgentOSFactory:
                 f"Unresolved db ref {db_ref!r}: {exc}"
             ) from exc
 
-    @staticmethod
-    def _build_authorization_config(config: AgentOSConfig) -> AuthorizationConfig:
-        """Build ``AuthorizationConfig`` from the authorization settings model.
+    def _build_authorization_config(self, config: AgentOSConfig) -> AuthorizationConfig:
+        """Build ``AuthorizationConfig`` with optional secret resolution.
 
-        Maps non-None values from ``AuthorizationSettings`` to the
-        corresponding ``AuthorizationConfig`` kwargs. The config dict
-        (opaque/proprietary) is currently not forwarded — extend here
-        when provider-specific auth shapes are defined.
+        When ``authorization_adapter`` is injected (Slice 3), delegates
+        to the adapter for ``${SECRET:...}`` resolution. Otherwise falls
+        back to the legacy direct mapping (no secret resolution).
 
         Args:
             config: The full AgentOSConfig (to access ``authorization``).
@@ -397,6 +414,26 @@ class AgentOSFactory:
         Returns:
             A configured ``AuthorizationConfig`` instance.
         """
+        if self._authorization_adapter is not None:
+            enabled, auth_config = self._authorization_adapter.build(
+                config.authorization
+            )
+            if not enabled:
+                raise ValueError(
+                    "AuthorizationAdapter returned disabled when config says enabled"
+                )
+            return auth_config
+
+        # Legacy path: direct mapping without secret resolution
+        logger.warning(
+            "AgentOSFactory: AuthorizationAdapter not injected — "
+            "secrets NOT resolved."
+        )
+        return AgentOSFactory._build_authorization_config_legacy(config)
+
+    @staticmethod
+    def _build_authorization_config_legacy(config: AgentOSConfig) -> AuthorizationConfig:
+        """Legacy direct mapping (no secret resolution)."""
         auth = config.authorization
         auth_kwargs: dict[str, Any] = {}
         if auth.basic_auth is not None:
