@@ -37,6 +37,8 @@ from yaml_agno.factories.team_factory import TeamFactory
 from yaml_agno.models.config.agent_config import AgentConfig
 from yaml_agno.models.config.agentos_config import AgentOSConfig
 from yaml_agno.models.config.team_config import TeamConfig, TeamMemberConfig
+from yaml_agno.di import AgnoResolver, build_agno_resolver, ProviderFactory
+from yaml_agno.di.secret_resolver import ConfigSecretResolver
 
 pytestmark = [pytest.mark.integration]
 
@@ -926,3 +928,164 @@ class TestAgentOSFullPipeline:
 
         registry = InterfaceRegistry()
         assert InterfaceType.A2A in registry._builders
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 8. Production bootstrap pipeline — mirrors agno-teams/strategic-gestion-team
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestProductionBootstrapPipeline:
+    """Replicates the EXACT bootstrap pipeline from production.
+
+    References:
+        - agno-teams/strategic-gestion-team/bootstrap.py
+        - agno-teams/strategic-gestion-team/team_builder.py
+    """
+
+    @pytest.fixture
+    def team_data(self) -> dict[str, Any]:
+        return yaml.safe_load(TEAM_YAML)
+
+    @pytest.fixture
+    def resolver(self) -> AgnoResolver:
+        """Step 1: build_agno_resolver() — same as bootstrap.py line 81."""
+        return build_agno_resolver()
+
+    @pytest.fixture
+    def provider_factory(self, resolver: AgnoResolver) -> ProviderFactory:
+        """Step 2: ProviderFactory(resolver, ConfigSecretResolver()) — same as
+        bootstrap.py lines 82-83."""
+        return ProviderFactory(resolver, ConfigSecretResolver())
+
+    @staticmethod
+    def _build_agents_with_di(
+        team_data: dict[str, Any],
+        resolver: AgnoResolver,
+        provider_factory: ProviderFactory,
+    ) -> dict[str, Agent]:
+        """Build all agents from TEAM_YAML with full DI wiring.
+
+        Mirrors TeamBuilder.build_agents() from team_builder.py (lines 54-93),
+        minus SQLite DB and custom tools (not available in test context).
+        """
+        agents: dict[str, Agent] = {}
+        for raw_entry in team_data["agents"]:
+            builtin_tools = [
+                t for t in raw_entry.get("tools", []) if t.get("kind") == "builtin"
+            ]
+            ac = AgentConfig(
+                name=raw_entry["name"],
+                model=raw_entry["model"],
+                instructions=f"Test instructions for {raw_entry['name']}.",
+                description=raw_entry.get("description"),
+                tools=builtin_tools,
+                tool_call_limit=raw_entry.get("tool_call_limit"),
+            )
+            agents[raw_entry["name"]] = AgentFactory.build(
+                ac, resolver=resolver, provider_factory=provider_factory,
+            )
+        return agents
+
+    @staticmethod
+    def _build_team_from_data(
+        team_data: dict[str, Any],
+        agents: dict[str, Agent],
+    ):
+        """Build team from TEAM_YAML with TeamConfig + TeamMemberConfig.
+
+        Mirrors TeamBuilder.build_team() from team_builder.py (lines 96-124),
+        minus max_iterations and leader model propagation.
+        """
+        team_cfg_data = team_data["team"]
+        members = [
+            TeamMemberConfig(
+                member=m["member"], agent=m["agent"], role=m.get("role"),
+            )
+            for m in team_cfg_data["members"]
+        ]
+        tc = TeamConfig(
+            name=team_cfg_data["name"],
+            mode=team_cfg_data["mode"],
+            instructions=team_cfg_data.get("instructions"),
+            members=members,
+        )
+        return TeamFactory.build(tc, agents)
+
+    # ── 8.1 DI chain ──────────────────────────────────────────────────────
+
+    def test_production_bootstrap_pipeline_builds_resolver_and_factory(
+        self, resolver: AgnoResolver, provider_factory: ProviderFactory,
+    ) -> None:
+        """build_agno_resolver() returns AgnoResolver; ProviderFactory instantiates."""
+        assert isinstance(resolver, AgnoResolver)
+        assert isinstance(provider_factory, ProviderFactory)
+
+    # ── 8.2 Build all 6 agents with full DI ───────────────────────────────
+
+    def test_production_bootstrap_builds_all_six_agents(
+        self,
+        team_data: dict[str, Any],
+        resolver: AgnoResolver,
+        provider_factory: ProviderFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Every agent in the real team config builds via AgentFactory with
+        resolver + provider_factory, matching the production pipeline."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-openrouter")
+
+        agents = self._build_agents_with_di(team_data, resolver, provider_factory)
+
+        assert len(agents) == 6
+        for name in _AGENT_NAMES:
+            assert name in agents
+            assert isinstance(agents[name], Agent)
+            assert agents[name].name == name
+            model_id = getattr(agents[name].model, "id", None)
+            assert model_id == "deepseek/deepseek-v4-flash", (
+                f"{name}: expected deepseek/deepseek-v4-flash, got {model_id}"
+            )
+
+    # ── 8.3 Build coordinate team ─────────────────────────────────────────
+
+    def test_production_bootstrap_builds_coordinate_team(
+        self,
+        team_data: dict[str, Any],
+        resolver: AgnoResolver,
+        provider_factory: ProviderFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TeamFactory.build produces a coordinate-mode team with 6 members
+        matching the production pipeline."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-openrouter")
+
+        agents = self._build_agents_with_di(team_data, resolver, provider_factory)
+        team = self._build_team_from_data(team_data, agents)
+
+        assert team.name == "strategic-gestion-team"
+
+        from agno.team.mode import TeamMode
+
+        assert team.mode is TeamMode.coordinate
+        assert len(team.members) == 6
+
+    # ── 8.4 Team is runnable ──────────────────────────────────────────────
+
+    def test_production_pipeline_team_is_runnable(
+        self,
+        team_data: dict[str, Any],
+        resolver: AgnoResolver,
+        provider_factory: ProviderFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The full pipeline yields a Team with arun method — structural
+        validation that the production team is executable."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-openrouter")
+
+        agents = self._build_agents_with_di(team_data, resolver, provider_factory)
+        team = self._build_team_from_data(team_data, agents)
+
+        assert hasattr(team, "arun")
+        assert callable(team.arun)
+        assert hasattr(team, "name")
+        assert team.name == "strategic-gestion-team"
