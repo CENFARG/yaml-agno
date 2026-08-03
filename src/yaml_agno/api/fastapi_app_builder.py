@@ -106,7 +106,7 @@ def _import_factory(path: str) -> Callable[[], FastAPI]:
             f"base_app path {path!r} resolved to {factory!r}, which is not callable"
         )
 
-    return factory
+    return factory  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------

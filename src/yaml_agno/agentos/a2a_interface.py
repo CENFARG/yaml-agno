@@ -73,7 +73,7 @@ class A2AInterfaceConfig(BaseModel):
         """Accept plain strings and coerce them to A2APrefix."""
         if isinstance(v, str):
             return A2APrefix(value=v)
-        return v
+        return v  # type: ignore[no-any-return]
 
     @model_validator(mode="after")
     def _at_least_one_component(self) -> A2AInterfaceConfig:

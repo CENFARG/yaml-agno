@@ -422,7 +422,7 @@ class AgentOSFactory:
                 raise ValueError(
                     "AuthorizationAdapter returned disabled when config says enabled"
                 )
-            return auth_config
+            return auth_config  # type: ignore[return-value]
 
         # Legacy path: direct mapping without secret resolution
         logger.warning(

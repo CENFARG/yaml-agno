@@ -109,6 +109,7 @@ module = [
     "agno.*",
     "core_infrastructure",
     "core_infrastructure.*",
+    "a2a",
 ]
 ignore_missing_imports = true
 

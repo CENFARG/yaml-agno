@@ -102,35 +102,35 @@ class InterfaceBuildError(ValueError):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _import_agui():
+def _import_agui() -> Any:
     """Lazy-import the AGUI interface class (requires ``ag_ui``)."""
     from agno.os.interfaces.agui import AGUI
 
     return AGUI
 
 
-def _import_slack():
+def _import_slack() -> Any:
     """Lazy-import the Slack interface class (requires ``slack_sdk``)."""
     from agno.os.interfaces.slack import Slack
 
     return Slack
 
 
-def _import_whatsapp():
+def _import_whatsapp() -> Any:
     """Lazy-import the WhatsApp interface class (no extra deps)."""
     from agno.os.interfaces.whatsapp import Whatsapp
 
     return Whatsapp
 
 
-def _import_telegram():
+def _import_telegram() -> Any:
     """Lazy-import the Telegram interface class (requires ``pyTelegramBotAPI``)."""
     from agno.os.interfaces.telegram import Telegram
 
     return Telegram
 
 
-def _import_a2a():
+def _import_a2a() -> Any:
     """Lazy-import the A2A interface class (requires ``a2a-sdk``)."""
     from agno.os.interfaces.a2a import A2A
 
@@ -318,12 +318,12 @@ class InterfaceRegistry:
 
     def _build_agui(self, target: Any, config: dict[str, Any]) -> Any:
         """Build an AGUI interface (no credentials required)."""
-        AGUI = _import_agui()  # noqa: N806
+        AGUI = _import_agui()  # noqa: N806  # type: ignore[no-untyped-call]
         return AGUI(agent=target)
 
     def _build_slack(self, target: Any, config: dict[str, Any]) -> Any:
         """Build a Slack interface with bot_token, app_token, signing_secret."""
-        Slack = _import_slack()  # noqa: N806
+        Slack = _import_slack()  # noqa: N806  # type: ignore[no-untyped-call]
         return Slack(
             agent=target,
             token=config["bot_token"],
@@ -332,7 +332,7 @@ class InterfaceRegistry:
 
     def _build_whatsapp(self, target: Any, config: dict[str, Any]) -> Any:
         """Build a WhatsApp interface with phone_number_id, access_token, verify_token."""
-        Whatsapp = _import_whatsapp()  # noqa: N806
+        Whatsapp = _import_whatsapp()  # noqa: N806  # type: ignore[no-untyped-call]
         return Whatsapp(
             agent=target,
             phone_number_id=config["phone_number_id"],
@@ -342,7 +342,7 @@ class InterfaceRegistry:
 
     def _build_telegram(self, target: Any, config: dict[str, Any]) -> Any:
         """Build a Telegram interface with token."""
-        Telegram = _import_telegram()  # noqa: N806
+        Telegram = _import_telegram()  # noqa: N806  # type: ignore[no-untyped-call]
         return Telegram(agent=target, token=config["token"])
 
     def _build_a2a(

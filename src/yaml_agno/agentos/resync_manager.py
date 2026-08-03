@@ -97,7 +97,7 @@ class ResyncManager:
             import anyio
 
             watch_path = anyio.Path(self._cfg).parent
-            async with watch_path.watch() as events:
+            async with watch_path.watch() as events:  # type: ignore[attr-defined]
                 async for _event in events:
                     self._start_debounce_timer()
         except ImportError:
