@@ -229,21 +229,13 @@ class WorkflowFactory:
     ) -> _BuiltStep:
         """Dispatch a single ``StepConfig`` to its Agno primitive.
 
-        Dispatches on ``step_cfg.type`` (``agno.workflow.types.StepType``):
-
-            - ``Step``/``Function`` -> ``Step(name, <one executor>, description)``
-            - ``Steps``   -> ``Steps(name, steps=[build...])``
-            - ``Parallel``-> ``Parallel(*[build...], name)``
-            - ``Condition``-> ``Condition(evaluator=_resolve(condition),
-                                steps=[build(cfg.if_true)],
-                                else_steps=[build(cfg.if_false)], name)``
-            - ``Router``  -> ``Router(selector=_resolve(expression),
-                                choices=[Step(name=key, ...) for key, sid
-                                in cfg.cases.items()], name)``
-            - ``Loop``    -> ``Loop(steps=[build...],
-                                max_iterations=cfg.max_iterations or 3,
-                                end_condition=_resolve(end_condition), name)``
-            - ``Workflow``-> ``NotImplementedError`` (deferred).
+        Pure dispatcher (CC <= 8): emits the validate-and-warn logs for the
+        deferred ``execute``/``finally_`` features, then delegates each
+        ``StepType`` to a dedicated private builder. ``StepType.STEP`` and
+        ``StepType.FUNCTION`` share ``_build_step_executor``; ``StepType.WORKFLOW``
+        raises ``NotImplementedError`` (deferred beyond slice #4); the five
+        composite types (Steps/Parallel/Condition/Router/Loop) are looked up in
+        the module-level ``_STEP_BUILDERS`` dispatch table.
 
         Emits ``_logger.warning`` for ``execute=False`` and ``finally_=True``
         (validate-and-warn; step is still built).
@@ -262,8 +254,8 @@ class WorkflowFactory:
             The constructed Agno workflow primitive.
 
         Raises:
-            ValueError: If an executor/callable reference is absent from its
-                registry, or if a Step-type config has no executor source.
+            ValueError: If the step type is unsupported (defensive guard; the
+                StepType str-enum is closed and all 8 members are handled).
             NotImplementedError: If ``step_cfg.type == StepType.WORKFLOW``.
         """
         # --- Deferred features: validate-and-warn (do NOT drop the step) ---
@@ -285,153 +277,13 @@ class WorkflowFactory:
         t = step_cfg.type
 
         # --- Step (4 executor sources; exactly one required) ---
-        if t == StepType.STEP or t == StepType.FUNCTION:
+        if t in (StepType.STEP, StepType.FUNCTION):
             return WorkflowFactory._build_step_executor(
                 step_cfg=step_cfg,
                 agents=agents,
                 teams=teams,
                 callables=callables,
                 step_executor=step_executor,
-            )
-
-        # --- Steps (sequential pipeline) ---
-        if t == StepType.STEPS:
-            nested = [
-                WorkflowFactory._build_step(
-                    step_cfg=StepConfig(**raw),
-                    agents=agents,
-                    teams=teams,
-                    callables=callables,
-                    step_index=step_index,
-                    step_executor=step_executor,
-                )
-                for raw in step_cfg.steps
-            ]
-            return Steps(name=step_cfg.step, description=step_cfg.description, steps=nested)
-
-        # --- Parallel (variadic) ---
-        if t == StepType.PARALLEL:
-            built = [
-                WorkflowFactory._build_step(
-                    step_cfg=StepConfig(**raw),
-                    agents=agents,
-                    teams=teams,
-                    callables=callables,
-                    step_index=step_index,
-                    step_executor=step_executor,
-                )
-                for raw in step_cfg.steps
-            ]
-            return Parallel(*built, name=step_cfg.step, description=step_cfg.description)  # type: ignore[arg-type]
-
-        # --- Condition (CEL or callable evaluator + two branches) ---
-        if t == StepType.CONDITION:
-            if_steps: list[Any] = []
-            if step_cfg.if_true and step_cfg.if_true in step_index:
-                if_steps.append(
-                    WorkflowFactory._build_step(
-                        step_cfg=step_index[step_cfg.if_true],
-                        agents=agents,
-                        teams=teams,
-                        callables=callables,
-                        step_index=step_index,
-                        step_executor=step_executor,
-                    )
-                )
-            else_steps: list[Any] | None = None
-            if step_cfg.if_false and step_cfg.if_false in step_index:
-                else_steps = [
-                    WorkflowFactory._build_step(
-                        step_cfg=step_index[step_cfg.if_false],
-                        agents=agents,
-                        teams=teams,
-                        callables=callables,
-                        step_index=step_index,
-                        step_executor=step_executor,
-                    )
-                ]
-            # Open Item #1: resolve evaluator via _resolve_callable_or_cel.
-            # A simple identifier (e.g. "check_threshold") is NOT a CEL
-            # expression and MUST be resolved from the callables registry; a CEL
-            # expression is passed raw (Agno compiles it). None defaults to True.
-            evaluator: Any = True
-            if step_cfg.condition is not None:
-                evaluator = WorkflowFactory._resolve_callable_or_cel(
-                    step_cfg.condition, callables
-                )
-            return Condition(
-                steps=if_steps,
-                evaluator=evaluator,
-                else_steps=else_steps,
-                name=step_cfg.step,
-                description=step_cfg.description,
-            )
-
-        # --- Router (CEL/callable selector + choices named by case key) ---
-        if t == StepType.ROUTER:
-            choices: list[Any] = []
-            for case_key, step_id in step_cfg.cases.items():
-                if step_id not in step_index:
-                    # Integrity is guaranteed by WorkflowConfig; defensive only.
-                    continue
-                referenced = step_index[step_id]
-                # CRITICAL (A3): the choice Step MUST be named with the case
-                # KEY (what the CEL selector returns), not the referenced
-                # step-id. Router._step_name_map (router.py:420-423) keys on
-                # .name, and _resolve_selector_result (router.py:520-522) looks
-                # up the selector's returned string there.
-                built_choice = WorkflowFactory._build_step(
-                    step_cfg=referenced,
-                    agents=agents,
-                    teams=teams,
-                    callables=callables,
-                    step_index=step_index,
-                    step_executor=step_executor,
-                )
-                # Override the .name to the case key so the Router can resolve
-                # the selector's returned string against _step_name_map.
-                built_choice.name = case_key  # type: ignore[union-attr]
-                choices.append(built_choice)
-            # Open Item #1: resolve selector via _resolve_callable_or_cel.
-            selector: Any = None
-            if step_cfg.expression is not None:
-                selector = WorkflowFactory._resolve_callable_or_cel(
-                    step_cfg.expression, callables
-                )
-            return Router(
-                choices=choices,
-                selector=selector,
-                name=step_cfg.step,
-                description=step_cfg.description,
-            )
-
-        # --- Loop (nested body + max_iterations + optional end_condition) ---
-        if t == StepType.LOOP:
-            # SPEC_05 slice A: Loop body now builds recursively, mirroring the
-            # Parallel/Steps branches. The validator admits `steps` on Loop.
-            nested = [
-                WorkflowFactory._build_step(
-                    step_cfg=StepConfig(**raw),
-                    agents=agents,
-                    teams=teams,
-                    callables=callables,
-                    step_index=step_index,
-                    step_executor=step_executor,
-                )
-                for raw in step_cfg.steps
-            ]
-            # Open Item #1: resolve end_condition via _resolve_callable_or_cel.
-            end_condition: Any = None
-            if step_cfg.end_condition is not None:
-                end_condition = WorkflowFactory._resolve_callable_or_cel(
-                    step_cfg.end_condition, callables
-                )
-            return Loop(
-                steps=nested,  # type: ignore[arg-type]
-                name=step_cfg.step,
-                description=step_cfg.description,
-                max_iterations=step_cfg.max_iterations if step_cfg.max_iterations is not None else 3,
-                end_condition=end_condition,
             )
 
         # --- Nested workflow executor (deferred beyond slice #4) ---
@@ -444,12 +296,24 @@ class WorkflowFactory:
                 "slice #4 follow-up."
             )
 
-        # Unreachable: StepType is a closed str-enum and all 8 members are
-        # handled above (FUNCTION folds into STEP). Defensive guard for safety.
-        raise ValueError(
-            f"Unsupported step type {t!r} on step {step_cfg.step!r}. "
-            "Supported types: Step, Function, Steps, Parallel, Condition, "
-            "Router, Loop."
+        # --- Composite types: table-driven dispatch (Steps/Parallel/
+        # Condition/Router/Loop) ---
+        builder = _STEP_BUILDERS.get(t)
+        if builder is None:
+            # Unreachable: StepType is a closed str-enum and all 8 members are
+            # handled above (FUNCTION folds into STEP). Defensive guard for safety.
+            raise ValueError(
+                f"Unsupported step type {t!r} on step {step_cfg.step!r}. "
+                "Supported types: Step, Function, Steps, Parallel, Condition, "
+                "Router, Loop."
+            )
+        return builder(
+            step_cfg=step_cfg,
+            agents=agents,
+            teams=teams,
+            callables=callables,
+            step_index=step_index,
+            step_executor=step_executor,
         )
 
     @staticmethod
@@ -607,3 +471,279 @@ class WorkflowFactory:
                 "Register it in the callables map."
             )
         return callables[value]
+
+    @staticmethod
+    def _build_steps_group(
+        step_cfg: StepConfig,
+        agents: dict[str, Agent],
+        teams: dict[str, Team],
+        callables: dict[str, Callable[..., Any]],
+        step_index: dict[str, StepConfig],
+        step_executor: StepExecutor | None = None,
+    ) -> Steps:
+        """Build a sequential ``agno.Steps`` pipeline from nested step dicts.
+
+        Each entry in ``step_cfg.steps`` is re-validated into a ``StepConfig``
+        and dispatched recursively through ``_build_step``.
+
+        Args:
+            step_cfg: A ``StepConfig`` with ``type == StepType.STEPS``.
+            agents: Pre-built agent registry (recursion passthrough).
+            teams: Pre-built team registry (recursion passthrough).
+            callables: Callable executor registry (recursion passthrough).
+            step_index: ``step-id -> StepConfig`` map (recursion passthrough).
+            step_executor: Optional ``StepExecutor`` for resilience wrapping.
+
+        Returns:
+            An ``agno.Steps`` with the recursively built nested primitives
+            (empty list when ``step_cfg.steps`` is empty).
+        """
+        nested = [
+            WorkflowFactory._build_step(
+                step_cfg=StepConfig(**raw),
+                agents=agents,
+                teams=teams,
+                callables=callables,
+                step_index=step_index,
+                step_executor=step_executor,
+            )
+            for raw in step_cfg.steps
+        ]
+        return Steps(name=step_cfg.step, description=step_cfg.description, steps=nested)
+
+    @staticmethod
+    def _build_parallel_group(
+        step_cfg: StepConfig,
+        agents: dict[str, Agent],
+        teams: dict[str, Team],
+        callables: dict[str, Callable[..., Any]],
+        step_index: dict[str, StepConfig],
+        step_executor: StepExecutor | None = None,
+    ) -> Parallel:
+        """Build a variadic ``agno.Parallel`` from nested step dicts.
+
+        Each entry in ``step_cfg.steps`` is re-validated and dispatched
+        recursively; the built primitives are passed as ``*args`` (Agno flattens
+        them into ``Parallel.steps``).
+
+        Args:
+            step_cfg: A ``StepConfig`` with ``type == StepType.PARALLEL``.
+            agents: Pre-built agent registry (recursion passthrough).
+            teams: Pre-built team registry (recursion passthrough).
+            callables: Callable executor registry (recursion passthrough).
+            step_index: ``step-id -> StepConfig`` map (recursion passthrough).
+            step_executor: Optional ``StepExecutor`` for resilience wrapping.
+
+        Returns:
+            An ``agno.Parallel`` with all nested primitives as children.
+        """
+        built = [
+            WorkflowFactory._build_step(
+                step_cfg=StepConfig(**raw),
+                agents=agents,
+                teams=teams,
+                callables=callables,
+                step_index=step_index,
+                step_executor=step_executor,
+            )
+            for raw in step_cfg.steps
+        ]
+        return Parallel(*built, name=step_cfg.step, description=step_cfg.description)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _build_condition_group(
+        step_cfg: StepConfig,
+        agents: dict[str, Agent],
+        teams: dict[str, Team],
+        callables: dict[str, Callable[..., Any]],
+        step_index: dict[str, StepConfig],
+        step_executor: StepExecutor | None = None,
+    ) -> Condition:
+        """Build an ``agno.Condition`` (evaluator + if_true/if_false branches).
+
+        ``if_true`` / ``if_false`` are step-id strings resolved against
+        ``step_index``; a reference absent from the index degrades defensively
+        to an empty ``steps`` list / ``else_steps=None``. The evaluator is
+        resolved via ``_resolve_callable_or_cel`` (Open Item #1): a simple
+        identifier is looked up in ``callables``, a CEL expression passes
+        through raw; ``None`` defaults to ``True``.
+
+        Args:
+            step_cfg: A ``StepConfig`` with ``type == StepType.CONDITION``.
+            agents: Pre-built agent registry (recursion passthrough).
+            teams: Pre-built team registry (recursion passthrough).
+            callables: Callable executor registry (evaluator resolution).
+            step_index: ``step-id -> StepConfig`` map (branch resolution).
+            step_executor: Optional ``StepExecutor`` for resilience wrapping.
+
+        Returns:
+            An ``agno.Condition`` with the resolved evaluator and branches.
+        """
+        if_steps: list[Any] = []
+        if step_cfg.if_true and step_cfg.if_true in step_index:
+            if_steps.append(
+                WorkflowFactory._build_step(
+                    step_cfg=step_index[step_cfg.if_true],
+                    agents=agents,
+                    teams=teams,
+                    callables=callables,
+                    step_index=step_index,
+                    step_executor=step_executor,
+                )
+            )
+        else_steps: list[Any] | None = None
+        if step_cfg.if_false and step_cfg.if_false in step_index:
+            else_steps = [
+                WorkflowFactory._build_step(
+                    step_cfg=step_index[step_cfg.if_false],
+                    agents=agents,
+                    teams=teams,
+                    callables=callables,
+                    step_index=step_index,
+                    step_executor=step_executor,
+                )
+            ]
+        # Open Item #1: resolve evaluator via _resolve_callable_or_cel.
+        # A simple identifier (e.g. "check_threshold") is NOT a CEL
+        # expression and MUST be resolved from the callables registry; a CEL
+        # expression is passed raw (Agno compiles it). None defaults to True.
+        evaluator: Any = True
+        if step_cfg.condition is not None:
+            evaluator = WorkflowFactory._resolve_callable_or_cel(
+                step_cfg.condition, callables
+            )
+        return Condition(
+            steps=if_steps,
+            evaluator=evaluator,
+            else_steps=else_steps,
+            name=step_cfg.step,
+            description=step_cfg.description,
+        )
+
+    @staticmethod
+    def _build_router_group(
+        step_cfg: StepConfig,
+        agents: dict[str, Agent],
+        teams: dict[str, Team],
+        callables: dict[str, Callable[..., Any]],
+        step_index: dict[str, StepConfig],
+        step_executor: StepExecutor | None = None,
+    ) -> Router:
+        """Build an ``agno.Router`` (selector + choices named by case key).
+
+        Each ``cases`` entry maps a selector-returned string (key) to a step-id;
+        the referenced step is built recursively and re-named with the case KEY
+        (A3 invariant: ``Router._step_name_map`` keys on ``.name``). A case
+        pointing to a step-id absent from ``step_index`` is skipped defensively.
+
+        Args:
+            step_cfg: A ``StepConfig`` with ``type == StepType.ROUTER``.
+            agents: Pre-built agent registry (recursion passthrough).
+            teams: Pre-built team registry (recursion passthrough).
+            callables: Callable executor registry (selector resolution).
+            step_index: ``step-id -> StepConfig`` map (case resolution).
+            step_executor: Optional ``StepExecutor`` for resilience wrapping.
+
+        Returns:
+            An ``agno.Router`` with case-key-named choices and resolved selector.
+        """
+        choices: list[Any] = []
+        for case_key, step_id in step_cfg.cases.items():
+            if step_id not in step_index:
+                # Integrity is guaranteed by WorkflowConfig; defensive only.
+                continue
+            referenced = step_index[step_id]
+            # CRITICAL (A3): the choice Step MUST be named with the case
+            # KEY (what the CEL selector returns), not the referenced
+            # step-id. Router._step_name_map (router.py:420-423) keys on
+            # .name, and _resolve_selector_result (router.py:520-522) looks
+            # up the selector's returned string there.
+            built_choice = WorkflowFactory._build_step(
+                step_cfg=referenced,
+                agents=agents,
+                teams=teams,
+                callables=callables,
+                step_index=step_index,
+                step_executor=step_executor,
+            )
+            # Override the .name to the case key so the Router can resolve
+            # the selector's returned string against _step_name_map.
+            built_choice.name = case_key  # type: ignore[union-attr]
+            choices.append(built_choice)
+        # Open Item #1: resolve selector via _resolve_callable_or_cel.
+        selector: Any = None
+        if step_cfg.expression is not None:
+            selector = WorkflowFactory._resolve_callable_or_cel(
+                step_cfg.expression, callables
+            )
+        return Router(
+            choices=choices,
+            selector=selector,
+            name=step_cfg.step,
+            description=step_cfg.description,
+        )
+
+    @staticmethod
+    def _build_loop_group(
+        step_cfg: StepConfig,
+        agents: dict[str, Agent],
+        teams: dict[str, Team],
+        callables: dict[str, Callable[..., Any]],
+        step_index: dict[str, StepConfig],
+        step_executor: StepExecutor | None = None,
+    ) -> Loop:
+        """Build an ``agno.Loop`` (nested body + max_iterations + end_condition).
+
+        The Loop body builds recursively from ``step_cfg.steps`` (SPEC_05 slice
+        A). ``max_iterations`` defaults to 3 when absent. ``end_condition`` is
+        resolved via ``_resolve_callable_or_cel`` (Open Item #1).
+
+        Args:
+            step_cfg: A ``StepConfig`` with ``type == StepType.LOOP``.
+            agents: Pre-built agent registry (recursion passthrough).
+            teams: Pre-built team registry (recursion passthrough).
+            callables: Callable executor registry (end_condition resolution).
+            step_index: ``step-id -> StepConfig`` map (recursion passthrough).
+            step_executor: Optional ``StepExecutor`` for resilience wrapping.
+
+        Returns:
+            An ``agno.Loop`` with the nested body, iteration cap, and condition.
+        """
+        # SPEC_05 slice A: Loop body now builds recursively, mirroring the
+        # Parallel/Steps branches. The validator admits `steps` on Loop.
+        nested = [
+            WorkflowFactory._build_step(
+                step_cfg=StepConfig(**raw),
+                agents=agents,
+                teams=teams,
+                callables=callables,
+                step_index=step_index,
+                step_executor=step_executor,
+            )
+            for raw in step_cfg.steps
+        ]
+        # Open Item #1: resolve end_condition via _resolve_callable_or_cel.
+        end_condition: Any = None
+        if step_cfg.end_condition is not None:
+            end_condition = WorkflowFactory._resolve_callable_or_cel(
+                step_cfg.end_condition, callables
+            )
+        return Loop(
+            steps=nested,  # type: ignore[arg-type]
+            name=step_cfg.step,
+            description=step_cfg.description,
+            max_iterations=step_cfg.max_iterations if step_cfg.max_iterations is not None else 3,
+            end_condition=end_condition,
+        )
+
+
+# Dispatch table for the five composite StepTypes. STEP/FUNCTION and WORKFLOW
+# are handled directly in ``_build_step``; the rest are looked up here so the
+# dispatcher stays a pure table-driven switch.
+_STEP_BUILDERS: dict[StepType, Callable[..., _BuiltStep]] = {
+    StepType.STEPS: WorkflowFactory._build_steps_group,
+    StepType.PARALLEL: WorkflowFactory._build_parallel_group,
+    StepType.CONDITION: WorkflowFactory._build_condition_group,
+    StepType.ROUTER: WorkflowFactory._build_router_group,
+    StepType.LOOP: WorkflowFactory._build_loop_group,
+}
