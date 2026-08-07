@@ -671,6 +671,101 @@ class TestOpaqueSlotsAndTrust:
 
 
 # --------------------------------------------------------------------------- #
+# §Cobertura (QUALITY-FEEDBACK) — defensive branch resolution + empty groups.
+# --------------------------------------------------------------------------- #
+
+
+class TestDefensiveBranchResolution:
+    """QUALITY-FEEDBACK §Cobertura — defensive paths of the dispatcher.
+
+    These tests pin the factory's DEFENSIVE fallbacks. Integrity is enforced at
+    the boundary by ``WorkflowConfig.validate_steps_integrity``, so dangling
+    branch references can only reach the factory via ``model_construct`` (the
+    boundary validator is bypassed by design — the factory MUST NOT crash and
+    MUST degrade gracefully: empty ``if_steps`` / ``else_steps=None`` /
+    skipped Router choice).
+
+    6 of the 10 audit cases were already pinned by existing tests
+    (execute/finally_ warn-and-build, Parallel variadic, Router CEL+callable,
+    Loop default max_iterations, Workflow NotImplementedError). The 4 below are
+    the genuinely missing ones.
+    """
+
+    def test_steps_empty_list_builds_empty_steps_group(self) -> None:
+        """Scenario: Steps con ``steps: []`` vacío.
+
+        ``StepConfig(step="s", type="Steps", steps=[])`` builds
+        ``agno.Steps(name="s", steps=[])`` — empty list, no crash.
+        """
+        cfg = _workflow_cfg([StepConfig(step="s", type="Steps", steps=[])])
+        result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
+        steps_group = result.steps[0]
+        assert isinstance(steps_group, Steps)
+        assert steps_group.name == "s"
+        assert steps_group.steps == []
+
+    def test_condition_if_true_missing_yields_empty_if_steps(self) -> None:
+        """Scenario: Condition con if_true que no existe en step_index.
+
+        ``if_steps`` queda vacío y ``else_steps`` None — sin crash (defensivo;
+        el boundary validator normalmente impide llegar acá).
+        """
+        cfg = WorkflowConfig.model_construct(
+            name="w",
+            description=None,
+            steps=[
+                StepConfig(step="c", type="Condition", condition="amount > 0",
+                           if_true="ghost", if_false=None),
+            ],
+        )
+        result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
+        cond = result.steps[0]
+        assert isinstance(cond, Condition)
+        assert cond.steps == []
+        assert cond.else_steps is None
+
+    def test_condition_if_false_missing_yields_else_steps_none(self) -> None:
+        """Scenario: Condition con if_false inexistente (if_true válido).
+
+        ``if_steps`` resuelve el branch real; ``else_steps`` queda None.
+        """
+        cfg = WorkflowConfig.model_construct(
+            name="w",
+            description=None,
+            steps=[
+                StepConfig(step="c", type="Condition", condition="amount > 0",
+                           if_true="real_step", if_false="ghost"),
+                StepConfig(step="real_step", type="Step", agent="a1"),
+            ],
+        )
+        result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
+        cond = result.steps[0]
+        assert isinstance(cond, Condition)
+        assert [s.name for s in cond.steps] == ["real_step"]
+        assert cond.else_steps is None
+
+    def test_router_case_missing_skips_choice(self) -> None:
+        """Scenario: Router con case apuntando a step_id inexistente.
+
+        El choice colgante se salta (``continue`` defensivo); solo se construye
+        el choice del case válido, nombrado por la KEY del case.
+        """
+        cfg = WorkflowConfig.model_construct(
+            name="w",
+            description=None,
+            steps=[
+                StepConfig(step="r", type="Router", expression="input.cat",
+                           cases={"a": "ghost", "b": "real_step"}),
+                StepConfig(step="real_step", type="Step", agent="a1"),
+            ],
+        )
+        result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
+        router = result.steps[0]
+        assert isinstance(router, Router)
+        assert [c.name for c in router.choices] == ["b"]
+
+
+# --------------------------------------------------------------------------- #
 # TD-06 — StepExecutor resilience binding (RED tests).
 # --------------------------------------------------------------------------- #
 
