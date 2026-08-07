@@ -41,9 +41,11 @@ class LifespanComponent(Protocol):
     during ``__aenter__`` and ``stop()`` during ``__aexit__``.
     """
 
-    async def start(self) -> None: ...
+    async def start(self) -> None:
+        """Start the component. Called on ``__aenter__`` in registration order."""
 
-    async def stop(self) -> None: ...
+    async def stop(self) -> None:
+        """Stop the component. Called on ``__aexit__`` in LIFO order."""
 
 
 # Type aliases for readability.
