@@ -668,7 +668,7 @@ class WorkflowFactory:
             )
             # Override the .name to the case key so the Router can resolve
             # the selector's returned string against _step_name_map.
-            built_choice.name = case_key  # type: ignore[union-attr]
+            built_choice.name = case_key
             choices.append(built_choice)
         # Open Item #1: resolve selector via _resolve_callable_or_cel.
         selector: Any = None

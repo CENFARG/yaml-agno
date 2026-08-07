@@ -66,7 +66,7 @@ class ModelStringSpec(BaseModel):
     # only used for direct ``ModelStringSpec.model_validate(str)`` calls and by
     # :func:`parse_model_spec`. Union dispatch goes through that helper.
     @classmethod
-    def model_validate(  # type: ignore[override]
+    def model_validate(
         cls,
         obj: Any,
         *args: Any,
@@ -75,7 +75,7 @@ class ModelStringSpec(BaseModel):
         """Accept either a ``"provider:id"`` string or a dict payload."""
         if isinstance(obj, str):
             return cls._from_string(obj)
-        return super().model_validate(obj, *args, **kwargs)  # type: ignore[no-any-return]
+        return super().model_validate(obj, *args, **kwargs)
 
     @classmethod
     def _from_string(cls, value: str) -> ModelStringSpec:

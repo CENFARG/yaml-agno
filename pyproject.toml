@@ -104,6 +104,11 @@ warn_unreachable = true
 warn_unused_ignores = false
 show_error_codes = true
 
+# Registered debt (QUALITY-FEEDBACK §P0.2): agno ships no py.typed marker,
+# core-cenf-py does NOT publish py.typed yet, and a2a-sdk is an optional
+# dependency (see src/yaml_agno/agentos/a2a_interface.py). REVERT the
+# core_infrastructure entry once core-cenf-py publishes py.typed; the a2a entry
+# is permanent (optional dep).
 [[tool.mypy.overrides]]
 module = [
     "agno",
