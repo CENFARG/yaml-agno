@@ -101,6 +101,18 @@ class ProviderFactory:
         _validate_capabilities: When True, run ModelCapabilitiesValidator before
             constructing and raise on declared-cap mismatch.
 
+    Lifecycle of a provider instance:
+        1. Instantiation is SYNC: build() performs class resolution, kwargs
+           composition and api_key secret resolution in-process (A2).
+        2. The Model is a @dataclass: no async setup is triggered at build time;
+           async initialization (client creation, network) happens lazily on
+           first model call, inside Agno's runtime, not here.
+        3. No lifecycle teardown is required: Agno Models hold no resources this
+           factory allocates, so there is no close()/dispose() contract.
+        4. Failure contract: a provider capability mismatch (when
+           _validate_capabilities=True) raises ModelConstructionError BEFORE
+           construction; a wrapped ValueError is raised for non-dataclass specs.
+
     Example:
         >>> factory = ProviderFactory(resolver, secret_resolver)
         >>> spec = ModelExpandedSpec(provider="openai", id="gpt-4o", temperature=0.7)

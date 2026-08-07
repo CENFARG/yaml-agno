@@ -25,6 +25,12 @@ class CircuitBreakerOpenError(Exception):
 
 
 class CircuitState(str, Enum):  # noqa: UP042 -- SPEC_09 §4.1 literal: (str, Enum), not StrEnum
+    """Lifecycle states of the circuit breaker (SPEC_09 §4.1).
+
+    CLOSED allows normal passthrough; OPEN rejects requests immediately;
+    HALF_OPEN admits a bounded probe window to test recovery.
+    """
+
     CLOSED = "closed"  # Normal operation
     OPEN = "open"  # Failing, reject requests
     HALF_OPEN = "half_open"  # Testing if recovered

@@ -92,6 +92,22 @@ class ToolkitAdapter:
         return {k: v for k, v in kwargs.items() if k in allowed}
 
 
+# BUILTIN_REGISTRY — name -> ToolkitAdapter (SPEC_11, ~131 adapters).
+#
+# Resolution conventions:
+#   - Key = the ``builtin`` name used in YAML (``AgentConfig.tools``).
+#   - ``ToolFactory.build`` looks up ``BUILTIN_REGISTRY[name]`` and raises
+#     ``UnknownBuiltinError`` when absent (fail-fast on config typos).
+#   - Class resolution is LAZY: ``ToolkitAdapter.build()`` resolves the Agno
+#     class via ``AgnoResolver.resolve_class`` at build time. Optional-dep
+#     toolkits can live in the registry; they only fail when actually used
+#     without the pip package installed.
+#   - ``alias_map`` normalizes YAML shorthand to Agno's ``enable_*`` canonical
+#     kwarg names (e.g. yfinance ``stock_price`` -> ``enable_stock_price``).
+#   - ``packages`` lists the pip package(s) REQUIRED for that toolkit — used
+#     for Dockerfile/pyproject generation, not for runtime import.
+#   - ``_filter_kwargs`` drops ``init_args`` keys the toolkit constructor does
+#     not declare (Toolkits are NOT dataclasses; filtering uses inspect.signature).
 BUILTIN_REGISTRY: dict[str, ToolkitAdapter] = {
     # ------------------------------------------------------------------
     # ORIGINAL 5 ADAPTERS (kept verbatim — correct baseline)
