@@ -102,6 +102,12 @@ class A2AInterfaceConfig(BaseModel):
 def _require_a2a_sdk() -> None:
     """Verify a2a-sdk is importable; raise actionable error if not."""
     try:
+        # a2a-sdk is an OPTIONAL runtime dependency (Agno A2A protocol), not
+        # declared in pyproject [project.dependencies]. mypy resolves it via the
+        # [[tool.mypy.overrides]] module="a2a" ignore_missing_imports entry in
+        # pyproject.toml — do NOT add an inline # type: ignore[import-not-found]
+        # here: the override already silences it and an inline one would be
+        # flagged as an unused ignore under `mypy --strict`.
         import a2a  # noqa: F401
     except ImportError as err:
         raise A2ADependencyError(
