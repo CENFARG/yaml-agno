@@ -171,16 +171,15 @@ class AgentOSFactory:
     def build(self, config: AgentOSConfig) -> AgentOS:
         """Build a fully-resolved ``agno.os.AgentOS`` from the validated config.
 
-        Resolution pipeline:
+        Five-phase resolution pipeline (TASK 2 of SDD-HOTSPOTS-REFACTOR,
+        adapted from the generic FastAPI shape to the real AgentOS shape —
+        see the note in ``_wire_integrations``):
 
-        1. ``config.to_agno_kwargs()`` → raw dict (primitives + unresolved refs).
-        2. Strip factory-owned keys, validate no duplicate targets.
-        3. Resolve each ref via the corresponding registry.
-        4. Map nested settings → Agno-native config objects.
-        5. Resolve interfaces via ``InterfaceRegistry.build_all`` (Slice 2).
-        6. Strip Slice-3-deferred fields (resync — log at WARNING).
-        7. ``AgentOS(**resolved_kwargs)``.
-        8. Post-build: ``MCPServerLifecycle.register(agentos)`` (Slice 2).
+        1. ``_validate_config`` — fail-fast duplicate detection.
+        2. ``_build_dependencies`` — resolve agent/team/workflow/knowledge/db refs.
+        3. ``_wire_integrations`` — authorization/mcp/scheduler/interfaces/resync-warn.
+        4. ``_assemble_app`` — ``AgentOS(**kwargs)`` construction.
+        5. ``_register_lifecycle`` — MCP lifecycle + ResyncManager attach.
 
         Args:
             config: A validated ``AgentOSConfig``.
@@ -191,89 +190,177 @@ class AgentOSFactory:
         Raises:
             ValueError: Duplicate refs or unresolved ref.
         """
+        self._validate_config(config)
         kwargs: dict[str, Any] = config.to_agno_kwargs()
-        # Strip before resolution (keys we own vs AgentOS's own params):
         self._pop_owned_keys(kwargs)
+        kwargs.update(self._build_dependencies(config))
+        self._wire_integrations(config, kwargs)
+        return self._register_lifecycle(self._assemble_app(kwargs), config)
 
-        # --- 2. Duplicate detection (pre-resolution) ---
+    def _validate_config(self, config: AgentOSConfig) -> None:
+        """Phase 1 — fail-fast validation of the resolved target lists.
+
+        Delegates to ``_check_duplicates``: duplicate refs within any target
+        list abort the build before any resolution work happens.
+
+        Args:
+            config: The validated ``AgentOSConfig``.
+
+        Raises:
+            ValueError: When any target list contains duplicate entries.
+        """
         self._check_duplicates(config)
 
-        # --- 3. Resolve refs ---
-        kwargs["agents"] = self._resolve_refs(
-            config.agents, self._agent_registry, "agent"
-        )
-        kwargs["teams"] = self._resolve_refs(
-            config.teams, self._team_registry, "team"
-        )
-        kwargs["workflows"] = self._resolve_refs(
-            config.workflows, self._workflow_registry, "workflow"
-        )
+    def _build_dependencies(self, config: AgentOSConfig) -> dict[str, Any]:
+        """Phase 2 — resolve all refs into live Agno objects.
 
+        Resolves agents/teams/workflows (always) plus knowledge and db (when
+        declared) through their registries. ``KeyError`` from a registry is
+        wrapped as ``ValueError`` with the ref context.
+
+        Args:
+            config: The validated ``AgentOSConfig``.
+
+        Returns:
+            A ``kwargs`` sub-dict mapping each resolved list to its key.
+
+        Raises:
+            ValueError: When any ref raises ``KeyError``.
+        """
+        deps: dict[str, Any] = {
+            "agents": self._resolve_refs(
+                config.agents, self._agent_registry, "agent"
+            ),
+            "teams": self._resolve_refs(
+                config.teams, self._team_registry, "team"
+            ),
+            "workflows": self._resolve_refs(
+                config.workflows, self._workflow_registry, "workflow"
+            ),
+        }
         if config.knowledge:
-            kwargs["knowledge"] = self._resolve_refs(
+            deps["knowledge"] = self._resolve_refs(
                 config.knowledge, self._knowledge_registry, "knowledge"
             )
-
         if config.db is not None:
-            kwargs["db"] = self._resolve_db_ref(config.db)
+            deps["db"] = self._resolve_db_ref(config.db)
+        return deps
 
-        # --- 4. Map nested settings → Agno-native objects ---
+    def _wire_integrations(self, config: AgentOSConfig, kwargs: dict[str, Any]) -> None:
+        """Phase 3 — map nested settings to Agno-native config objects.
+
+        TASK 2's generic ``_wire_middlewares`` adapted to the AgentOS shape:
+        the "middlewares" here are the cross-cutting integrations —
+        authorization (RBAC config), MCP server config, scheduler flags,
+        interfaces (``InterfaceRegistry.build_all``), and the resync WARNING
+        (logged pre-construction; the actual attach happens in
+        ``_register_lifecycle``). Mutates ``kwargs`` in place.
+
+        Args:
+            config: The validated ``AgentOSConfig``.
+            kwargs: The resolved kwargs dict being assembled.
+        """
+        self._wire_auth_mcp_scheduler(config, kwargs)
+        self._wire_interfaces(config, kwargs)
+        self._warn_resync_missing(config)
+
+    def _wire_auth_mcp_scheduler(self, config: AgentOSConfig, kwargs: dict[str, Any]) -> None:
+        """Wire authorization + MCP + scheduler flags into ``kwargs``.
+
+        When a section is disabled its flag is NOT forwarded (AgentOS default
+        applies: authorization off, ``mcp_server`` False).
+
+        Args:
+            config: The validated ``AgentOSConfig``.
+            kwargs: The resolved kwargs dict being assembled.
+        """
         if config.authorization.enabled:
             kwargs["authorization"] = True
             kwargs["authorization_config"] = self._build_authorization_config(
                 config
             )
-        # If authorization is disabled, rely on to_agno_kwargs exclusion
-        # of None values. authorization_config is not forwarded.
-
         if config.mcp.enabled:
             kwargs["mcp_server"] = self._build_mcp_config(config)
-        # When disabled, mcp_server is not forwarded (AgentOS default: False).
-
         kwargs["scheduler"] = config.scheduler.enabled
         kwargs["scheduler_poll_interval"] = config.scheduler.poll_interval
 
-        # --- 5. Resolve interfaces (Slice 2) ---
-        if config.interfaces and self._interface_registry is not None:
-            specs = [InterfaceSpec(**iface) for iface in config.interfaces]
-            kwargs["interfaces"] = self._interface_registry.build_all(
-                specs, self._resolve_target
-            )
-        elif config.interfaces and self._interface_registry is None:
+    def _wire_interfaces(self, config: AgentOSConfig, kwargs: dict[str, Any]) -> None:
+        """Wire ``InterfaceRegistry.build_all`` output into ``kwargs`` (Slice 2).
+
+        When interfaces are declared but no registry is injected, a WARNING is
+        logged and interface resolution is skipped.
+
+        Args:
+            config: The validated ``AgentOSConfig``.
+            kwargs: The resolved kwargs dict being assembled.
+        """
+        if not config.interfaces:
+            return
+        if self._interface_registry is None:
             logger.warning(
                 "AgentOSFactory: %d interface(s) in config but no "
                 "InterfaceRegistry injected — skipping interface resolution.",
                 len(config.interfaces),
             )
-        # When no interfaces declared, nothing to forward.
+            return
+        specs = [InterfaceSpec(**iface) for iface in config.interfaces]
+        kwargs["interfaces"] = self._interface_registry.build_all(
+            specs, self._resolve_target
+        )
 
-        # --- 6. ResyncManager wiring (Slice 3) ---
-        if config.resync.enabled:
-            if self._resync_manager is not None:
-                # attach() called AFTER AgentOS construction (Step 7)
-                pass
-            else:
-                logger.warning(
-                    "AgentOSFactory: resync enabled but no ResyncManager "
-                    "injected."
-                )
-        kwargs.pop("resync", None)
+    def _warn_resync_missing(self, config: AgentOSConfig) -> None:
+        """Log the pre-construction warning when resync lacks a manager (Slice 3).
 
+        The actual ``ResyncManager.attach()`` happens post-construction in
+        ``_register_lifecycle``; here we only surface the misconfiguration.
+
+        Args:
+            config: The validated ``AgentOSConfig``.
+        """
+        if config.resync.enabled and self._resync_manager is None:
+            logger.warning(
+                "AgentOSFactory: resync enabled but no ResyncManager injected."
+            )
+
+    def _assemble_app(self, kwargs: dict[str, Any]) -> AgentOS:
+        """Phase 4 — construct the ``agno.os.AgentOS`` instance.
+
+        Strips the two factory-internal keys that must never reach the
+        AgentOS constructor (``config`` YAML reference and ``resync``
+        Slice-3 flag) and constructs.
+
+        Args:
+            kwargs: The fully wired kwargs dict.
+
+        Returns:
+            A constructed ``agno.os.AgentOS`` instance.
+        """
         # "config" is our internal YAML config reference, NOT the same as
         # AgentOS's "config" parameter. Strip it to avoid collision.
         kwargs.pop("config", None)
+        # resync wiring is post-build (attach); the config flag itself is
+        # factory-owned and never forwarded to AgentOS.
+        kwargs.pop("resync", None)
+        return AgentOS(**kwargs)
 
-        # --- 7. Construct ---
-        agentos = AgentOS(**kwargs)
+    def _register_lifecycle(self, agentos: AgentOS, config: AgentOSConfig) -> AgentOS:
+        """Phase 5 — post-build lifecycle registration.
 
-        # --- 8. Post-build: MCP lifecycle registration (Slice 2) ---
+        Registers the MCP server lifecycle (Slice 2) and attaches the
+        ResyncManager (Slice 3) when both the integration AND its config
+        flag are present.
+
+        Args:
+            agentos: The constructed ``agno.os.AgentOS``.
+            config: The validated ``AgentOSConfig``.
+
+        Returns:
+            The same ``AgentOS`` instance (builder chain).
+        """
         if self._mcp_lifecycle is not None and config.mcp.enabled:
             self._mcp_lifecycle.register(agentos)
-
-        # --- 9. Post-build: ResyncManager attach (Slice 3) ---
         if self._resync_manager is not None and config.resync.enabled:
             self._resync_manager.attach(agentos)
-
         return agentos
 
     # ------------------------------------------------------------------
