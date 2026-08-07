@@ -41,7 +41,10 @@ dependencies = [
 
 [project.optional-dependencies]
 cel = [
-    "cel-python>=1.4.5",
+    # QUALITY-FEEDBACK §P2: constraint corregida — 1.4.5 no existe en el índice
+    # (máximo publicado 0.5.0). El constraint roto impedía instalar el extra y
+    # dejaba los tests CEL de condition_evaluator en skip permanente (56% cov).
+    "cel-python>=0.5.0",
 ]
 dev = [
     "pytest>=9.0",

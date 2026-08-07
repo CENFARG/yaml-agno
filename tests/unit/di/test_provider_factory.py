@@ -77,6 +77,8 @@ _MAPPING: dict[tuple[str, str], type] = {
 
 def _build_factory(
     secret_resolver: Callable[[str], str | None] | None = None,
+    *,
+    validate_capabilities: bool = False,
 ) -> ProviderFactory:
     """Build a ProviderFactory backed by the in-memory adapter + stubs.
 
@@ -90,7 +92,7 @@ def _build_factory(
         secret_resolver = lambda env: "sk-test"  # noqa: E731
     adapter = InMemoryDependencyAdapter(mapping=_MAPPING)
     resolver = AgnoResolver(adapter)
-    return ProviderFactory(resolver, secret_resolver)
+    return ProviderFactory(resolver, secret_resolver, validate_capabilities=validate_capabilities)
 
 
 # ---------------------------------------------------------------------------
@@ -319,3 +321,132 @@ def test_provider_factory_local_provider_no_raise_on_missing_key() -> None:
     spec = ModelExpandedSpec(provider="ollama", id="llama3")
     result = factory.build(spec)
     assert isinstance(result, StubOllama)
+
+
+# ---------------------------------------------------------------------------
+# QUALITY-FEEDBACK §Cobertura — 82% (9 líneas sin cubrir): wrap del error del
+# constructor, capability pre-check, guard no-dataclass, formatos de id.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StubExploding:
+    """Dataclass whose constructor ALWAYS raises — exercises the wrap path.
+
+    Declares ``api_key`` (openai declares api_key_env, so the factory injects
+    it) so the raise comes from ``__post_init__`` — the constructor body —
+    rather than an unexpected-kwarg TypeError at the dataclass boundary.
+    """
+
+    id: str = ""
+    api_key: str | None = None
+
+    def __post_init__(self) -> None:
+        raise ValueError("constructor exploded")
+
+
+@pytest.mark.unit
+def test_constructor_error_wrapped_as_model_construction_error() -> None:
+    """Resolution error → ModelConstructionError tipada con cause (FIX wrap).
+
+    When the Agno constructor raises TypeError/ValueError, the factory wraps
+    it in ModelConstructionError WITH ``cause`` set (not the env_name path).
+    Pins the error message contract: provider + id + cause type.
+    """
+    from yaml_agno.di.provider_factory import ModelConstructionError
+
+    mapping = dict(_MAPPING)
+    mapping[
+        (
+            PROVIDER_REGISTRY["openai"].module_path,
+            PROVIDER_REGISTRY["openai"].class_name,
+        )
+    ] = StubExploding
+    adapter = InMemoryDependencyAdapter(mapping=mapping)
+    resolver = AgnoResolver(adapter)
+    factory = ProviderFactory(resolver, secret_resolver=lambda env: "sk-test")
+
+    spec = ModelExpandedSpec(provider="openai", id="gpt-4o")
+    with pytest.raises(ModelConstructionError) as exc_info:
+        factory.build(spec)
+    assert exc_info.value.cause is not None
+    assert isinstance(exc_info.value.cause, ValueError)
+    assert "openai" in str(exc_info.value)
+    assert "gpt-4o" in str(exc_info.value)
+    assert exc_info.value.env_name is None
+
+
+@pytest.mark.unit
+def test_non_dataclass_target_raises_typeerror() -> None:
+    """Defensive guard: non-dataclass target → TypeError (not wrapped).
+
+    ``_compose_kwargs`` rejects a non-dataclass class BEFORE the constructor
+    try/except, so the TypeError propagates directly — the guard names the class.
+    """
+    class StubNotDataclass:
+        """Deliberately NOT a @dataclass — must trip the compose guard."""
+
+    mapping = dict(_MAPPING)
+    mapping[
+        (
+            PROVIDER_REGISTRY["openai"].module_path,
+            PROVIDER_REGISTRY["openai"].class_name,
+        )
+    ] = StubNotDataclass
+    adapter = InMemoryDependencyAdapter(mapping=mapping)
+    resolver = AgnoResolver(adapter)
+    factory = ProviderFactory(resolver, secret_resolver=lambda env: "sk-test")
+
+    spec = ModelExpandedSpec(provider="openai", id="gpt-4o")
+    with pytest.raises(TypeError, match="not a dataclass"):
+        factory.build(spec)
+
+
+@pytest.mark.unit
+def test_capability_validation_enabled_raises_on_mismatch() -> None:
+    """Capability pre-check: intent no soportado → ModelConstructionError.
+
+    With ``validate_capabilities=True``, a spec asking for ``thinking``
+    (reasoning intent) on ollama (declared reasoning=False) is rejected at
+    build time — the strict config-load validation path.
+    """
+    from yaml_agno.di.provider_factory import ModelConstructionError
+
+    factory = _build_factory(validate_capabilities=True)
+    spec = ModelExpandedSpec(provider="ollama", id="llama3", thinking=True)
+    with pytest.raises(ModelConstructionError) as exc_info:
+        factory.build(spec)
+    assert "capability mismatches" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_model_id_formats_resolve_with_passthrough() -> None:
+    """Format variants: id plano y compuesto (slash) pasan intactos.
+
+    ``openai/gpt-4o`` (id simple) y ``meta-llama/llama-4-scout`` (id compuesto
+    con slash) resuelven por el factory con ``result.id`` intacto. El formato
+    compuesto ``provider:id`` (colon) se parsea UPSTREAM en model_spec —
+    fuera del scope de ProviderFactory (recibe provider + id ya separados).
+    """
+    @dataclass
+    class StubOpenRouter:
+        id: str = ""
+        api_key: str | None = None
+
+    mapping = dict(_MAPPING)
+    mapping[
+        (
+            PROVIDER_REGISTRY["openrouter"].module_path,
+            PROVIDER_REGISTRY["openrouter"].class_name,
+        )
+    ] = StubOpenRouter
+    adapter = InMemoryDependencyAdapter(mapping=mapping)
+    resolver = AgnoResolver(adapter)
+    factory = ProviderFactory(resolver, secret_resolver=lambda env: "sk-test")
+
+    plain = factory.build(ModelExpandedSpec(provider="openai", id="gpt-4o"))
+    assert plain.id == "gpt-4o"
+    composite = factory.build(
+        ModelExpandedSpec(provider="openrouter", id="meta-llama/llama-4-scout")
+    )
+    assert composite.id == "meta-llama/llama-4-scout"

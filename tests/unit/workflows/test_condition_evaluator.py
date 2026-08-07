@@ -136,3 +136,72 @@ def test_strip_template_handles_whitespace() -> None:
     evaluator = ConditionEvaluator()
     result = evaluator.evaluate("  ${input.amount > 1000}  ", {"amount": 1500})
     assert result is True
+
+
+# ---------------------------------------------------------------------------
+# QUALITY-FEEDBACK §Cobertura — coverage gap (55.6%): _strip_template direct
+# (pure string logic, no CEL needed) + blank/invalid expression contracts.
+# ---------------------------------------------------------------------------
+
+
+def test_strip_template_wrapped_expression() -> None:
+    """Direct ``_strip_template``: ``${...}`` wrapped → inner expression.
+
+    Runs WITHOUT cel-python — pure string logic. Pins the stripping branch.
+    """
+    from yaml_agno.workflows.condition_evaluator import ConditionEvaluator
+
+    assert (
+        ConditionEvaluator._strip_template("  ${input.amount > 1000}  ")
+        == "input.amount > 1000"
+    )
+
+
+def test_strip_template_bare_expression_passthrough() -> None:
+    """Direct ``_strip_template``: bare expression (no ``${}``) → unchanged."""
+    from yaml_agno.workflows.condition_evaluator import ConditionEvaluator
+
+    assert ConditionEvaluator._strip_template("input.amount > 1000") == "input.amount > 1000"
+
+
+def test_strip_template_unbalanced_braces_passthrough() -> None:
+    """Direct ``_strip_template``: unbalanced braces are NOT stripped.
+
+    Only a FULL ``${...}`` wrapper is removed (startswith AND endswith). A
+    dangling opener passes through unchanged (after trim) — pins the guard.
+    """
+    from yaml_agno.workflows.condition_evaluator import ConditionEvaluator
+
+    assert ConditionEvaluator._strip_template("${input.amount > 1000") == "${input.amount > 1000"
+
+
+@pytest.mark.skipif(not CEL_AVAILABLE, reason=_CEL_SKIP_REASON)
+def test_evaluate_blank_expression_raises_valueerror() -> None:
+    """Contract: empty/blank expression raises ``ValueError`` (not falsy).
+
+    Pins the current propagation contract: agno's ``_evaluate_cel`` compiles
+    the expression and a blank one is a CEL parse error surfaced as
+    ``ValueError`` — the caller decides how to handle it.
+    """
+    from yaml_agno.workflows.condition_evaluator import ConditionEvaluator
+
+    evaluator = ConditionEvaluator()
+    with pytest.raises(ValueError, match="Failed to evaluate CEL"):
+        evaluator.evaluate("   ", {"amount": 1500})
+
+
+@pytest.mark.skipif(not CEL_AVAILABLE, reason=_CEL_SKIP_REASON)
+def test_evaluate_invalid_cel_raises_valueerror() -> None:
+    """Contract: malformed CEL propagates as ``ValueError`` (not swallowed).
+
+    Pins the current exception contract of ``ConditionEvaluator.evaluate``:
+    agno wraps the CEL parse/eval failure in ``ValueError`` and the evaluator
+    does NOT catch it. The audit's "no propagar" would be a behavior CHANGE —
+    out of scope for a coverage slice; propagation is the deliberate contract
+    (Agno's Condition catches it at run time).
+    """
+    from yaml_agno.workflows.condition_evaluator import ConditionEvaluator
+
+    evaluator = ConditionEvaluator()
+    with pytest.raises(ValueError, match="not a cel"):
+        evaluator.evaluate("not a cel (", {"amount": 1500})
