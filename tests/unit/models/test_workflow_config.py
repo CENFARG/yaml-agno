@@ -14,6 +14,7 @@ which do NOT exist yet (RED). They cover the spec scenarios for:
 """
 
 import pytest
+from agno.workflow.types import StepType
 from pydantic import ValidationError
 
 from yaml_agno.models.config.workflow_config import StepConfig, WorkflowConfig
@@ -251,3 +252,74 @@ class TestStepMaxIterations:
         """max_iterations=0 is rejected (must be >= 1)."""
         with pytest.raises(ValidationError):
             StepConfig(step="s1", type="Loop", max_iterations=0)
+
+
+class TestStepConfigContract:
+    """QUALITY-FEEDBACK §Cobertura — congelar el contrato de schema de StepConfig.
+
+    StepConfig es el modelo con mayor fan-in de la librería (54 callers). Estos
+    tests congelan su contrato para que cualquier cambio de schema pase por
+    revisión explícita de blast-radius (54 usos).
+    """
+
+    def test_minimal_step_config_defaults(self) -> None:
+        """Scenario: StepConfig mínimo (solo ``step``) → defaults correctos.
+
+        ``type``=Step, ``execute``=True, ``finally_``=False,
+        ``description``/``agent``/``team``/``function``/``workflow``=None,
+        ``steps``=[] y ``cases``={}.
+        """
+        s = StepConfig(step="s1")
+        assert s.step == "s1"
+        assert s.type is StepType.STEP
+        assert s.execute is True
+        assert s.finally_ is False
+        assert s.description is None
+        assert s.agent is None
+        assert s.team is None
+        assert s.function is None
+        assert s.workflow is None
+        assert s.steps == []
+        assert s.cases == {}
+        assert s.condition is None
+        assert s.if_true is None
+        assert s.if_false is None
+        assert s.expression is None
+        assert s.end_condition is None
+        assert s.max_iterations is None
+        assert s.human_review is None
+
+    def test_model_dump_roundtrip_identical(self) -> None:
+        """Scenario: round-trip ``model_dump()`` → ``StepConfig(**dump)`` idéntico.
+
+        El contrato de serialización YAML: lo que YAML produce y ``model_dump``
+        consume debe reconstruir el mismo modelo (alias ``finally`` resuelto).
+        """
+        original = StepConfig(
+            step="c1",
+            type="Condition",
+            condition="amount > 1000",
+            if_true="approve",
+            if_false="reject",
+            **{"finally": True},
+        )
+        dump = original.model_dump()
+        rebuilt = StepConfig(**dump)
+        assert rebuilt == original
+        assert rebuilt.model_dump() == dump
+        assert rebuilt.finally_ is True
+
+    def test_type_discriminator_all_8_members(self) -> None:
+        """Scenario: discriminador ``type`` con los 8 StepType de Agno.
+
+        Cada miembro del enum ``StepType`` construye la instancia correcta
+        (misma instancia de enum, no coerción a string).
+        """
+        for member in StepType:
+            s = StepConfig(step=f"s-{member.value.lower()}", type=member.value)
+            assert s.type is member, f"{member.value!r} no resolvió a {member!r}"
+
+    def test_type_discriminator_accepts_member_directly(self) -> None:
+        """Scenario: el discriminador también acepta el miembro de enum directo."""
+        s = StepConfig(step="s1", type=StepType.PARALLEL)
+        assert s.type is StepType.PARALLEL
