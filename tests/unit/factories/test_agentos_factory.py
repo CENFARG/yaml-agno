@@ -526,7 +526,6 @@ class TestInterfaceRegistryIntegration:
 
         # Need a stub MCPServerLifecycle too (new param in TASK_009)
         mock_mcp_lifecycle = mocker.Mock()
-        mock_mcp_lifecycle._settings.enabled = True  # keep mcp register happy
 
         factory_with_iface = AgentOSFactory(
             agent_registry=mock_agent_registry,
@@ -572,7 +571,6 @@ class TestInterfaceRegistryIntegration:
         """When config has no interfaces, build_all is NOT called."""
         mock_iface_registry = mocker.Mock()
         mock_mcp_lifecycle = mocker.Mock()
-        mock_mcp_lifecycle._settings.enabled = False
 
         factory_no_iface = AgentOSFactory(
             agent_registry=mock_agent_registry,
@@ -598,7 +596,6 @@ class TestInterfaceRegistryIntegration:
     ) -> None:
         """When interface_registry is None, build_all is NOT called (graceful)."""
         mock_mcp_lifecycle = mocker.Mock()
-        mock_mcp_lifecycle._settings.enabled = False
 
         factory_no_registry = AgentOSFactory(
             agent_registry=mock_agent_registry,
@@ -623,7 +620,6 @@ class TestInterfaceRegistryIntegration:
     def test_interfaces_logs_warning_when_registry_none(self, factory, mocker, caplog) -> None:
         """When interfaces exist but registry is None, log a warning."""
         mock_mcp_lifecycle = mocker.Mock()
-        mock_mcp_lifecycle._settings.enabled = False
 
         factory_no_registry = AgentOSFactory(
             agent_registry=factory._agent_registry,
