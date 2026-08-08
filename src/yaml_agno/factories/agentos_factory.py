@@ -550,7 +550,7 @@ class AgentOSFactory:
         if mcp.tools_to_expose:
             mcp_kwargs["tools"] = mcp.tools_to_expose
 
-        # Fields without a direct Agno-native MCP mapping — warn once
+        # Fields without a direct Agno-native MCP mapping — warn per build call
         # so operators know they have no effect at the AgentOS level.
         unmapped: list[str] = []
         if mcp.name is not None:
