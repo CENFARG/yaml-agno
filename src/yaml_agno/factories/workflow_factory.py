@@ -72,7 +72,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Any
 
 from agno.agent import Agent
@@ -740,10 +741,10 @@ class WorkflowFactory:
 # Dispatch table for the five composite StepTypes. STEP/FUNCTION and WORKFLOW
 # are handled directly in ``_build_step``; the rest are looked up here so the
 # dispatcher stays a pure table-driven switch.
-_STEP_BUILDERS: dict[StepType, Callable[..., _BuiltStep]] = {
+_STEP_BUILDERS: Mapping[StepType, Callable[..., _BuiltStep]] = MappingProxyType({
     StepType.STEPS: WorkflowFactory._build_steps_group,
     StepType.PARALLEL: WorkflowFactory._build_parallel_group,
     StepType.CONDITION: WorkflowFactory._build_condition_group,
     StepType.ROUTER: WorkflowFactory._build_router_group,
     StepType.LOOP: WorkflowFactory._build_loop_group,
-}
+})

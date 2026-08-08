@@ -327,6 +327,24 @@ class TestRouterDispatch:
         assert isinstance(router, Router)
         assert router.selector is fn
 
+    def test_router_expression_none_yields_selector_none(self) -> None:
+        """F6: expression=None defaults selector to None.
+
+        _build_router_group line 675: selector initializes to None, and the
+        ``if step_cfg.expression is not None`` gate is skipped. Cases still
+        resolve by key name.
+        """
+        cfg = _workflow_cfg([
+            StepConfig(step="r", type="Router", expression=None,
+                       cases={"a": "step_a"}),
+            StepConfig(step="step_a", type="Step", agent="a1"),
+        ])
+        result = WorkflowFactory.build(cfg, agents={"a1": _agent("a1")}, teams={})
+        router = result.steps[0]
+        assert isinstance(router, Router)
+        assert router.selector is None
+        assert [c.name for c in router.choices] == ["a"]
+
 
 # --------------------------------------------------------------------------- #
 # Phase 2.9 / 2.10 / 2.11 — Loop (CEL/callable end_condition + defaults).
@@ -764,6 +782,57 @@ class TestDefensiveBranchResolution:
         assert isinstance(router, Router)
         assert [c.name for c in router.choices] == ["b"]
 
+    def test_condition_defensive_branch_forwards_step_executor(self) -> None:
+        """F5a: step_executor passthrough in defensive Condition branch.
+
+        When if_true references a ghost step-id, _build_step recurses into the
+        defensive empty-steps path. step_executor must be forwarded through that
+        recursion so it doesn't raise.
+        """
+        from yaml_agno.workflows.step_executor import StepExecutor
+
+        step_exec = StepExecutor(error_manager=MagicMock())
+        cfg = WorkflowConfig.model_construct(
+            name="w",
+            description=None,
+            steps=[
+                StepConfig(step="c", type="Condition", condition="amount > 0",
+                           if_true="ghost", if_false=None),
+            ],
+        )
+        result = WorkflowFactory.build(
+            cfg, agents={"a1": _agent("a1")}, teams={}, step_executor=step_exec
+        )
+        cond = result.steps[0]
+        assert isinstance(cond, Condition)
+        assert cond.steps == []
+
+    def test_router_defensive_case_skip_forwards_step_executor(self) -> None:
+        """F5b: step_executor passthrough in defensive Router case skip.
+
+        When a Router case references a ghost step-id, the choice is skipped via
+        ``continue``. step_executor must be forwarded through the recursive
+        _build_step call for the valid case.
+        """
+        from yaml_agno.workflows.step_executor import StepExecutor
+
+        step_exec = StepExecutor(error_manager=MagicMock())
+        cfg = WorkflowConfig.model_construct(
+            name="w",
+            description=None,
+            steps=[
+                StepConfig(step="r", type="Router", expression="input.cat",
+                           cases={"ghost": "ghost", "b": "real_step"}),
+                StepConfig(step="real_step", type="Step", agent="a1"),
+            ],
+        )
+        result = WorkflowFactory.build(
+            cfg, agents={"a1": _agent("a1")}, teams={}, step_executor=step_exec
+        )
+        router = result.steps[0]
+        assert isinstance(router, Router)
+        assert [c.name for c in router.choices] == ["b"]
+
 
 # --------------------------------------------------------------------------- #
 # TD-06 — StepExecutor resilience binding (RED tests).
@@ -861,6 +930,43 @@ class TestStepExecutorBinding:
         step = result.steps[0]
         assert isinstance(step, Step)
         assert step.executor is fn
+
+    def test_function_type_routes_through_step_executor(self) -> None:
+        """F1: type="Function" dispatches through _build_step_executor.
+
+        StepType.FUNCTION is an alias for StepType.STEP — both route to
+        _build_step_executor and produce Step(executor=fn).
+        """
+        fn = _fn_factory("my_fn")
+        cfg = _workflow_cfg([StepConfig(step="s", type="Function", function="my_fn")])
+        result = WorkflowFactory.build(
+            cfg, agents={}, teams={}, callables={"my_fn": fn}
+        )
+        step = result.steps[0]
+        assert isinstance(step, Step)
+        assert step.executor is fn
+
+    def test_agent_wins_when_agent_and_function_both_set(self) -> None:
+        """F4: agent+function combo — agent check runs first, function unreachable.
+
+        _build_step_executor checks agent at line 349 before function at line 373.
+        When both are set, agent wins; executor remains None.
+        """
+        agent_a = _agent("a1")
+        fn = _fn_factory("my_fn")
+        cfg = _workflow_cfg([
+            StepConfig(step="s", type="Step", agent="a1", function="my_fn"),
+        ])
+        result = WorkflowFactory.build(
+            cfg,
+            agents={"a1": agent_a},
+            teams={},
+            callables={"my_fn": fn},
+        )
+        step = result.steps[0]
+        assert isinstance(step, Step)
+        assert step.agent is agent_a
+        assert step.executor is None
 
 
 # --------------------------------------------------------------------------- #
