@@ -325,9 +325,9 @@ class AgentOSFactory:
     def _assemble_app(self, kwargs: dict[str, Any]) -> AgentOS:
         """Phase 4 — construct the ``agno.os.AgentOS`` instance.
 
-        Strips the two factory-internal keys that must never reach the
-        AgentOS constructor (``config`` YAML reference and ``resync``
-        Slice-3 flag) and constructs.
+        Factory-internal keys (``config``, ``resync``, etc.) are already
+        stripped by ``_pop_owned_keys`` in Phase 3. No further cleanup
+        needed here.
 
         Args:
             kwargs: The fully wired kwargs dict.
@@ -335,12 +335,6 @@ class AgentOSFactory:
         Returns:
             A constructed ``agno.os.AgentOS`` instance.
         """
-        # "config" is our internal YAML config reference, NOT the same as
-        # AgentOS's "config" parameter. Strip it to avoid collision.
-        kwargs.pop("config", None)
-        # resync wiring is post-build (attach); the config flag itself is
-        # factory-owned and never forwarded to AgentOS.
-        kwargs.pop("resync", None)
         return AgentOS(**kwargs)
 
     def _register_lifecycle(self, agentos: AgentOS, config: AgentOSConfig) -> AgentOS:
