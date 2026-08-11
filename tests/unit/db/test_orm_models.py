@@ -92,7 +92,7 @@ pytestmark = pytest.mark.unit
 # Helpers
 # ---------------------------------------------------------------------------
 
-SEVEN_TABLES = {
+NINE_TABLES = {
     "yamlagno.yamlagno_tenants",
     "yamlagno.yamlagno_agent_configs",
     "yamlagno.yamlagno_team_configs",
@@ -100,6 +100,10 @@ SEVEN_TABLES = {
     "yamlagno.yamlagno_di_variable_cache",
     "yamlagno.yamlagno_config_change_log",
     "yamlagno.yamlagno_schema_versions",
+    # SPEC_23 §5 — feature flags + secret audit (schema yamlagno, unprefixed
+    # tablename: SPEC_23 names them `yamlagno.feature_flags` / `.secret_audit`).
+    "yamlagno.feature_flags",
+    "yamlagno.secret_audit",
 }
 
 
@@ -443,13 +447,13 @@ def test_di_cache_change_log_schema_version_constraints() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_models_init_registers_exactly_seven_tables() -> None:
-    """importing yaml_agno.db.models registers exactly the seven tables."""
+def test_models_init_registers_exactly_nine_tables() -> None:
+    """importing yaml_agno.db.models registers exactly the nine tables."""
     from yaml_agno.db.models import Base
 
     registered = set(Base.metadata.tables.keys())
-    assert registered == SEVEN_TABLES, (
-        f"Expected exactly 7 tables; got {len(registered)}: {sorted(registered)}"
+    assert registered == NINE_TABLES, (
+        f"Expected exactly 9 tables; got {len(registered)}: {sorted(registered)}"
     )
 
 
