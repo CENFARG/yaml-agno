@@ -1,16 +1,16 @@
 ---
 Spec_ID: "SPEC_03"
 Title: "Persistence Architecture - Config Store on core-cenf DatabaseManager"
-Version: "0.3.0-iter5"
+Version: "0.3.0-iter6"
 Maturity_Level: "Semilla"
-Status: "Draft"
+Status: "Done"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#PostgreSQL", "#SQLAlchemy", "#core-cenf", "#MultiTenant", "#ConfigStore"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02"]
 Group: "G2-Runtime-Core"
 Read_Order: 4
-Last_Updated: "2026-07-03"
-Revision_Note: "Iter 5 (deep review) - verified all core-cenf API claims against source (ports.py / sqlalchemy_adapter.py / memory_database_adapter.py): DatabaseManager.transaction()->AbstractAsyncContextManager[TransactionScope], get_repository(entity_type) on DatabaseManager (raises RuntimeError outside scope), GenericRepository[T] exact-match signature (find_by_id/find_all/insert/update/delete/count with order_by/limit/offset), commit/rollback async idempotent, _active_session contextvar propagation confirms the 'inside async with' directive. Verified Agno uses SQLAlchemy Core (Table(..., schema=db_schema)) not DeclarativeBase, confirming the mandatory-ORM divergence rationale. Fixes: (a) §7.2 return type corrected to AgentConfigRecord | None (the SQLAlchemy adapter returns ORM entities, not dicts; the MemoryAdapter returns dicts — code must not assume dict); (b) §5.3/§7.2 clarified that the `as tx` binding is used only for commit(), repository is obtained from db.get_repository(); (c) §3.7 corrected the 'mirroring' claim — Agno has a full MigrationManager (up/down) not just a versions table, yaml-agno does NOT replicate that motor; (d) §5.3/§7.2 added note that set_tenant_id is normally set by core-cenf Auth adapters, repository calls are defensive/redundant when Auth is wired."
+Last_Updated: "2026-08-11"
+Revision_Note: "Iter 6 (closure) - implemented and verified the remaining SPEC_03 scope: DbRegistry runtime db_ref resolver in src/yaml_agno/persistence/registry.py (Protocol DbRegistry + InMemoryDbRegistry + async build_db_registry with DI-injectable db_factory/vector_db_factory; defaults build Agno PostgresDb/PgVector with clear ImportError when drivers are missing — asyncpg/pgvector NOT installed in this env, DI factories make the swap testable per DECISIONES 2.9). Config block shape: databases/vector_databases entries with dsn + optional password_ref ({password} placeholder substituted via SecretManager.get_secret). Cross-tenant isolation GATE added in tests/unit/persistence/test_cross_tenant_gate.py (GATE-01 list, GATE-02 read same-name, GATE-03 delete, GATE-04 save stamps tenant_id) — explicit tenant_id filters, NO RLS. AgentConfigRepository.save() now sets is_active=True explicitly (deterministic across adapters). Verified: 43 tests green (persistence+db), mypy --strict clean (18 files), ruff clean, spec_gate 34/34 PASS, full unit suite 732 passed (6 pre-existing mcp_resolver failures unrelated to SPEC_03 — agno 2.8.7 ALLOWED_COMMANDS change). JSONB columns, provisioner, bootstrap_database, TenantResolver were already implemented in prior iterations."
 ---
 
 # SPEC_03_PERSISTENCE_ARCHITECTURE
