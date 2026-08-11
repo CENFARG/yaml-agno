@@ -2,7 +2,7 @@
 
 > Declarative YAML layer over the Agno Framework. YAML → Pydantic → Factory → Agno Objects.
 
-yaml-agno is a pip-installable Python library that lets you define Agno agents, teams, and workflows entirely in YAML configuration files, with templates, dependency injection, and multi-tenant support. It builds ON TOP of Agno 2.6.22 — never reimplements Agno's runtime, session, memory, A2A, or retry internals.
+yaml-agno is a pip-installable Python library that lets you define Agno agents, teams, and workflows entirely in YAML configuration files, with templates, dependency injection, and multi-tenant support. It builds ON TOP of Agno 2.8.7 — never reimplements Agno's runtime, session, memory, A2A, or retry internals.
 
 ## Quick Start
 

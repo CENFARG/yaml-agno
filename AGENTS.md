@@ -9,7 +9,7 @@ A **pip-installable Python library** that abstracts the Agno Framework via YAML 
 ## Stack
 
 - **Python 3.12+** (strict)
-- **Agno 2.6.22** (pinned, the runtime we build on top of)
+- **Agno 2.8.7** (pinned, the runtime we build on top of)
 - **core-cenf-py** (`core_infrastructure` — DatabaseManager, ConfigManager, SecretManager, ErrorHandlingManager, ObservabilityManager, DependencyManager)
 - **Pydantic V2** (schemas, validation, discriminated unions)
 - **SQLAlchemy 2.0** (`yamlagno_*` ORM models, DeclarativeBase)
@@ -81,7 +81,7 @@ Load `.chats/decisions.yaml` → `verification_queries` (VQ001-VQ009). Execute e
 
 ## Dependencies
 
-- `agno==2.6.22` (pip)
+- `agno==2.8.7` (pip)
 - `core-cenf-py` (git+https, private — needs `GIT_AUTH_TOKEN` for CI)
 - `pydantic>=2.0`, `pyyaml>=6.0`, `sqlalchemy[asyncio]>=2.0`
 
