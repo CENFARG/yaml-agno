@@ -98,3 +98,72 @@ class TestMemoryConfigRedCases:
         with pytest.raises(ValidationError) as exc_info:
             MemoryConfig.model_validate(data)
         assert "storage_type" in str(exc_info.value)
+
+
+class TestMemoryConfigUpdateUserMemoryGotcha:
+    """RED scenarios — the Agno 2.8.7 `update_user_memory` tool-name collision.
+
+    Agno 2.8.7 (verified in agno/agent/agent.py): ``enable_agentic_memory``
+    must NOT be combined with a LearningMachine that has a ``user_memory``
+    store. Both register a tool named ``update_user_memory``; tool parsing
+    keeps the first name it sees and the learning store's tool is silently
+    dropped. In yaml-agno, ``learning.enabled=True`` wires the rich
+    LearningMachine (6 stores, including ``user_memory``) per SPEC_04 §2.2, so
+    the combination MUST be rejected at config-build time (fail fast, never a
+    silent drop by Agno).
+    """
+
+    @staticmethod
+    def _valid_learning_cfg() -> dict:
+        """A fully-populated learning block (SPEC_04 §1.3)."""
+        return {
+            "enabled": True,
+            "recall_on_start": True,
+            "save_on_decision": True,
+            "save_on_discovery": True,
+            "save_on_bugfix": True,
+            "scope": "tenant:acme",
+            "learned_knowledge": {"scope": "tenant:acme"},
+            "entity_memory": {"scope": "tenant:acme"},
+        }
+
+    def test_red_agentic_memory_with_learning_enabled_rejected(self) -> None:
+        """enable_agentic_memory=True + learning.enabled=True MUST be rejected
+        (both would register the Agno tool `update_user_memory`)."""
+        data = _valid_scalars() | {
+            "enable_agentic_memory": True,
+            "learning": self._valid_learning_cfg(),
+        }
+        with pytest.raises(ValidationError) as exc_info:
+            MemoryConfig.model_validate(data)
+        assert "update_user_memory" in str(exc_info.value)
+
+    def test_golden_agentic_memory_without_learning_accepted(self) -> None:
+        """enable_agentic_memory=True with no learning block is valid (no
+        LearningMachine user_memory store -> no tool collision)."""
+        data = _valid_scalars() | {"enable_agentic_memory": True}
+        cfg = MemoryConfig.model_validate(data)
+        assert cfg.enable_agentic_memory is True
+        assert cfg.learning is None
+
+    def test_golden_learning_enabled_without_agentic_memory_accepted(self) -> None:
+        """learning.enabled=True with enable_agentic_memory=False is valid
+        (the only `update_user_memory` tool is the learning store's)."""
+        data = _valid_scalars() | {
+            "enable_agentic_memory": False,
+            "learning": self._valid_learning_cfg(),
+        }
+        cfg = MemoryConfig.model_validate(data)
+        assert cfg.enable_agentic_memory is False
+        assert cfg.learning is not None and cfg.learning.enabled is True
+
+    def test_golden_agentic_memory_with_learning_disabled_accepted(self) -> None:
+        """enable_agentic_memory=True + learning.enabled=False is valid (the
+        simple MemoryManager path has no user_memory store tool)."""
+        data = _valid_scalars() | {
+            "enable_agentic_memory": True,
+            "learning": self._valid_learning_cfg() | {"enabled": False},
+        }
+        cfg = MemoryConfig.model_validate(data)
+        assert cfg.enable_agentic_memory is True
+        assert cfg.learning is not None and cfg.learning.enabled is False

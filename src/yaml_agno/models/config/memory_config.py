@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SessionMemoryConfig(BaseModel):
@@ -209,6 +209,31 @@ class MemoryConfig(BaseModel):
     working: WorkingMemoryConfig | None = Field(None, description="Working-context configuration.")
     learning: LearningMemoryConfig | None = Field(None, description="Long-term learning configuration.")
     retention: RetentionConfig | None = Field(None, description="Retention purge configuration (post-MVP).")
+
+    @model_validator(mode="after")
+    def _check_agentic_memory_vs_learning_collision(self) -> MemoryConfig:
+        """Fail fast on the Agno 2.8.7 ``update_user_memory`` tool-name collision.
+
+        Verified against Agno 2.8.7 (agno/agent/agent.py docstring on
+        ``enable_agentic_memory``): a LearningMachine that has a ``user_memory``
+        store AND ``enable_agentic_memory=True`` both register a tool named
+        ``update_user_memory``; tool parsing keeps the first name it sees and
+        the learning store's tool is silently dropped. In yaml-agno,
+        ``learning.enabled=True`` wires the rich LearningMachine (6 stores,
+        including ``user_memory``) per SPEC_04 §2.2, so the combination MUST be
+        rejected at config-build time instead of letting Agno drop the learning
+        store's tool without a word.
+        """
+        if self.enable_agentic_memory and self.learning is not None and self.learning.enabled:
+            raise ValueError(
+                "enable_agentic_memory=True cannot be combined with "
+                "learning.enabled=True (LearningMachine with user_memory store): "
+                "both register the Agno tool 'update_user_memory', and tool "
+                "parsing silently drops the learning store's tool (Agno 2.8.7 "
+                "gotcha). Enable one memory path only: either agentic memory or "
+                "the LearningMachine, not both."
+            )
+        return self
 
 
 __all__ = [
