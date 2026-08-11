@@ -3,13 +3,13 @@ Spec_ID: "SPEC_23"
 Title: "Config & Secrets Management - ConfigManager, Zero-Trust SecretManager, Feature Flags and Hot-Reload"
 Version: "0.2.0-iter4"
 Maturity_Level: "Semilla"
-Status: "Draft"
+Status: "Done"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#ConfigManager", "#SecretManager", "#ZeroTrust", "#FeatureFlags", "#HotReload", "#MultiTenant", "#Vault", "#PydanticV2", "#Rotation", "#AuditLog", "#ConfigDB", "#CoreConsumer"]
 Dependency_Hashes: ["SPEC_03", "SPEC_00", "SPEC_02"]
 Group: "G8-Ops-Observabilidad"
 Read_Order: 25
-Last_Updated: "2026-07-03"
+Last_Updated: "2026-08-11"
 Revision_Note: "iter4 - Deep adversarial review vs core-cenf-py real source. Fixed multiple API drifts that would have broken wiring: (1) ConfigManager.get_* param name is default_value, not default (config/ports.py:49-94); added directive. (2) rotate_secret is also async — corrected the 'get_secret is the ONLY async accessor' claim (secrets/ports.py:72). (3) Three adapter constructor mismatches fixed against real ctors: PydanticConfigAdapter(env_prefix, config_path) not (settings, env); EncryptedSecretAdapter(config, secret_storage_path) not no-arg; MemoryFeatureFlagAdapter() + set_flag() not flags=. (4) Removed orphan test.yaml from §2.1 dir tree and Mermaid 'dev/test' label — both contradicted the dev|staging|prod enum SSOT. (5) Documented the deliberate narrowing of core's Env literal (local|dev|staging|prod -> dev|staging|prod) as a project decision, not drift. Env enum consistency, actor/updated_by composite directive, BDD await get_secret(), and os.environ prohibition all re-verified clean."
 ---
 
