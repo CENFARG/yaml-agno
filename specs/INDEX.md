@@ -193,3 +193,16 @@ Recommended first ten SPECs to implement (by current filename), per the coverage
 ---
 
 > Filenames are stable. Dependencies form a DAG (see `Dependency_Hashes` in each SPEC), not a strict linear order; Read_Order is a reading guide, not a dependency contract.
+
+---
+
+## Closed SPECs (S0 — Execution Plan 2026-08-10)
+
+SPECs whose implementation already exists in `src/yaml_agno/` and are closed as of S0.
+Frontmatter `Status` flipped to `Done` (2026-08-11). Round-trip integration gates remain
+pending (G-01 for SPEC_26).
+
+| SPEC | Status | Evidence (code) | Unit verification |
+|---|---|---|---|
+| SPEC_26_A2A_INTERFACE.md | **CLOSED** | `src/yaml_agno/agentos/a2a_interface.py` — `A2AInterfaceFactory.build()` instantiates `agno.os.interfaces.a2a.A2A` (línea 149); `src/yaml_agno/agentos/interfaces.py` (mapping + build_all) | `pytest tests/unit/agentos -q` → PASS (G-01 round-trip pendiente) |
+| SPEC_14_MODEL_RESILIENCE_AND_CONFIG.md | **CLOSED** | `src/yaml_agno/models/fallback_chain.py`, `models/fallback_classifier.py`, `resilience/circuit_breaker.py`, `di/provider_factory.py`, `di/capabilities_validator.py`, `di/provider_capabilities.py` | `pytest tests/unit/models tests/unit/resilience -q` → PASS |

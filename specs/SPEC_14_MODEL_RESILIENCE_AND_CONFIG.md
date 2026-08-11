@@ -3,13 +3,13 @@ Spec_ID: "SPEC_14"
 Title: "Model Resilience & Configuration"
 Version: "0.3.0-iter5"
 Maturity_Level: "Semilla"
-Status: "Draft"
+Status: "Done"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#models", "#fallback", "#resilience", "#circuit-breaker", "#cache", "#providers", "#pydantic-v2", "#retry", "#reasoning"]
 Dependency_Hashes: ["SPEC_01", "SPEC_05", "SPEC_08", "SPEC_09"]
 Group: "G2-Runtime-Core"
 Read_Order: 4
-Last_Updated: "2026-07-26"
+Last_Updated: "2026-08-11"
 Revision_Note: "Iter 5 - Update to Agno 2.8.3. Added 20 new model providers (46 total vs 26 in v2.6.18): aimlapi, cerebras, cloudflare, cometapi, deepinfra, huggingface, ibm, inception, internlm, litellm, minimax, moonshot, n1n, neosantara, nexus, nvidia, portkey, requesty, sambanova, siliconflow, tokenlab, tuning_engines, xiaomi. Removed models/defaults.py (deleted upstream). Iter 4 content otherwise stands."
 ---
 
