@@ -1,16 +1,16 @@
 ---
 Spec_ID: "SPEC_04"
 Title: "Memory Architecture - Session, Working Memory and Long-term Storage"
-Version: "0.3.0-iter4"
+Version: "0.3.0-iter5"
 Maturity_Level: "Semilla"
-Status: "Draft"
+Status: "Done"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Memory", "#ContextCompression", "#Session", "#Scopes", "#Retention"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_06"]
 Group: "G4-Memoria-Aprendizaje"
 Read_Order: 8
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 4. Unified user_id as a single composite {tenant_id}:{principal_id} across all of yaml-agno (HTTP + autonomous). resolve_user_id() is now THE single resolver (SPEC_06 TenantContextMiddleware calls it instead of building the composite inline). Signature takes principal_id + tenant_id; returns f'{tenant_id}:{principal_id}', never bare, never None. system_user_id is documented as the principal part only (tenant prefixed at resolve time). TASK_005 updated to assert the composite. Iter 3. Collapsed the repeated 'no Engram / no Port / no adapter / no external backend' directives and the PII/secret pointers into ONE canonical @ai-directive block at the top (single source of truth), removing redundant repetitions from body sections. Added system_user_id (Agno user_id=None silently collapses to a shared 'default' bucket; yaml-agno always injects an explicit user_id and fails fast at config-build time when none resolves). Added configurable retention: block (replacing the fixed 30/90/7-day architecture constants; Agno has no native retention). Added memory scopes mapping (namespace taxonomy: org/tenant/agent/user/team) with the entity_memory/learned_knowledge namespace-inheritance gotcha. Marked compression_threshold as a task-dependent configurable example owned by SPEC_15. Rewrote Section 8 strategic questions as RESOLVED with their configured mechanism. Iter 3 (factual follow-up): corrected Agno version references v2.6.14 -> v2.6.18 throughout (verified against agno/libs/agno/pyproject.toml)."
+Last_Updated: "2026-08-11"
+Revision_Note: "Iter 5 (closure) - leaf memory-identity-leaf implemented, tested and archived (openspec/changes/archive/2025-01-08-memory-identity-leaf). resolve_user_id() verified as THE single composite '{tenant_id}:{principal_id}' resolver (7 unit tests GREEN); MemoryConfig schema verified (SPEC_02 SSOT, 11 unit tests GREEN). Gotcha Agno 2.8.7 `update_user_memory` RESOLVED as D-F1-08: fail-fast at config-build time — MemoryConfig.model_validate() rejects enable_agentic_memory=true combined with learning.enabled=true (LearningMachine user_memory store tool collision), never a silent Agno drop. Verified: ruff clean, mypy --strict clean, spec_gate 34/34 PASS, memory suite 18 GREEN (7 user_identity + 11 memory_config). Remaining SPEC_04 apply scope (agno_memory_config/autosave/scope_mapping — TASK_001-004/006) deferred to EXECUTION-PLAN S4 until SPEC_03 Postgres store lands."
 ---
 
 # SPEC_04_MEMORY_ARCHITECTURE

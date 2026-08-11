@@ -239,3 +239,16 @@ El sub-agente `sdd-verify` DEBE, antes de dar PASS a cualquier slice:
 
 *Mantener este documento actualizado al cerrar cada hito. Es la red de seguridad
 anti-lobotomización post-compactación.*
+
+---
+
+## DECISIONES Fase 1 (2026-08-11)
+- D-F1-01: Pin Agno unificado a 2.8.7 (0 breaking changes verificado)
+- D-F1-02: S5 = S5a (Agno native + Casbin) + S5b (Keycloak) AMBOS en Fase 1
+- D-F1-03: LICENSE Apache 2.0 creado
+- D-F1-04: SPEC_26 (A2A) y SPEC_14 (Model Resilience) cerradas
+- D-F1-05: NO RLS — filtros explícitos WHERE tenant_id
+- D-F1-06: PostgreSQL + pgvector + JSONB (NO Qdrant separado)
+- D-F1-07: Infra: Google Cloud Run + Supabase
+- D-F1-08: Gotcha Agno 2.8.7 `update_user_memory`: NO combinar `enable_agentic_memory: true` con `learning.enabled: true` (LearningMachine con store `user_memory`). Ambos registran un tool llamado `update_user_memory`; el parser conserva el primero y DROPEA silenciosamente el del learning store (agno/agent/agent.py). yaml-agno FAIL-FAST en config-build: `MemoryConfig.model_validate()` lo rechaza (validación en `memory_config.py`). Elegir UNA vía de memoria por config.
+- D-F1-09: SPEC_04 (memoria) cerrada — leaf `memory-identity-leaf` (resolve_user_id + MemoryConfig + gotcha `update_user_memory` validado)
