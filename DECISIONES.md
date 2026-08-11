@@ -13,7 +13,7 @@
 
 Capa de abstracción **YAML → Agno Objects**. Define agentes/teams/workflows de
 Agno en YAML, con plantillas heredables + DI System. Se construye **ON TOP** de
-Agno v2.6.18 + AgentOS y **consume** `core-cenf-py` (`core_infrastructure`) para
+Agno v2.8.7 + AgentOS y **consume** `core-cenf-py` (`core_infrastructure`) para
 infra transversal.
 
 **Para qué**: herramienta interna CENF para acelerar la creación de equipos
@@ -68,7 +68,7 @@ app.py:1072). NO `jwt_signing_key`.
 - **Índice**: `specs/INDEX.md` agrupa en 10 grupos temáticos (G1-G10) + campo
   `Read_Order` en cada frontmatter. Los archivos **NO se renombraron**
   (trazabilidad intacta).
-- **Revisión profunda 33/33 COMPLETA**, todas verificadas contra Agno v2.6.22 +
+- **Revisión profunda 33/33 COMPLETA**, todas verificadas contra Agno v2.8.7 +
   core-cenf-py **reales** ( APIs inventadas cazadas en todas). CERO deudas abiertas.
 - **Auditoría cross-SPEC completa** (72 hallazgos, Waves 1-6, 11 contradicciones resueltas).
 - **Implementación MVP top 10 en curso** (GitHub repo `CENFARG/yaml-agno`, 17 PRs):
