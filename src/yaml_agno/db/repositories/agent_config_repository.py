@@ -124,6 +124,10 @@ class AgentConfigRepository:
             version=1,
             config_yaml=config_yaml_str,
             config_jsonb=config_dict,
+            # Explicit is_active so the row is deterministic regardless of the
+            # adapter's default handling (same philosophy as the explicit
+            # tenant_id filter — never rely on implicit adapter behavior).
+            is_active=True,
         )
 
         async with self._db.transaction() as tx:
