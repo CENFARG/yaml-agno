@@ -1,17 +1,18 @@
 ---
 Spec_ID: "SPEC_05"
 Title: "Workflows and Teams - Complex Runtime Coordination"
-Version: "0.3.0-iter3"
+Version: "0.3.0-iter4"
 Maturity_Level: "Semilla"
-Status: "Draft"
+Status: "Done"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#Workflows", "#Teams", "#Coordination", "#ErrorRecovery", "#A2A"]
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_09"]
 Group: "G6-Orquestacion"
 Read_Order: 15
-Last_Updated: "2026-07-02"
+Last_Updated: "2026-08-11"
 Revision_Note: "iter2: delegate inter-agent/inter-team wire protocol to Agno native A2A (removed custom message_protocol.py; ACP explicitly unsupported). Consume real core-cenf-py ErrorHandlingManager API (classify/report/handle/handle_errors, ErrorClassification TRANSIENT/PERMANENT/VALIDATION/AUTH/RATE_LIMIT; no CRITICAL, no should_retry, sync report). Scope retry_policy.py to the Agno step-level gap only (model retry owned by Agno Model fields; HITL retry native). Make retry/timeout values configurable YAML examples. Resolve strategic questions [Q1]/[Q2]/[Q3] via Agno evidence. Fix Agno version refs v2.6.14 -> v2.6.18."
 Revision_Note_Iter3: "Iter 3 - Wave 6 hygiene: mermaid edge label 'Critical error' -> 'PERMANENT error' to align with the ErrorClassification vocabulary (no CRITICAL category)."
+Revision_Note_Iter4: "Iter 4 (closure 2026-08-11) - all 8 SPEC_05 TDD micro-tasks verified implemented and green. TASK_001: src/yaml_agno/workflows/models.py re-exports SPEC_02 SSOT WorkflowConfig/StepConfig/StepType. TASK_002/003: StepExecutor.execute_step/execute_parallel_step compose CircuitBreaker+RetryPolicy, parallel via asyncio.TaskGroup (never gather). TASK_004: ConditionEvaluator strips ${...} and delegates to Agno _evaluate_cel. TASK_005/006: RetryPolicy with exponential backoff+jitter; classification delegated to core-cenf ErrorHandlingManager.classify() (TRANSIENT/RATE_LIMIT retryable, fail-fast PERMANENT/VALIDATION/AUTH); SYNC report(). TASK_007: A2AConfig/A2AConfigFactory map enable_interface/expose/remote onto Agno BaseRemote protocol='a2a'; ACP rejected by Literal constraint. TASK_008: contract guard tests/contract/test_no_workflow_runtime.py asserts no WorkflowExecution/WorkflowState/WorkflowStateMachine. WorkflowFactory (src/yaml_agno/factories/workflow_factory.py) translates the 7-primitive StepType matrix onto agno Step/Steps/Parallel/Condition/Router/Loop with hybrid CEL/callable resolution (Open Item #1). Verified: pytest tests/unit/workflows tests/unit/factories/test_workflow_factory.py -q -> 81 passed, 1 skipped (cel-python unavailable guard); tests/contract/test_no_workflow_runtime.py PASS; scripts/spec_gate.py all -> 34/34. Note: per-step timeout: field (§8 Q1) is a SPEC_02 SSOT schema decision (SPEC_02 still Draft), not a SPEC_05 task; retry: block values (§4.2) are documented tunable examples, NOT baked into code — RetryPolicy constructor params (max_retries/base_delay/max_delay/jitter) are the configurable surface."
 ---
 
 # SPEC_05_WORKFLOWS_AND_TEAMS
