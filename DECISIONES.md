@@ -212,7 +212,9 @@ El sub-agente `sdd-verify` DEBE, antes de dar PASS a cualquier slice:
    shipped (drift = WARNING a corregir en el YAML o en el código, según quién
    tenga razón — pero el YAML es el árbitro).
 
-### Las 9 queries vigentes (resumen — leer el YAML para el texto exacto)
+### Las 15 queries vigentes (resumen — leer el YAML para el texto exacto)
+
+### Queries VQ001-VQ009 (originales, verificadas 2026-07-10)
 
 | VQ | Decisión | Check | Expected |
 |----|----------|-------|----------|
@@ -225,6 +227,17 @@ El sub-agente `sdd-verify` DEBE, antes de dar PASS a cualquier slice:
 | VQ007 | TECH008 no cache store | cache_key.py sin lógica cache (solo sha256/digest) | no cache impl |
 | VQ008 | STRAT003 TaskGroup | `rg 'gather' src/yaml_agno/` | ZERO |
 | VQ009 | TECH008 no messages | cache_key.py: messages solo en `messages_hash` param | no serialization |
+
+### Queries VQ010-VQ015 (Fase 1 auth, agregadas 2026-08-18)
+
+| VQ | Decisión | Check | Expected |
+|----|----------|-------|----------|
+| VQ010 | D-F1-02 JWT native always-on | `authorization=True` + `user_isolation=True` incondicionales en api/agentos | always-on, no conditional |
+| VQ011 | D-F1-10 R1 fail-fast adapter | `kwargs.update` ciego = ZERO; whitelist 7 campos + AuthorizationBuildError + contract tests aserten contenido | fail-fast, no silent drop |
+| VQ012 | composite user_id single resolver | api/ delega a `resolve_user_id()`, sin f-string inline | single source of truth |
+| VQ013 | Casbin via core-cenf port | `import casbin` en src/yaml_agno = ZERO | PermissionManager only |
+| VQ014 | D-F1-05 NO RLS | ROW LEVEL SECURITY / CREATE POLICY = ZERO | WHERE tenant_id explícito |
+| VQ015 | no os.environ en auth paths | agentos/ api/ memory/ = ZERO | SecretManager only |
 
 ### Mantenimiento del gate
 
@@ -244,11 +257,12 @@ anti-lobotomización post-compactación.*
 
 ## DECISIONES Fase 1 (2026-08-11)
 - D-F1-01: Pin Agno unificado a 2.8.7 (0 breaking changes verificado)
-- D-F1-02: S5 = S5a (Agno native + Casbin) + S5b (Keycloak) AMBOS en Fase 1
-- D-F1-03: LICENSE Apache 2.0 creado
+- D-F1-02: S5 = S5a (Agno native + Casbin) + S5b (Keycloak) AMBOS en Fase 1- D-F1-03: LICENSE Apache 2.0 creado
 - D-F1-04: SPEC_26 (A2A) y SPEC_14 (Model Resilience) cerradas
 - D-F1-05: NO RLS — filtros explícitos WHERE tenant_id
 - D-F1-06: PostgreSQL + pgvector + JSONB (NO Qdrant separado)
 - D-F1-07: Infra: Google Cloud Run + Supabase
 - D-F1-08: Gotcha Agno 2.8.7 `update_user_memory`: NO combinar `enable_agentic_memory: true` con `learning.enabled: true` (LearningMachine con store `user_memory`). Ambos registran un tool llamado `update_user_memory`; el parser conserva el primero y DROPEA silenciosamente el del learning store (agno/agent/agent.py). yaml-agno FAIL-FAST en config-build: `MemoryConfig.model_validate()` lo rechaza (validación en `memory_config.py`). Elegir UNA vía de memoria por config.
 - D-F1-09: SPEC_04 (memoria) cerrada — leaf `memory-identity-leaf` (resolve_user_id + MemoryConfig + gotcha `update_user_memory` validado)
+- D-F1-10 (2026-08-18): **R1 NO estaba resuelto — reproducido en Agno 2.8.7 instalado**: `AuthorizationConfig` acepta exactamente 7 campos (`verification_keys, jwks_file, algorithm, verify_audience, audience, admin_scope, user_isolation`); `basic_auth` y keys desconocidas de `config` se DROPEAN silenciosamente (pydantic extra=ignore). `AuthorizationAdapter.build()` hacía `kwargs.update()` ciego → no-op/fail-open declarativo vivo. **Fix = S5a.0 (prerrequisito de S5a)**: whitelist explícito de los 7 campos + fail-fast `AuthorizationBuildError` en keys desconocidas/basic_auth + tests de contrato que asierten el CONTENIDO del AuthorizationConfig construido. Ver VQ011.
+- D-F1-11 (2026-08-18): **Trigger T-05 ACTIVADO por C0018 (Hernán Sánchez, cliente externo real)** → confirma D-F1-02 (S5a+S5b ambos Fase 1). Gate L-03 (0 fugas cross-tenant, 2+ tenants misma instancia) es BLOQUEANTE antes de procesar datos reales del cliente. S5b (Keycloak) deja de ser condicional.
