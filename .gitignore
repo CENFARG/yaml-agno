@@ -78,3 +78,7 @@ logs/
 *.whl
 src/*.egg-info/
 src/yaml_agno.egg-info/
+
+# Token cost reports (local metric artifacts)
+*.tokscale.json
+tokscale.json
