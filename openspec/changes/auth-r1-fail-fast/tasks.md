@@ -28,12 +28,12 @@ Chain strategy: pending
 
 ## Phase 1 — Schema + error docs (no behavior change)
 
-- [ ] 1.1 `src/yaml_agno/models/config/agentos_config.py`: extend
+- [x] 1.1 `src/yaml_agno/models/config/agentos_config.py`: extend
   `AuthorizationSettings.basic_auth` (line 53) Field `description` + class docstring
   to mark it UNSUPPORTED in agno 2.8.7 with pointer to
   `BasicAuthMiddleware` (SPEC_19 §1.2, S5a.2). NO `DeprecationWarning`, NO removal.
   **Spec**: Req 7. Commit: `docs(agentos): mark basic_auth UNSUPPORTED (S5a.2)`.
-- [ ] 1.2 `src/yaml_agno/agentos/errors.py`: extend `AuthorizationBuildError` docstring
+- [x] 1.2 `src/yaml_agno/agentos/errors.py`: extend `AuthorizationBuildError` docstring
   to cover whitelist rejections (unknown key, `basic_auth`, `user_isolation` override,
   unresolved secret) — no new class. **Spec**: Reqs 1-5. Same commit as 1.1.
 

@@ -43,14 +43,26 @@ class AuthorizationSettings(BaseModel):
     Fields:
         enabled: When True, AgentOS enforces RBAC authorization on all routes.
         config: Opaque auth configuration dict (provider-specific).
-        basic_auth: Optional basic auth credentials ``{username: password}``.
+        basic_auth: UNSUPPORTED in agno 2.8.7 — ``AuthorizationConfig`` has no
+            basic-auth sink, so ``build()`` rejects this field (fail-fast,
+            VQ011). Parse-only (never dropped at the schema boundary); removal
+            lands in S5a.2 with the dev-only ``BasicAuthMiddleware`` (SPEC_19
+            §1.2) as the future sink.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(default=False, description="Enable RBAC authorization.")
     config: dict[str, Any] | None = Field(default=None, description="Provider-specific auth config.")
-    basic_auth: dict[str, str] | None = Field(default=None, description="Basic auth credentials.")
+    basic_auth: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "UNSUPPORTED in agno 2.8.7: AuthorizationConfig has no basic-auth "
+            "sink, so the authorization build rejects this field (fail-fast, "
+            "VQ011). Kept parseable until S5a.2 removes it; the future sink is "
+            "BasicAuthMiddleware (SPEC_19 §1.2)."
+        ),
+    )
 
 
 class MCPServerSettings(BaseModel):
