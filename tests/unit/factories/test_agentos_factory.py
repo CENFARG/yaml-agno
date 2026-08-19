@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 from agno.os import AgentOS
 
+from yaml_agno.agentos.authorization_adapter import AuthorizationBuildError
 from yaml_agno.factories.agentos_factory import AgentOSFactory
 from yaml_agno.models.config.agentos_config import (
     AgentOSConfig,
@@ -796,36 +797,69 @@ class TestAuthorizationAdapterIntegration:
             agents=["researcher"],
             authorization=AuthorizationSettings(
                 enabled=True,
-                config={"jwt_secret_ref": "${SECRET:JWT_SECRET}"},
+                config={
+                    "algorithm": "HS256",
+                    "verification_keys": ["${SECRET:JWT_SECRET}"],
+                },
             ),
         )
         factory.build(config)
 
         assert captured["authorization"] is True
-        assert captured["authorization_config"] is not None
+        auth_config = captured["authorization_config"]
+        assert auth_config.verification_keys == ["resolved-secret"]
+        assert auth_config.algorithm == "HS256"
         sm.assert_called_once_with("JWT_SECRET")
 
-    def test_factory_without_auth_adapter_still_builds(
-        self,
-        mock_agent_registry,
-        mock_team_registry,
-        mock_workflow_registry,
-        mock_knowledge_registry,
-        mock_interface_registry,
-        mock_db_manager,
-        mocker,
-    ) -> None:
-        """Without AuthorizationAdapter, factory falls back to legacy build."""
-        factory = AgentOSFactory(
-            agent_registry=mock_agent_registry,
-            team_registry=mock_team_registry,
-            workflow_registry=mock_workflow_registry,
-            knowledge_registry=mock_knowledge_registry,
-            interface_registry=mock_interface_registry,
-            db_manager=mock_db_manager,
-            # authorization_adapter=None (default)
+    def test_legacy_rejects_unknown_key(self, factory) -> None:
+        """Legacy path (no adapter) rejects an unknown config key identically."""
+        config = AgentOSConfig(
+            name="legacy-os",
+            agents=["researcher"],
+            authorization=AuthorizationSettings(
+                enabled=True,
+                config={"foo": 1},
+            ),
         )
 
+        with pytest.raises(AuthorizationBuildError, match="foo"):
+            factory.build(config)
+
+    def test_legacy_rejects_basic_auth(self, factory) -> None:
+        """Legacy path rejects basic_auth (no sink in agno 2.8.7)."""
+        config = AgentOSConfig(
+            name="legacy-os",
+            agents=["researcher"],
+            authorization=AuthorizationSettings(
+                enabled=True,
+                basic_auth={"admin": "s3cr3t-pw"},
+            ),
+        )
+
+        with pytest.raises(AuthorizationBuildError) as exc_info:
+            factory.build(config)
+
+        assert "BasicAuthMiddleware" in str(exc_info.value)
+
+    def test_legacy_unresolved_secret_raises(self, factory) -> None:
+        """Legacy path raises on residual ${SECRET:...} (never forwards literal)."""
+        config = AgentOSConfig(
+            name="legacy-os",
+            agents=["researcher"],
+            authorization=AuthorizationSettings(
+                enabled=True,
+                config={
+                    "algorithm": "HS256",
+                    "verification_keys": ["${SECRET:JWT_SIGNING_KEY}"],
+                },
+            ),
+        )
+
+        with pytest.raises(AuthorizationBuildError, match="JWT_SIGNING_KEY"):
+            factory.build(config)
+
+    def test_legacy_builds_valid_config_with_invariant(self, factory, mocker) -> None:
+        """Legacy path builds a valid config asserting CONTENT (user_isolation)."""
         captured: dict = {}
 
         def _fake_init(self, **kwargs):
@@ -834,17 +868,22 @@ class TestAuthorizationAdapterIntegration:
         mocker.patch.object(AgentOS, "__init__", _fake_init)
 
         config = AgentOSConfig(
-            name="no-adapter-os",
+            name="legacy-os",
             agents=["researcher"],
             authorization=AuthorizationSettings(
                 enabled=True,
-                basic_auth={"username": "admin", "password": "plain"},
+                config={
+                    "algorithm": "HS256",
+                    "verification_keys": ["vk-1"],
+                },
             ),
         )
         factory.build(config)
 
         assert captured["authorization"] is True
-        assert captured["authorization_config"] is not None
+        auth_config = captured["authorization_config"]
+        assert auth_config.user_isolation is True
+        assert auth_config.algorithm == "HS256"
 
     def test_auth_adapter_disabled_auth_skips(self, factory, mocker) -> None:
         """When authorization is disabled, neither adapter nor legacy builds."""

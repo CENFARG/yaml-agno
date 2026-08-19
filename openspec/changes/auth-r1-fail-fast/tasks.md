@@ -75,7 +75,7 @@ Chain strategy: pending
 
 ## Phase 4 — RED: legacy-path factory tests
 
-- [ ] 4.1 Update `tests/unit/factories/test_agentos_factory.py` tests at :799 and :841:
+- [x] 4.1 Update `tests/unit/factories/test_agentos_factory.py` tests at :799 and :841:
   legacy path (no adapter injected) rejects unknown key / `basic_auth` / unresolved
   `${SECRET:...}` literal (naming the key), and builds valid config with
   `user_isolation is True`. Run → RED. **Spec**: Req 5.
