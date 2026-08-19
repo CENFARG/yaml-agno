@@ -11,6 +11,9 @@ which does NOT exist yet (RED phase). They cover the SPEC_12 §2.2 scenarios:
     6. to_agno_kwargs includes explicit False booleans
     7. Default values via default_factory
     8. Extra fields forbidden via ConfigDict(extra="forbid")
+    9. AuthorizationSettings.basic_auth stays parseable; schema marks it
+       UNSUPPORTED with a pointer to S5a.2 BasicAuthMiddleware; parsing emits
+       no DeprecationWarning (agentos-authorization-build Req 7)
 """
 
 from __future__ import annotations
@@ -188,3 +191,41 @@ class TestAgentOSConfigExtraForbidden:
         with pytest.raises(ValidationError) as exc:
             AgentOSConfig(name="bad", agents=["a"], unknown_field=42)
         assert "unknown_field" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# 9. AuthorizationSettings.basic_auth — UNSUPPORTED but still parseable (Req 7)
+# ---------------------------------------------------------------------------
+
+class TestAuthorizationSettingsBasicAuth:
+    """Req 7: basic_auth stays parseable; schema marks it UNSUPPORTED (S5a.2)."""
+
+    def test_basic_auth_still_parses(self) -> None:
+        """A settings dict with basic_auth validates and keeps the value."""
+        settings = AuthorizationSettings.model_validate(
+            {"enabled": True, "basic_auth": {"admin": "s3cr3t-pw"}}
+        )
+        assert settings.enabled is True
+        assert settings.basic_auth == {"admin": "s3cr3t-pw"}
+
+    def test_basic_auth_field_description_marks_unsupported(self) -> None:
+        """The field description marks UNSUPPORTED and points at the future sink."""
+        description = AuthorizationSettings.model_fields["basic_auth"].description
+        assert description is not None
+        assert "UNSUPPORTED" in description
+        assert "BasicAuthMiddleware" in description
+
+    def test_no_deprecation_warning_at_parse(self) -> None:
+        """Parsing with basic_auth emits no DeprecationWarning (contract is build-time)."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            AuthorizationSettings.model_validate(
+                {"enabled": True, "basic_auth": {"admin": "s3cr3t-pw"}}
+            )
+
+        deprecations = [
+            w for w in caught if issubclass(w.category, DeprecationWarning)
+        ]
+        assert deprecations == []

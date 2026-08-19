@@ -364,6 +364,26 @@ class TestSecretResolution:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Req 5 — API surface: shared mapping helper stays private
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestHelperStaysPrivate:
+    """Req 5: ``_map_authorization_config`` is private, never exported."""
+
+    def test_helper_stays_private(self) -> None:
+        """``__all__`` exports only adapter + error; the helper is not public."""
+        import yaml_agno.agentos.authorization_adapter as authorization_adapter
+
+        assert authorization_adapter.__all__ == [
+            "AuthorizationAdapter",
+            "AuthorizationBuildError",
+        ]
+        assert hasattr(authorization_adapter, "_map_authorization_config") is True
+        assert "_map_authorization_config" not in authorization_adapter.__all__
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Req 6 — Contract tests assert content (T007e rewrite)
 # ═══════════════════════════════════════════════════════════════════════════
 
