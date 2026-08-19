@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from agno.os import AgentOS
 from agno.os.config import AuthorizationConfig, MCPServerConfig
 
+from yaml_agno.agentos.authorization_adapter import _map_authorization_config
 from yaml_agno.agentos.interfaces import InterfaceRegistry, InterfaceSpec
 from yaml_agno.agentos.mcp_lifecycle import MCPServerLifecycle
 
@@ -514,14 +515,23 @@ class AgentOSFactory:
 
     @staticmethod
     def _build_authorization_config_legacy(config: AgentOSConfig) -> AuthorizationConfig:
-        """Legacy direct mapping (no secret resolution)."""
-        auth = config.authorization
-        auth_kwargs: dict[str, Any] = {}
-        if auth.basic_auth is not None:
-            auth_kwargs["basic_auth"] = auth.basic_auth
-        if auth.config is not None:
-            auth_kwargs["config"] = auth.config
-        return AuthorizationConfig(**auth_kwargs)
+        """Legacy direct mapping through the shared whitelist helper.
+
+        Delegates to ``authorization_adapter._map_authorization_config`` with
+        ``secret_manager=None``: the legacy path performs no secret
+        resolution, so the SAME rejections as the adapter apply (unknown key,
+        ``basic_auth``, ``user_isolation`` override) and any residual
+        ``${SECRET:...}`` reference raises ``AuthorizationBuildError``
+        instead of being forwarded as a literal (another silent fail-open,
+        VQ011). Called only when ``config.authorization.enabled`` is True.
+        """
+        enabled, auth_config = _map_authorization_config(config.authorization)
+        if not enabled or auth_config is None:
+            raise ValueError(
+                "AgentOSFactory: legacy authorization path built a disabled/"
+                "empty config while authorization is enabled."
+            )
+        return auth_config
 
     @staticmethod
     def _build_mcp_config(config: AgentOSConfig) -> MCPServerConfig:

@@ -83,11 +83,11 @@ Chain strategy: pending
 
 ## Phase 5 — GREEN: legacy path parity
 
-- [ ] 5.1 Rewrite `AgentOSFactory._build_authorization_config_legacy`
+- [x] 5.1 Rewrite `AgentOSFactory._build_authorization_config_legacy`
   (`agentos_factory.py:515-524`) to build through the SAME shared
   `_map_authorization_config` helper; raise `AuthorizationBuildError` on any
   residual `${SECRET:...}` literal (never forward the raw string). **Spec**: Req 5.
-- [ ] 5.2 Run factory tests → all green. Commit:
+- [x] 5.2 Run factory tests → all green. Commit:
   `feat(factories): legacy auth path delegates to shared whitelist helper`.
 
 ## Phase 6 — Verification
