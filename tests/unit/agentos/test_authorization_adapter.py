@@ -15,7 +15,7 @@ Contract rules under test:
       ``None`` from the resolver → ``AuthorizationBuildError``.
 
 Strict TDD: RED → GREEN. Contract assertions check CONTENT (values), never
-mere existence (zero ``cfg is not None`` checks — Req 6).
+mere existence (Req 6).
 """
 
 from __future__ import annotations
