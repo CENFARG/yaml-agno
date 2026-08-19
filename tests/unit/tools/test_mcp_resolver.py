@@ -82,7 +82,7 @@ def test_resolve_single_is_synchronous() -> None:
 def test_resolve_single_stdio_does_not_call_connect() -> None:
     """resolve_single stdio must NOT call connect()."""
     resolver, _ = _make_resolver()
-    config = StdioMcpConfig(command="echo hi")
+    config = StdioMcpConfig(command="uvx hi")
     result = resolver.resolve_single(config)
     # MCPTools.connect is a coroutine; assert it was never invoked.
     assert not result.initialized
@@ -231,8 +231,8 @@ def test_resolve_multi_with_two_stdio_servers() -> None:
     resolver, _ = _make_resolver()
     config = McpMultiToolConfig(
         servers=[
-            StdioMcpConfig(command="echo hi"),
-            StdioMcpConfig(command="echo bye"),
+            StdioMcpConfig(command="uvx hi"),
+            StdioMcpConfig(command="uvx bye"),
         ],
         allow_partial_failure=True,
     )
@@ -240,7 +240,7 @@ def test_resolve_multi_with_two_stdio_servers() -> None:
         warnings.simplefilter("ignore", DeprecationWarning)
         result = resolver.resolve_multi(config)
     assert isinstance(result, MultiMCPTools)
-    assert result.commands == ["echo hi", "echo bye"]
+    assert result.commands == ["uvx hi", "uvx bye"]
     assert result.allow_partial_failure is True
     assert not result.initialized
 
@@ -249,7 +249,7 @@ def test_resolve_multi_with_two_stdio_servers() -> None:
 def test_resolve_multi_does_not_call_connect() -> None:
     """resolve_multi must NOT call connect()."""
     resolver, _ = _make_resolver()
-    config = McpMultiToolConfig(servers=[StdioMcpConfig(command="echo hi")])
+    config = McpMultiToolConfig(servers=[StdioMcpConfig(command="uvx hi")])
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         result = resolver.resolve_multi(config)
@@ -267,7 +267,7 @@ def test_resolve_multi_mixed_servers_populates_commands_and_params() -> None:
     resolver, _ = _make_resolver()
     config = McpMultiToolConfig(
         servers=[
-            StdioMcpConfig(command="echo hi"),
+            StdioMcpConfig(command="uvx hi"),
             HttpMcpConfig(
                 transport="streamable-http",
                 url="https://docs.agno.com/mcp",
@@ -278,7 +278,7 @@ def test_resolve_multi_mixed_servers_populates_commands_and_params() -> None:
         warnings.simplefilter("ignore", DeprecationWarning)
         result = resolver.resolve_multi(config)
     assert isinstance(result, MultiMCPTools)
-    assert "echo hi" in (result.commands or [])
+    assert "uvx hi" in (result.commands or [])
     assert result.urls == ["https://docs.agno.com/mcp"]
     # server_params_list contains BOTH the stdio-derived params AND the http params.
     assert result.server_params_list is not None
@@ -295,7 +295,7 @@ def test_resolve_multi_mixed_servers_populates_commands_and_params() -> None:
 def test_resolve_multi_emits_deprecation_warning() -> None:
     """MultiMCPTools construction emits DeprecationWarning; resolver does NOT suppress it."""
     resolver, _ = _make_resolver()
-    config = McpMultiToolConfig(servers=[StdioMcpConfig(command="echo hi")])
+    config = McpMultiToolConfig(servers=[StdioMcpConfig(command="uvx hi")])
     with pytest.warns(DeprecationWarning):
         resolver.resolve_multi(config)
 
@@ -305,7 +305,7 @@ def test_resolve_multi_forwards_refresh_connection() -> None:
     """resolve_multi forwards refresh_connection to MultiMCPTools."""
     resolver, _ = _make_resolver()
     config = McpMultiToolConfig(
-        servers=[StdioMcpConfig(command="echo hi")],
+        servers=[StdioMcpConfig(command="uvx hi")],
         refresh_connection=True,
     )
     with warnings.catch_warnings():
