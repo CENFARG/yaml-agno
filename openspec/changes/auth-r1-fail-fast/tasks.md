@@ -19,10 +19,10 @@ Chain strategy: pending
 
 ## Phase 0 — Baseline
 
-- [ ] 0.1 Confirm clean working tree; verify installed agno 2.8.7
+- [x] 0.1 Confirm clean working tree; verify installed agno 2.8.7
   `AuthorizationConfig` accepts exactly the 7 documented fields
   (`python -c "from agno.os.config import AuthorizationConfig; print(AuthorizationConfig.model_fields.keys())"`).
-- [ ] 0.2 Confirm both blind-forward sites exist:
+- [x] 0.2 Confirm both blind-forward sites exist:
   `authorization_adapter.py:77-81` (`kwargs.update` + `kwargs["basic_auth"]`) and
   `agentos_factory.py:515-524` (`auth_kwargs["basic_auth"]` + `["config"]`).
 
@@ -92,16 +92,16 @@ Chain strategy: pending
 
 ## Phase 6 — Verification
 
-- [ ] 6.1 VQ011 greps (zero matches expected):
+- [x] 6.1 VQ011 greps (zero matches expected):
   `grep -n "kwargs.update" src/yaml_agno/agentos/authorization_adapter.py`;
   `grep -nE "basic_auth\]" src/yaml_agno/agentos/authorization_adapter.py src/yaml_agno/factories/agentos_factory.py`.
-- [ ] 6.2 `python -m pytest tests/unit/agentos/ tests/unit/factories/test_agentos_factory.py -m unit`
+- [x] 6.2 `python -m pytest tests/unit/agentos/ tests/unit/factories/test_agentos_factory.py -m unit`
   → 0 failed. **Spec**: Req 6.
-- [ ] 6.3 `ruff check src/yaml_agno/agentos/ src/yaml_agno/factories/agentos_factory.py src/yaml_agno/models/config/agentos_config.py` → zero findings.
-- [ ] 6.4 `mypy src/yaml_agno/agentos src/yaml_agno/factories/agentos_factory.py` → zero errors.
-- [ ] 6.5 Confirm no existence-only assertions remain:
+- [x] 6.3 `ruff check src/yaml_agno/agentos/ src/yaml_agno/factories/agentos_factory.py src/yaml_agno/models/config/agentos_config.py` → zero findings.
+- [x] 6.4 `mypy src/yaml_agno/agentos src/yaml_agno/factories/agentos_factory.py` → zero errors.
+- [x] 6.5 Confirm no existence-only assertions remain:
   `grep -n "cfg is not None" tests/unit/agentos/test_authorization_adapter.py tests/unit/factories/test_agentos_factory.py` → no output. **Spec**: Req 6.
-- [ ] 6.6 Confirm `__all__` unchanged (helper stays private):
+- [x] 6.6 Confirm `__all__` unchanged (helper stays private):
   `grep -n "__all__" src/yaml_agno/agentos/authorization_adapter.py`. **Spec**: Req 5.
 
 ## Change Verification Command
