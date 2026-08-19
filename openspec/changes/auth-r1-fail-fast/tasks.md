@@ -62,15 +62,15 @@ Chain strategy: pending
 
 ## Phase 3 — GREEN: adapter whitelist + shared helper
 
-- [ ] 3.1 `src/yaml_agno/agentos/authorization_adapter.py`: add module-level
+- [x] 3.1 `src/yaml_agno/agentos/authorization_adapter.py`: add module-level
   `_SUPPORTED_FIELDS` (the 6 settable fields + documented 7-field list) and a
   `_`-prefixed private helper `_map_authorization_config(...)` (pure mapping +
   rejections) shared by adapter and legacy path; NOT in `__all__`. **Spec**: Reqs 1, 5.
-- [ ] 3.2 Rewrite `AuthorizationAdapter.build()`: whitelist check BEFORE secret
+- [x] 3.2 Rewrite `AuthorizationAdapter.build()`: whitelist check BEFORE secret
   resolution; reject unknown keys, `basic_auth`, and `user_isolation` override;
   construct with `user_isolation=True`; remove `kwargs.update` and `kwargs["basic_auth"]`.
   **Spec**: Reqs 1-4.
-- [ ] 3.3 Run adapter tests → all green. Commit:
+- [x] 3.3 Run adapter tests → all green. Commit:
   `feat(agentos): fail-fast AuthorizationConfig build via field whitelist (VQ011)`.
 
 ## Phase 4 — RED: legacy-path factory tests
