@@ -39,25 +39,25 @@ Chain strategy: pending
 
 ## Phase 2 — RED: adapter contract tests (content assertions)
 
-- [ ] 2.1 Rewrite `tests/unit/agentos/test_authorization_adapter.py` T007b (secret
+- [x] 2.1 Rewrite `tests/unit/agentos/test_authorization_adapter.py` T007b (secret
   resolution) using a REAL whitelisted key
   (`config={"verification_keys": ["${SECRET:JWT_SIGNING_KEY}"]}`), asserting
   `cfg.verification_keys == ["hush-hush"]` and `cfg.algorithm == "HS256"`.
   Must fail on unknown-key handling. **Spec**: Req 4.
-- [ ] 2.2 Rewrite T007d (`basic_auth`) into rejection tests: non-empty AND empty dict
+- [x] 2.2 Rewrite T007d (`basic_auth`) into rejection tests: non-empty AND empty dict
   with `enabled=True` → `AuthorizationBuildError` mentioning `basic_auth`,
   `agno 2.8.7`, `BasicAuthMiddleware`; `enabled=False` → `(False, None)`.
   **Spec**: Req 2.
-- [ ] 2.3 Rewrite T007e (non-secret passthrough) to assert CONTENT
+- [x] 2.3 Rewrite T007e (non-secret passthrough) to assert CONTENT
   (`cfg.user_isolation is True`, `cfg.algorithm == "HS256"`, `cfg.verify_audience is True`).
   **Spec**: Req 6.
-- [ ] 2.4 Add whitelist tests: unknown key `{"foo": 1}` → error listing the 7 fields;
+- [x] 2.4 Add whitelist tests: unknown key `{"foo": 1}` → error listing the 7 fields;
   whitelist error wins over secret resolution (secret_manager never invoked);
   `config={}` and `config=None` valid with `user_isolation is True`;
   disabled guard wins over unknown key. **Spec**: Req 1.
-- [ ] 2.5 Add `user_isolation` override tests (`True` and `False` both raise with the
+- [x] 2.5 Add `user_isolation` override tests (`True` and `False` both raise with the
   invariant message; absent key → `cfg.user_isolation is True`). **Spec**: Req 3.
-- [ ] 2.6 Run `python -m pytest tests/unit/agentos/test_authorization_adapter.py -m unit`
+- [x] 2.6 Run `python -m pytest tests/unit/agentos/test_authorization_adapter.py -m unit`
   → RED (expect failures). Commit: `test(agentos): RED contract tests for fail-fast auth build (T007b/d/e rewrite)`.
 
 ## Phase 3 — GREEN: adapter whitelist + shared helper
