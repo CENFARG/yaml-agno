@@ -10,12 +10,20 @@ Matrix cases in this file:
 - T3: Memory isolation between tenants (task 3.3)
 - T4: Cross-tenant run 404 native masking (task 3.4)
 - T5: Admin with agent_os:admin scope sees sessions across all tenants (task 3.5)
+- T6: Dev-header mode regression (task 3.6)
+- T7: Auth negatives (task 3.7)
 """
 
 from __future__ import annotations
 
+import datetime
+import secrets
+
 import pytest
 from fastapi.testclient import TestClient
+
+from tests.integration.api.conftest import USER_SCOPES
+from tests.integration.helpers import DevJwtIssuer
 
 pytestmark = [pytest.mark.integration]
 
@@ -341,3 +349,135 @@ class TestJwtIsolationL03:
         get_admin_b = l03_client.get(f"/sessions/{session_id_b}", headers=admin_headers)
         assert get_admin_b.status_code == 200
         assert get_admin_b.json()["session_id"] == session_id_b
+
+    def test_t6_dev_header_regression(
+        self,
+        l03_dev_client: TestClient,
+    ) -> None:
+        """T6: Dev-header mode (authorization=False, mount_tenant_context=True) path regression.
+
+        Proves that without JWT auth, requests carrying X-Tenant-Id header correctly resolve
+        composite user_id via resolve_user_id() (SPEC_06 §3.2 dev contract), write sessions
+        attributed to that composite, allow filtered reads by composite, and reject requests
+        lacking the X-Tenant-Id header with 401.
+        """
+        # 1. Execute run as tenant-a without JWT
+        run_resp_a = l03_dev_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Dev session for tenant A", "stream": "false"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert run_resp_a.status_code == 200, run_resp_a.text
+        run_data_a = run_resp_a.json()
+        session_id_a = run_data_a.get("session_id")
+        assert session_id_a is not None
+        assert run_data_a.get("user_id") == "tenant-a:alice"
+
+        # 2. Execute run as tenant-b without JWT
+        run_resp_b = l03_dev_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Dev session for tenant B", "stream": "false"},
+            headers={"X-Tenant-Id": "tenant-b"},
+        )
+        assert run_resp_b.status_code == 200, run_resp_b.text
+        run_data_b = run_resp_b.json()
+        session_id_b = run_data_b.get("session_id")
+        assert session_id_b is not None
+        assert session_id_b != session_id_a
+        assert run_data_b.get("user_id") == "tenant-b:alice"
+
+        # 3. Filter sessions for tenant-a:alice -> sees only session_id_a
+        sess_resp_a = l03_dev_client.get(
+            "/sessions?user_id=tenant-a:alice",
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert sess_resp_a.status_code == 200
+        sess_data_a = sess_resp_a.json()
+        assert sess_data_a["meta"]["total_count"] == 1
+        assert [s["session_id"] for s in sess_data_a["data"]] == [session_id_a]
+        assert [s["user_id"] for s in sess_data_a["data"]] == ["tenant-a:alice"]
+
+        # 4. Filter sessions for tenant-b:alice -> sees only session_id_b
+        sess_resp_b = l03_dev_client.get(
+            "/sessions?user_id=tenant-b:alice",
+            headers={"X-Tenant-Id": "tenant-b"},
+        )
+        assert sess_resp_b.status_code == 200
+        sess_data_b = sess_resp_b.json()
+        assert sess_data_b["meta"]["total_count"] == 1
+        assert [s["session_id"] for s in sess_data_b["data"]] == [session_id_b]
+        assert [s["user_id"] for s in sess_data_b["data"]] == ["tenant-b:alice"]
+
+        # 5. Direct session read with X-Tenant-Id header succeeds
+        get_resp_a = l03_dev_client.get(f"/sessions/{session_id_a}", headers={"X-Tenant-Id": "tenant-a"})
+        assert get_resp_a.status_code == 200
+        assert get_resp_a.json()["session_id"] == session_id_a
+        assert get_resp_a.json()["user_id"] == "tenant-a:alice"
+
+        # 6. Request without X-Tenant-Id header returns 401 (TenantContextMiddleware guard)
+        no_hdr_resp = l03_dev_client.get("/sessions")
+        assert no_hdr_resp.status_code == 401
+        assert "tenant_id is required" in no_hdr_resp.json().get("detail", "")
+
+    def test_t7_auth_negatives_401(
+        self,
+        l03_client: TestClient,
+        dev_jwt_issuer: DevJwtIssuer,
+    ) -> None:
+        """T7: Authentication negatives in JWT mode return 401 Unauthorized.
+
+        Validates three negative scenarios:
+        (a) Request without Authorization header -> 401
+        (b) Token signed with a different/untrusted key -> 401
+        (c) Token with expired timestamp (exp in the past) -> 401
+        """
+        # (a) Request without Authorization header
+        resp_no_auth = l03_client.get("/sessions")
+        assert resp_no_auth.status_code == 401
+        assert "authorization header missing" in resp_no_auth.json().get("detail", "").lower()
+
+        resp_run_no_auth = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "No auth run", "stream": "false"},
+        )
+        assert resp_run_no_auth.status_code == 401
+        assert "authorization header missing" in resp_run_no_auth.json().get("detail", "").lower()
+
+        # (b) Token signed with untrusted/wrong key
+        wrong_key = secrets.token_urlsafe(48)
+        wrong_issuer = DevJwtIssuer(wrong_key)
+        wrong_token = wrong_issuer.mint("tenant-a", "alice", scopes=USER_SCOPES)
+        wrong_headers = DevJwtIssuer.auth_header(wrong_token)
+
+        resp_wrong_key = l03_client.get("/sessions", headers=wrong_headers)
+        assert resp_wrong_key.status_code == 401
+        assert "signature verification failed" in resp_wrong_key.json().get("detail", "").lower()
+
+        resp_run_wrong_key = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Wrong key run", "stream": "false"},
+            headers=wrong_headers,
+        )
+        assert resp_run_wrong_key.status_code == 401
+        assert "signature verification failed" in resp_run_wrong_key.json().get("detail", "").lower()
+
+        # (c) Expired token (exp in the past)
+        expired_token = dev_jwt_issuer.mint(
+            "tenant-a",
+            "alice",
+            scopes=USER_SCOPES,
+            expires_delta=datetime.timedelta(seconds=-10),
+        )
+        expired_headers = dev_jwt_issuer.auth_header(expired_token)
+
+        resp_expired = l03_client.get("/sessions", headers=expired_headers)
+        assert resp_expired.status_code == 401
+        assert "token has expired" in resp_expired.json().get("detail", "").lower()
+
+        resp_run_expired = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Expired token run", "stream": "false"},
+            headers=expired_headers,
+        )
+        assert resp_run_expired.status_code == 401
+        assert "token has expired" in resp_run_expired.json().get("detail", "").lower()
