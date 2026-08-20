@@ -10,6 +10,8 @@ Matrix cases in this file:
 - T3: Memory isolation between tenants (task 3.3)
 - T4: Cross-tenant run 404 native masking (task 3.4)
 - T5: Admin with agent_os:admin scope sees sessions across all tenants (task 3.5)
+- T6: Dev-header mode regression (task 3.6)
+- T7: Auth negatives (task 3.7)
 """
 
 from __future__ import annotations
@@ -341,3 +343,72 @@ class TestJwtIsolationL03:
         get_admin_b = l03_client.get(f"/sessions/{session_id_b}", headers=admin_headers)
         assert get_admin_b.status_code == 200
         assert get_admin_b.json()["session_id"] == session_id_b
+
+    def test_t6_dev_header_regression(
+        self,
+        l03_dev_client: TestClient,
+    ) -> None:
+        """T6: Dev-header mode (authorization=False, mount_tenant_context=True) path regression.
+
+        Proves that without JWT auth, requests carrying X-Tenant-Id header correctly resolve
+        composite user_id via resolve_user_id() (SPEC_06 §3.2 dev contract), write sessions
+        attributed to that composite, allow filtered reads by composite, and reject requests
+        lacking the X-Tenant-Id header with 401.
+        """
+        # 1. Execute run as tenant-a without JWT
+        run_resp_a = l03_dev_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Dev session for tenant A", "stream": "false"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert run_resp_a.status_code == 200, run_resp_a.text
+        run_data_a = run_resp_a.json()
+        session_id_a = run_data_a.get("session_id")
+        assert session_id_a is not None
+        assert run_data_a.get("user_id") == "tenant-a:alice"
+
+        # 2. Execute run as tenant-b without JWT
+        run_resp_b = l03_dev_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Dev session for tenant B", "stream": "false"},
+            headers={"X-Tenant-Id": "tenant-b"},
+        )
+        assert run_resp_b.status_code == 200, run_resp_b.text
+        run_data_b = run_resp_b.json()
+        session_id_b = run_data_b.get("session_id")
+        assert session_id_b is not None
+        assert session_id_b != session_id_a
+        assert run_data_b.get("user_id") == "tenant-b:alice"
+
+        # 3. Filter sessions for tenant-a:alice -> sees only session_id_a
+        sess_resp_a = l03_dev_client.get(
+            "/sessions?user_id=tenant-a:alice",
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert sess_resp_a.status_code == 200
+        sess_data_a = sess_resp_a.json()
+        assert sess_data_a["meta"]["total_count"] == 1
+        assert [s["session_id"] for s in sess_data_a["data"]] == [session_id_a]
+        assert [s["user_id"] for s in sess_data_a["data"]] == ["tenant-a:alice"]
+
+        # 4. Filter sessions for tenant-b:alice -> sees only session_id_b
+        sess_resp_b = l03_dev_client.get(
+            "/sessions?user_id=tenant-b:alice",
+            headers={"X-Tenant-Id": "tenant-b"},
+        )
+        assert sess_resp_b.status_code == 200
+        sess_data_b = sess_resp_b.json()
+        assert sess_data_b["meta"]["total_count"] == 1
+        assert [s["session_id"] for s in sess_data_b["data"]] == [session_id_b]
+        assert [s["user_id"] for s in sess_data_b["data"]] == ["tenant-b:alice"]
+
+        # 5. Direct session read with X-Tenant-Id header succeeds
+        get_resp_a = l03_dev_client.get(f"/sessions/{session_id_a}", headers={"X-Tenant-Id": "tenant-a"})
+        assert get_resp_a.status_code == 200
+        assert get_resp_a.json()["session_id"] == session_id_a
+        assert get_resp_a.json()["user_id"] == "tenant-a:alice"
+
+        # 6. Request without X-Tenant-Id header returns 401 (TenantContextMiddleware guard)
+        no_hdr_resp = l03_dev_client.get("/sessions")
+        assert no_hdr_resp.status_code == 401
+        assert "tenant_id is required" in no_hdr_resp.json().get("detail", "")

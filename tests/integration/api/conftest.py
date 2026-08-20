@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from agno.agent import Agent
@@ -43,6 +44,8 @@ __all__ = [
     "l03_app",
     "l03_client",
     "l03_db",
+    "l03_dev_app",
+    "l03_dev_client",
 ]
 
 # Standard scopes for regular user tokens in L-03 tests
@@ -126,3 +129,25 @@ def admin_token(dev_jwt_issuer: DevJwtIssuer) -> str:
 def admin_headers(dev_jwt_issuer: DevJwtIssuer, admin_token: str) -> dict[str, str]:
     """Authorization headers for admin."""
     return dev_jwt_issuer.auth_header(admin_token)
+
+
+@pytest.fixture
+def l03_dev_app(
+    l03_agent: Agent,
+    l03_db: SqliteDb,
+) -> YamlAgentOS:
+    """Construct a YamlAgentOS instance in dev-header mode (no JWT)."""
+    return YamlAgentOS(
+        agents=[l03_agent],
+        authorization=False,
+        mount_tenant_context=True,
+        memory_cfg=SimpleNamespace(system_user_id="alice"),
+        db=l03_db,
+    )
+
+
+@pytest.fixture
+def l03_dev_client(l03_dev_app: YamlAgentOS) -> Iterator[TestClient]:
+    """Provide a TestClient with lifespan context for dev-header mode."""
+    with TestClient(l03_dev_app.get_app()) as client:
+        yield client
