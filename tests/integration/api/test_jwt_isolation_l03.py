@@ -16,8 +16,14 @@ Matrix cases in this file:
 
 from __future__ import annotations
 
+import datetime
+import secrets
+
 import pytest
 from fastapi.testclient import TestClient
+
+from tests.integration.api.conftest import USER_SCOPES
+from tests.integration.helpers import DevJwtIssuer
 
 pytestmark = [pytest.mark.integration]
 
@@ -412,3 +418,66 @@ class TestJwtIsolationL03:
         no_hdr_resp = l03_dev_client.get("/sessions")
         assert no_hdr_resp.status_code == 401
         assert "tenant_id is required" in no_hdr_resp.json().get("detail", "")
+
+    def test_t7_auth_negatives_401(
+        self,
+        l03_client: TestClient,
+        dev_jwt_issuer: DevJwtIssuer,
+    ) -> None:
+        """T7: Authentication negatives in JWT mode return 401 Unauthorized.
+
+        Validates three negative scenarios:
+        (a) Request without Authorization header -> 401
+        (b) Token signed with a different/untrusted key -> 401
+        (c) Token with expired timestamp (exp in the past) -> 401
+        """
+        # (a) Request without Authorization header
+        resp_no_auth = l03_client.get("/sessions")
+        assert resp_no_auth.status_code == 401
+        assert "authorization header missing" in resp_no_auth.json().get("detail", "").lower()
+
+        resp_run_no_auth = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "No auth run", "stream": "false"},
+        )
+        assert resp_run_no_auth.status_code == 401
+        assert "authorization header missing" in resp_run_no_auth.json().get("detail", "").lower()
+
+        # (b) Token signed with untrusted/wrong key
+        wrong_key = secrets.token_urlsafe(48)
+        wrong_issuer = DevJwtIssuer(wrong_key)
+        wrong_token = wrong_issuer.mint("tenant-a", "alice", scopes=USER_SCOPES)
+        wrong_headers = DevJwtIssuer.auth_header(wrong_token)
+
+        resp_wrong_key = l03_client.get("/sessions", headers=wrong_headers)
+        assert resp_wrong_key.status_code == 401
+        assert "signature verification failed" in resp_wrong_key.json().get("detail", "").lower()
+
+        resp_run_wrong_key = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Wrong key run", "stream": "false"},
+            headers=wrong_headers,
+        )
+        assert resp_run_wrong_key.status_code == 401
+        assert "signature verification failed" in resp_run_wrong_key.json().get("detail", "").lower()
+
+        # (c) Expired token (exp in the past)
+        expired_token = dev_jwt_issuer.mint(
+            "tenant-a",
+            "alice",
+            scopes=USER_SCOPES,
+            expires_delta=datetime.timedelta(seconds=-10),
+        )
+        expired_headers = dev_jwt_issuer.auth_header(expired_token)
+
+        resp_expired = l03_client.get("/sessions", headers=expired_headers)
+        assert resp_expired.status_code == 401
+        assert "token has expired" in resp_expired.json().get("detail", "").lower()
+
+        resp_run_expired = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Expired token run", "stream": "false"},
+            headers=expired_headers,
+        )
+        assert resp_run_expired.status_code == 401
+        assert "token has expired" in resp_run_expired.json().get("detail", "").lower()
