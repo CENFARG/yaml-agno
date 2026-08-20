@@ -1,6 +1,6 @@
-"""``YamlAgentOS`` — yaml-agno's ``AgentOS`` subclass (SPEC_06 slice A+B).
+"""``YamlAgentOS`` — yaml-agno's ``AgentOS`` subclass (SPEC_06 slice A+B, S5a.1).
 
-Inherits the full native Agno 2.6.22 router surface
+Inherits the full native Agno 2.8.7 router surface
 (``POST /agents/{agent_id}/runs``, ``GET /health``, ``GET /agents``, ...) from
 ``agno.os.AgentOS``. Slice A adds:
 
@@ -8,22 +8,17 @@ Inherits the full native Agno 2.6.22 router surface
 2. A ``get_app()`` override that calls ``super().get_app()`` and OPTIONALLY
    mounts the slice-A health extensions (``/health/liveness`` + ``/health/readiness``).
 
-Slice B adds:
+Slice B + S5a.1 add:
 
-3. ``TenantContextMiddleware`` (SPEC_06 §3.2) — registered in ``get_app()``
-   when ``mount_tenant_context=True`` (default). Sets ``request.state.user_id``
-   to the composite ``"{tenant_id}:{principal_id}"`` via ``resolve_user_id()``
-   (SPEC_04).
-
-Corrects the four SPEC_06 defects the exploration surfaced:
-
-- ``from agno.os import AgentOS`` (NOT ``agno.app``).
-- ``yaml_agno.factories.agent_factory.AgentFactory.build(cfg)`` (NOT a
-  module-level ``build_agents`` function; the directory is ``factories/``).
-- ``db=None`` + Agno's ``auto_provision_dbs=True`` (the SPEC_03 ``db.session``
-  module does not exist yet).
-- ``authorization=False`` slice-A default (SPEC_04's ``resolve_user_id`` is not
-  implemented yet; tests cannot mint real JWTs).
+3. Structural auth/tenant modes (JD-01):
+   - **JWT Mode (Production)**: ``authorization=True`` + ``authorization_config``
+     (``AuthorizationConfig(user_isolation=True, ...)``). Agno 2.8.7 native
+     ``AuthMiddleware`` handles JWT validation and user isolation.
+     ``TenantContextMiddleware`` is NOT mounted.
+   - **Dev Header Mode (Non-production)**: ``authorization=False`` (default) +
+     ``mount_tenant_context=True`` (default). Registers ``TenantContextMiddleware``
+     (SPEC_06 §3.2) to resolve composite ``"{tenant_id}:{principal_id}"`` from
+     ``X-Tenant-Id`` via ``resolve_user_id()`` (SPEC_04).
 
 @ai-directive: this class MUST NOT define its own ``/run``, ``/sessions``, or
 ``/agents`` config routes. All execution routes come from the inherited
@@ -42,6 +37,7 @@ from agno.agent.factory import AgentFactory as AgnoAgentFactory
 from agno.agent.protocol import AgentProtocol
 from agno.agent.remote import RemoteAgent
 from agno.os import AgentOS
+from agno.os.config import AuthorizationConfig
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -65,22 +61,28 @@ AgentEntry = Agent | RemoteAgent | AgentProtocol | AgnoAgentFactory
 
 
 class YamlAgentOS(AgentOS):
-    """yaml-agno's subclass of ``agno.os.AgentOS`` (SPEC_06 slice A+B).
+    """yaml-agno's subclass of ``agno.os.AgentOS`` (SPEC_06 slice A+B, S5a.1).
 
     Inherits every native router, middleware, and behaviour from ``AgentOS``.
     Slice A adds dual agent source resolution (pre-built list OR YAML config
-    path) and an optional pair of health extension routers. Slice B adds the
-    ``TenantContextMiddleware`` (SPEC_06 §3.2) for composite user_id resolution.
+    path) and an optional pair of health extension routers.
 
-    WARNING (slice A authorization default):
+    Slice B and S5a.1 establish two mutually exclusive authentication and tenant
+    context modes (JD-01 structural mutual exclusion):
 
-        Slice A defaults ``authorization=False`` so integration tests can
-        exercise ``get_app()`` without minting a real JWT and local dev can
-        boot ``uvicorn`` immediately. **This default is NOT for production.**
-        Once SPEC_04's ``resolve_user_id`` ships, production deployments MUST
-        pass ``authorization=True`` and
-        ``authorization_config=AuthorizationConfig(user_isolation=True)`` to
-        avoid the NULL-bucket footgun (SPEC_06 §3.1).
+    1. **JWT Mode (Production / L-03)**:
+       Pass ``authorization=True`` and ``authorization_config=AuthorizationConfig(...)``
+       with ``mount_tenant_context=False``. Production deployments MUST boot via
+       ``run_server`` (VQ010) or pass JWT authorization configuration with
+       ``user_isolation=True`` to enforce native multi-tenant scoping via Agno's
+       native ``AuthMiddleware`` and ``get_scoped_user_id()``. ``TenantContextMiddleware``
+       is NOT mounted in JWT mode.
+
+    2. **Dev Header Mode (Non-production)**:
+       Defaults to ``authorization=False`` and ``mount_tenant_context=True``.
+       Registers ``TenantContextMiddleware`` (SPEC_06 §3.2) to resolve composite
+       ``"{tenant_id}:{principal_id}"`` from the ``X-Tenant-Id`` header via
+       ``resolve_user_id()`` (SPEC_04). **This default is NOT for production.**
 
     @ai-directive: this class MUST NOT define its own ``/run``, ``/sessions``,
     or ``/agents`` config routes. All execution routes come from the inherited
@@ -93,6 +95,7 @@ class YamlAgentOS(AgentOS):
         config_path: str | None = None,
         agents: list[AgentEntry] | None = None,
         authorization: bool = False,
+        authorization_config: AuthorizationConfig | None = None,
         mount_health: bool = True,
         mount_tenant_context: bool = True,
         memory_cfg: Any = None,
@@ -115,7 +118,12 @@ class YamlAgentOS(AgentOS):
         Passing BOTH is ambiguous and raises ``ValueError``. Passing NEITHER is
         allowed by ``YamlAgentOS`` itself, but Agno's ``AgentOS.__init__`` then
         requires at least one of ``teams``, ``workflows``, ``knowledge``, or
-        ``db`` via ``**agentos_kwargs`` (verified Agno 2.6.22 behavior).
+        ``db`` via ``**agentos_kwargs`` (verified Agno 2.8.7 behavior).
+
+        **JD-01 Structural Mutual Exclusion**:
+        Passing ``authorization=True`` with ``mount_tenant_context=True`` raises
+        ``ValueError``. In JWT mode, Agno's native ``AuthMiddleware`` owns identity;
+        ``TenantContextMiddleware`` must not be mounted.
 
         **AgentOSFactory integration stub (SPEC_12 Slice 1)**:
 
@@ -132,15 +140,19 @@ class YamlAgentOS(AgentOS):
                 exclusive with ``agents``.
             agents: Optional list of pre-built ``agno.Agent`` (or any
                 ``AgentEntry``). Mutually exclusive with ``config_path``.
-            authorization: Forwarded to ``super().__init__``. Slice A defaults
-                to ``False`` for local dev + integration tests; production MUST
-                pass ``True`` (see WARNING in the class docstring).
+            authorization: Forwarded to ``super().__init__``. Defaults to ``False``
+                for local dev + integration tests; production MUST pass ``True``
+                (see WARNING in the class docstring).
+            authorization_config: Optional ``AuthorizationConfig`` instance forwarded
+                to ``super().__init__``. Configures verification keys, algorithm,
+                and user isolation for native JWT mode.
             mount_health: When ``True`` (default), mount ``/health/liveness`` and
                 ``/health/readiness`` inside ``get_app()``. Set to ``False`` for
                 unit tests that want the bare native surface.
             mount_tenant_context: When ``True`` (default), register the
                 ``TenantContextMiddleware`` (SPEC_06 §3.2) inside ``get_app()``.
-                Set to ``False`` for unit tests that don't supply ``memory_cfg``.
+                Mutually exclusive with ``authorization=True`` (JD-01). Set to
+                ``False`` for JWT mode or unit tests without ``memory_cfg``.
             memory_cfg: YAML ``memory:`` block (optional). Carries
                 ``system_user_id`` used by ``resolve_user_id`` when no human
                 principal is present on the request. Required when
@@ -154,7 +166,8 @@ class YamlAgentOS(AgentOS):
                 ``telemetry``, ``teams``, ``workflows``, ``db``...).
 
         Raises:
-            ValueError: If both ``agents`` and ``config_path`` are provided.
+            ValueError: If both ``agents`` and ``config_path`` are provided, or if
+                both ``authorization=True`` and ``mount_tenant_context=True`` are set (JD-01).
             pydantic.ValidationError: If a YAML entry fails ``AgentConfig``
                 validation.
             yaml.YAMLError: If the YAML document at ``config_path`` is
@@ -165,6 +178,14 @@ class YamlAgentOS(AgentOS):
             raise ValueError(
                 "YamlAgentOS received both 'agents' and 'config_path'; "
                 "the call is ambiguous. Provide exactly one agent source."
+            )
+
+        if authorization and mount_tenant_context:
+            raise ValueError(
+                "JD-01 mutual exclusion: 'authorization=True' (JWT mode) and "
+                "'mount_tenant_context=True' (dev-header middleware) cannot be used together. "
+                "When JWT authorization is active, TenantContextMiddleware must not be mounted "
+                "(set mount_tenant_context=False)."
             )
 
         resolved_agents = self._resolve_agents(agents=agents, config_path=config_path)
@@ -180,6 +201,7 @@ class YamlAgentOS(AgentOS):
         super().__init__(
             agents=resolved_agents,
             authorization=authorization,
+            authorization_config=authorization_config,
             **agentos_kwargs,
         )
 
@@ -231,8 +253,11 @@ class YamlAgentOS(AgentOS):
         app via ``app.include_router(...)`` and ``app.add_middleware(...)``.
 
         Extension middleware is registered LAST so it runs FIRST (outermost).
-        ``TenantContextMiddleware`` must set ``request.state.user_id`` BEFORE
-        native AgentOS handlers read it.
+        In dev mode (``authorization=False`` and ``mount_tenant_context=True``),
+        ``TenantContextMiddleware`` sets ``request.state.user_id`` BEFORE
+        native AgentOS handlers read it. In JWT mode (``authorization=True``),
+        Agno's native ``AuthMiddleware`` handles auth and user isolation, and
+        ``TenantContextMiddleware`` is not mounted (JD-01).
 
         @ai-directive: register extensions ONLY here, AFTER ``super().get_app()``.
         Do NOT override ``_add_built_in_routes`` or ``_add_router`` — those are
@@ -247,7 +272,7 @@ class YamlAgentOS(AgentOS):
             app.include_router(get_liveness_router())
             app.include_router(get_readiness_router())
 
-        if self._mount_tenant_context:
+        if self._mount_tenant_context and not self.authorization:
             app.add_middleware(TenantContextMiddleware, memory_cfg=self._memory_cfg)
 
             # A missing/empty tenant_id is an authentication failure (SPEC_06

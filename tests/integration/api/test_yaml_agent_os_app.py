@@ -110,7 +110,7 @@ class TestYamlAgentOSGetApp:
         from fastapi.testclient import TestClient
 
         agent = _build_test_agent()
-        app = YamlAgentOS(agents=[agent]).get_app()
+        app = YamlAgentOS(agents=[agent], mount_tenant_context=False).get_app()
         client = TestClient(app)
 
         response = client.get("/health/liveness")
@@ -123,7 +123,7 @@ class TestYamlAgentOSGetApp:
         from fastapi.testclient import TestClient
 
         agent = _build_test_agent()
-        app = YamlAgentOS(agents=[agent]).get_app()
+        app = YamlAgentOS(agents=[agent], mount_tenant_context=False).get_app()
         client: Any = TestClient(app)
 
         response = client.get("/health/readiness")
