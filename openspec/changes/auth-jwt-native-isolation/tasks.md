@@ -63,9 +63,9 @@ Conftest: `tests/integration/api/conftest.py` — `l03_app` fixture (`YamlAgentO
 
 - [x] 3.1 Scaffold `tests/integration/api/test_jwt_isolation_l03.py` + conftest; **T1** same `alice` under tenants A/B → disjoint session buckets. Commit: `test(auth): L-03 T1 disjoint session buckets (S5a.1)`
 - [x] 3.2 **T2** alice/B reads alice/A's session id → **404** (native masking). Commit: `test(auth): L-03 T2 cross-tenant session 404 (S5a.1)`
-- [ ] 3.3 **T3** memories isolated: B list/read of A's memory → empty/404. Commit: `test(auth): L-03 T3 memory isolation (S5a.1)`
-- [ ] 3.4 **T4** alice/B fetches alice/A's run in session → **404** (runs masked). Commit: `test(auth): L-03 T4 cross-tenant run 404 (S5a.1)`
-- [ ] 3.5 **T5** admin (`scopes=["agent_os:admin"]`) lists BOTH tenants' sessions. Commit: `test(auth): L-03 T5 admin sees all (S5a.1)`
+- [x] 3.3 **T3** memories isolated: B list/read of A's memory → empty/404. Commit: `test(auth): L-03 T3 memory isolation (S5a.1)`
+- [x] 3.4 **T4** alice/B fetches alice/A's run in session → **404** (runs masked). Commit: `test(auth): L-03 T4 cross-tenant run 404 (S5a.1)`
+- [x] 3.5 **T5** admin (`scopes=["agent_os:admin"]`) lists BOTH tenants' sessions. Commit: `test(auth): L-03 T5 admin sees all (S5a.1)`
 - [ ] 3.6 **T6** dev-header app (`authorization=False`, `mount_tenant_context=True`, separate instance) still green — `X-Tenant-Id` path regression. Commit: `test(auth): L-03 T6 dev-header path regression (S5a.1)`
 - [ ] 3.7 **T7** negatives: no token / invalid signature / expired token → **401**. Commit: `test(auth): L-03 T7 auth negatives 401 (S5a.1)`
 
