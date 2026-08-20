@@ -1,21 +1,21 @@
 ---
 Spec_ID: "SPEC_19"
 Title: "Security, Auth and API Surface - JWT, RBAC, Per-User Isolation and Endpoint Catalog"
-Version: "0.2.0-iter4"
+Version: "0.3.0-iter5"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
 Context_Tags: ["#JWT", "#RBAC", "#Scopes", "#PerUserIsolation", "#BasicAuth", "#CORS", "#SecurityHeaders", "#AgentOS", "#API"]
-Dependency_Hashes: ["SPEC_06", "SPEC_03", "SPEC_01"]
+Dependency_Hashes: ["SPEC_06", "SPEC_04", "SPEC_03", "SPEC_01"]
 Group: "G7-ControlPlane-API"
 Read_Order: 21
-Last_Updated: "2026-07-03"
-Revision_Note: "iter4 (deep review vs agno v2.6.18). CRITICAL fix: build_jwt_middleware now accepts and forwards the required `app` first positional arg to agno.os.middleware.jwt.JWTMiddleware (BaseHTTPMiddleware subclass, super().__init__(app)); iter3 omitted it and the constructor cannot be instantiated. Added audience_claim passthrough. CRITICAL consistency fix: removed the yaml-agno UserIsolationEnforcer class (§4, TASK_008) — it duplicated NATIVE AgentOS user_isolation (JWTMiddleware(user_isolation=True) + agno.os.middleware.user_scope helpers get_scoped_user_id/resolve_db_and_scope). §4 now documents the native flow and the TenantContextMiddleware composite user_id contract. Clarified that JWT `sub` is resolved to composite {tenant_id}:{principal_id} by TenantContextMiddleware (SPEC_06) before isolation, and that BasicAuth (dev-only) sets a dev marker user_id that must NOT reach production composite-user stores. Added tenant dimension note to RbacConfig.users."
+Last_Updated: "2026-08-20"
+Revision_Note: "iter5 (S5a.1 - JWT-native auth + admin contract). Option C hybrid ratified in design.md: composite identity '{tenant_id}:{principal_id}' is MINTED directly into the JWT 'sub' claim at emission time via resolve_user_id() (SPEC_04 / SPEC_06 §3.1), with zero yaml-agno code in the JWT path. Supersedes build_jwt_middleware narrative with AuthorizationAdapter (S5a.0 whitelist, openspec/specs/agentos-authorization-build/spec.md) and Agno native build_jwt_middleware_kwargs (jwt.py:397). Documents AgentOS native AuthMiddleware mounting and get_scoped_user_id threading. Documents admin = native agent_os:admin scope short-circuiting get_scoped_user_id to None. Documents S5b Keycloak escape hatch via JWTMiddleware(user_id_claim=...) (jwt.py:547). Removes obsolete narrative of TenantContextMiddleware resolving sub->composite before isolation (TenantContextMiddleware is dev/no-JWT only per SPEC_06 §3.2, mutually exclusive via JD-01). Updated sequence diagram, config models, BDD scenarios, and TDD execution tasks."
 ---
 
 # SPEC_19_SECURITY_AUTH_API_SURFACE
 
-> **Propósito**: Especificar el modelo de autorización JWT con scopes jerárquicos, RBAC, aislamiento per-user, Basic Auth legacy, CORS, security headers, y el catálogo exhaustivo de endpoints del AgentOS API, todo mapeado desde YAML.
+> **Propósito**: Especificar el modelo de autorización JWT con scopes jerárquicos, RBAC, aislamiento per-user nativo de AgentOS, Basic Auth legacy, CORS, security headers, y el catálogo exhaustivo de endpoints del AgentOS API, todo mapeado desde YAML.
 
 ---
 
@@ -26,9 +26,9 @@ Existe una frontera deliberada entre SPEC_06 y SPEC_19. Ambos tocan API, pero en
 | Dimensión | SPEC_06 (API and AX) | SPEC_19 (este documento) |
 |-----------|----------------------|--------------------------|
 | **Alcance** | Contratos REST genéricos de FastAPI + AX function calling | JWT/scopes/isolation + catálogo exhaustivo de endpoints AgentOS |
-| **Endpoints cubiertos** | Thin layer sobre AgentOS (YamlAgentOS subclass; readiness/liveness, rate-limit, tenant middleware) — los `/run`, `/sessions`, config son nativos de AgentOS | Catálogo completo: agents, teams, workflows, sessions, memory, knowledge, metrics, evals, approvals, schedules, registry, components, a2a, agui, slack, whatsapp, traces, health |
+| **Endpoints cubiertos** | Thin layer sobre AgentOS (YamlAgentOS subclass; readiness/liveness, rate-limit, tenant middleware dev-only) — los `/run`, `/sessions`, config son nativos de AgentOS | Catálogo completo: agents, teams, workflows, sessions, memory, knowledge, metrics, evals, approvals, schedules, registry, components, a2a, agui, slack, whatsapp, traces, health |
 | **Rate Limiting** | Sí (definido aquí, §1.4) | Referencia SPEC_06 §4 RateLimitMiddleware (NO duplica) |
-| **Auth middleware** | No | Sí (JWTMiddleware, BasicAuth, ScopeEnforcer, RBACManager) |
+| **Auth middleware** | No | Sí (Agno native `AuthMiddleware` / `JWTMiddleware` configurado vía `AuthorizationConfig` construido por `AuthorizationAdapter`, `BasicAuthMiddleware` dev-only, `ScopeEnforcer`, `RBACManager`) |
 | **Health checks** | Liveness/readiness (aquí referencia) | Extiende con endpoints del AgentOS API surface |
 | **AX schemas** | Sí (JSON schemas function calling) | No |
 
@@ -42,7 +42,7 @@ SPEC_19 **extiende** SPEC_06: reutiliza el patrón FastAPI + el middleware de ra
 - `RateLimitMiddleware` (keyed on composite user_id; AgentOS has none): SPEC_06 §4.2.
 - Liveness/Readiness probes: SPEC_06 §4.1.
 - Run/session/config endpoints: NATIVE AgentOS (mounted via the `YamlAgentOS(AgentOS)` subclass `get_app()`; SPEC_06 §1–2). There is NO yaml-agno `AgentRunRequest`/`AgentRunResponse` DTO (removed; native wire contract is multipart/form-data with `{agent_id}`/`{team_id}`/`{workflow_id}`).
-- Per-user / per-tenant isolation: NATIVE AgentOS `user_isolation` (enabled by yaml-agno `TenantContextMiddleware` building a composite `user_id`; SPEC_06 §3). RBAC is owned by yaml-agno.
+- Per-user / per-tenant isolation: NATIVE AgentOS `user_isolation` habilitado por `AuthorizationConfig(user_isolation=True)` con composite `"{tenant_id}:{principal_id}"` emitido directamente en el claim `sub` del JWT en emisión vía `resolve_user_id()` (SPEC_04 §1.4 / SPEC_06 §3.1). En dev/no-JWT mode, `TenantContextMiddleware` establece el `user_id` composite a partir del header `X-Tenant-Id` (SPEC_06 §3.2). JD-01 hace a ambos modos mutuamente excluyentes.
 - Persistencia sessions/memoria (modelo filas con `user_id`): SPEC_03, SPEC_04.
 
 ---
@@ -51,12 +51,12 @@ SPEC_19 **extiende** SPEC_06: reutiliza el patrón FastAPI + el middleware de ra
 
 ### 1.1 Dos Modos de Seguridad
 
-AgentOS soporta dos modos. yaml-agno los mapea desde `security.auth_mode` en YAML.
+AgentOS soporta dos modos. yaml-agno los mapea desde `security.auth_mode` o `agent_os.authorization` en YAML.
 
 | Modo | Cuándo usar | Header | Config |
 |------|-------------|--------|--------|
-| **Basic Authentication** (`OS_SECURITY_KEY`) | Desarrollo, simple. **Deprecado** para prod. | `Authorization: Bearer <key>` | `OS_SECURITY_KEY` env var |
-| **Authorization (JWT + RBAC)** | Producción, multi-tenant, fine-grained. | `Authorization: Bearer <jwt>` | `authorization=True` + `AuthorizationConfig` |
+| **Basic Authentication** (`OS_SECURITY_KEY`) | Desarrollo, simple. **Deprecado** para prod. | `Authorization: Bearer <key>` | `OS_SECURITY_KEY` env var / `BasicAuthMiddleware` |
+| **Authorization (JWT + RBAC)** | Producción, multi-tenant, fine-grained. | `Authorization: Bearer <jwt>` | `authorization=True` + `AuthorizationConfig` (vía `AuthorizationAdapter`) |
 
 ### 1.2 Basic Authentication (Legacy, dev-only)
 
@@ -68,15 +68,13 @@ AgentOS soporta dos modos. yaml-agno los mapea desde `security.auth_mode` en YAM
 > literal and NEVER None). This marker is single-tenant by construction and
 > MUST NOT reach production composite-user stores (sessions/memory persisted
 > under it would be isolated only within a dev tenant). For multi-tenant prod,
-> use JWT (§1.3) where the `sub` is resolved to a composite by
-> TenantContextMiddleware (SPEC_06 §3).
+> use JWT (§1.3) where the composite `{tenant_id}:{principal_id}` is minted
+> directly at token issuance into the `sub` claim via `resolve_user_id()` (SPEC_04 / SPEC_06 §3.1).
 
 ```python
-# yaml-agno/src/security/basic_auth.py
+# yaml-agno/src/yaml_agno/security/basic_auth.py
 
-import os
 from fastapi import Request, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Dev-only marker. Single tenant; never persisted in prod composite-user stores.
 _DEV_BASIC_AUTH_USER_ID = "dev:basic-auth"
@@ -114,8 +112,7 @@ class BasicAuthMiddleware:
             )
         request.state.authenticated = True
         # Dev-only composite-shaped marker. Single tenant; NOT a bare principal
-        # and NOT None. TenantContextMiddleware (SPEC_06) still runs downstream
-        # but cannot derive a real tenant from Basic Auth — confirming dev-only.
+        # and NOT None.
         request.state.user_id = _DEV_BASIC_AUTH_USER_ID
         request.state.scopes = ["agent_os:admin"]   # basic auth = acceso total
 
@@ -126,122 +123,89 @@ class BasicAuthMiddleware:
         return header[7:]
 ```
 
-### 1.3 JWT Authorization (Recomendado)
+### 1.3 JWT Authorization (Recomendado — Nativo Agno + AuthorizationAdapter)
+
+> @ai-directive SSOT / BUILD ON TOP: yaml-agno NO reimplementa JWTMiddleware ni
+> define wrappers o shims de middleware para JWT.
+> Agno 2.8.7 ya provee `AuthMiddleware` / `JWTMiddleware` (con validación de firma,
+> JWKS, exp/aud, verificación de reserved principals y user_isolation) en
+> `agno.os.middleware.jwt` (`jwt.py:1039,1060`), junto con el helper
+> `build_jwt_middleware_kwargs` (`jwt.py:397`).
+> `AgentOS` monta `AuthMiddleware` automáticamente en `AgentOS.get_app()`
+> (`os/app.py:1366-1370`) cuando `authorization=True` y se pasa `authorization_config`.
+>
+> yaml-agno aporta **`AuthorizationAdapter`** (definido en
+> `yaml_agno.agentos.authorization_adapter`, S5a.0 whitelist,
+> `openspec/specs/agentos-authorization-build/spec.md`) para mapear de forma segura
+> `AuthorizationSettings` desde el YAML a `AuthorizationConfig` de Agno,
+> garantizando la whitelist de los 7 campos nativos (`verification_keys, jwks_file,
+> algorithm, verify_audience, audience, admin_scope, user_isolation`), rechazando
+> llaves desconocidas y `basic_auth`, e imponiendo el invariant inmutable
+> `user_isolation=True`.
 
 ```python
-# yaml-agno/src/security/jwt_config.py
-#
-# @ai-directive SSOT / BUILD ON TOP: yaml-agno NO reimplementa JWTMiddleware.
-# Agno ya provee JWTMiddleware (con validacion de firma, JWKS, exp/aud y
-# scope enforcement opcional) en `agno.os.middleware.jwt`, y lo re-exporta
-# en `agno.os.middleware`. yaml-agno IMPORTA y CONFIGURA ese middleware de Agno;
-# solo aporta su propia configuracion (verification_keys, scopes, etc.) y la
-# logica especifica de RBAC por endpoint + per-user-isolation (que SI son de
-# yaml-agno, no de Agno).
+# yaml-agno/src/yaml_agno/agentos/authorization_adapter.py
+"""AuthorizationAdapter: fail-fast adapter from YAML settings to Agno's AuthorizationConfig."""
 
-from typing import Iterable, List, Optional
-from agno.os.middleware.jwt import JWTMiddleware, TokenSource
-
-# Rutas excluidas por defecto (no requieren JWT/RBAC).
-# DEFAULT_EXCLUDED_ROUTES se pasa como `excluded_route_paths` al configurar el
-# JWTMiddleware de Agno.
-DEFAULT_EXCLUDED_ROUTES = [
-    "/",
-    "/health",
-    "/liveness",
-    "/readiness",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
-    "/docs/oauth2-redirect",
-]
+from typing import Any
+from agno.os.config import AuthorizationConfig  # exactly 7 fields in Agno 2.8.7
+from core_infrastructure import SecretManager
 
 
-def build_jwt_middleware(
-    app,
-    verification_keys: Optional[List[str]] = None,
-    jwks_file: Optional[str] = None,
-    algorithm: str = "RS256",
-    validate: bool = True,
-    authorization: bool = False,
-    token_source: TokenSource = TokenSource.HEADER,
-    token_header_key: str = "Authorization",
-    cookie_name: str = "access_token",
-    scopes_claim: str = "scopes",
-    user_id_claim: str = "sub",
-    session_id_claim: str = "session_id",
-    audience_claim: str = "aud",
-    audience: Optional[str | Iterable[str]] = None,
-    verify_audience: bool = False,
-    scope_mappings: Optional[dict[str, List[str]]] = None,
-    excluded_route_paths: Optional[List[str]] = None,
-    admin_scope: str = "agent_os:admin",
-    user_isolation: bool = False,
-) -> JWTMiddleware:
+class AuthorizationBuildError(ValueError):
+    """Raised when authorization configuration cannot be built or validated."""
+
+
+class AuthorizationAdapter:
+    """Builds Agno's AuthorizationConfig from declarative AuthorizationSettings.
+
+    Applies strict field whitelist validation (rejects unknown keys and basic_auth),
+    resolves ${SECRET:...} references against SecretManager, and enforces
+    user_isolation=True as an immutable security invariant.
     """
-    Construye el JWTMiddleware nativo de Agno con la configuracion de yaml-agno.
 
-    Args:
-        app: The FastAPI app instance. REQUIRED first positional arg —
-            ``agno.os.middleware.jwt.JWTMiddleware`` subclasses
-            ``BaseHTTPMiddleware`` whose ``__init__`` calls
-            ``super().__init__(app)``. Omitting it raises ``TypeError``.
+    def __init__(self, secrets: SecretManager | None = None) -> None:
+        self._secrets = secrets
 
-    Lo que aporta Agno (no se reimplementa):
-      - Extraccion de token (header/cookie/both)
-      - Verificacion de firma contra verification_keys o JWKS (por kid)
-      - Verificacion de exp y aud
-      - Extraccion de scopes/user_id/session_id en request.state
-      - Scope enforcement basico por ruta (authorization=True)
-      - Per-user isolation NATIVA (user_isolation=True wraps DB per-request)
+    def build(self, settings: Any) -> tuple[bool, AuthorizationConfig | None]:
+        """Build the (authorization_enabled, authorization_config) pair.
 
-    Lo que aporta yaml-agno (propio, sobre el middleware de Agno):
-      - Configuracion declarada en el YAML (verification_keys, audience, scopes)
-      - DEFAULT_EXCLUDED_ROUTES del catalogo de endpoints de yaml-agno
-      - scope_mappings propios + fallback a EndpointRegistry.required_scopes
-      - RBAC por endpoint (ScopeEnforcer + EndpointRegistry, §2.3/§6.3)
-    """
-    return JWTMiddleware(
-        app,
-        verification_keys=verification_keys,
-        jwks_file=jwks_file,
-        algorithm=algorithm,
-        validate=validate,
-        authorization=authorization,
-        token_source=token_source,
-        token_header_key=token_header_key,
-        cookie_name=cookie_name,
-        scopes_claim=scopes_claim,
-        user_id_claim=user_id_claim,
-        session_id_claim=session_id_claim,
-        audience_claim=audience_claim,
-        audience=audience,
-        verify_audience=verify_audience,
-        scope_mappings=scope_mappings,
-        excluded_route_paths=excluded_route_paths or DEFAULT_EXCLUDED_ROUTES,
-        admin_scope=admin_scope,
-        user_isolation=user_isolation,
-    )
+        Returns:
+            (False, None) if settings.enabled is False.
+            (True, AuthorizationConfig(...)) with user_isolation=True if enabled.
+        """
+        ...
 ```
 
-> **NOTA SSOT**: El flujo de autenticacion JWT (extraccion, verificacion de
-> firma/JWKS, exp/aud, poblado de `request.state`) es responsabilidad del
-> `JWTMiddleware` de Agno. yaml-agno no contiene su propia version de ese
-> flujo. La funcion `build_jwt_middleware` solo traduce la configuracion del
-> YAML de yaml-agno al constructor del middleware de Agno y conecta el RBAC
-> propio (ver §1.4 / EndpointRegistry).
+#### Integración nativa con Agno 2.8.7 (`build_jwt_middleware_kwargs`)
+
+Agno 2.8.7 traduce internamente `AuthorizationConfig` a los parámetros de `JWTMiddleware` mediante su helper nativo `build_jwt_middleware_kwargs(config)` (`jwt.py:397`):
 
 ```python
-# yaml-agno/src/security/rbac.py
+# Agno native helper reference (agno.os.middleware.jwt:397):
+# def build_jwt_middleware_kwargs(config: AuthorizationConfig) -> dict[str, Any]:
+#     return {
+#         "verification_keys": config.verification_keys,
+#         "jwks_file": config.jwks_file,
+#         "algorithm": config.algorithm,
+#         "verify_audience": config.verify_audience,
+#         "audience": config.audience,
+#         "admin_scope": config.admin_scope or "agent_os:admin",
+#         "user_isolation": config.user_isolation,
+#     }
+```
+
+#### Escape Hatch para Keycloak / IdPs Externos (S5b)
+
+Por defecto, Agno 2.8.7 extrae la identidad del usuario del claim `sub` (donde el token issuer emite el composite `{tenant_id}:{principal_id}`). Si en S5b un IdP externo (como Keycloak) emite la identidad en un claim personalizado (por ejemplo `composite_sub` o `preferred_username`) y no se utiliza un token mapper en el IdP, el parámetro nativo `user_id_claim` de Agno (`JWTMiddleware(user_id_claim=...)`, `jwt.py:547`) actúa como escape hatch configurable sin modificar código de yaml-agno.
+
+```python
+# yaml-agno/src/yaml_agno/security/rbac.py
 #
-# RBAC y per-user-isolation: logica PROPIA de yaml-agno (no provista por Agno).
-# Se ejecuta a partir de request.state (poblado por el JWTMiddleware de Agno):
+# RBAC y Scope enforcement por endpoint:
+# Se ejecuta a partir de request.state (poblado por AuthMiddleware de Agno):
 #   - EndpointRegistry.required_scopes(method, path) -> scopes requeridos por ruta
-#   - Per-user isolation: para no-admins, filtra recursos por user_id/tenant_id.
-#
-# El scope enforcement por ruta puede delegarse al JWTMiddleware de Agno
-# (authorization=True) usando estos scope_mappings; el isolation por usuario
-# es responsabilidad de la capa de acceso a datos de yaml-agno (Core Infra).
+#   - Per-user isolation: para no-admins, Agno get_scoped_user_id() filtra recursos por composite user_id.
 
 from typing import List
 
@@ -255,9 +219,8 @@ def required_scopes_for(
     pattern = f"{method} {path}"
     if scope_mappings and pattern in scope_mappings:
         return scope_mappings[pattern]
-    # EndpointRegistry: catalogo de endpoints de yaml-agno (no de Agno).
-    from src.security.endpoints import EndpointRegistry
-    return EndpointRegistry.required_scopes(method, path)
+    from yaml_agno.api.endpoint_registry import EndpointRegistry
+    return EndpointRegistry.required_scopes(method, path) or []
 
 
 def has_any_scope(held: List[str], required: List[str]) -> bool:
@@ -291,24 +254,25 @@ def extract_accessible_resource_ids(scopes: List[str]) -> set[str]:
 | Atributo | Tipo | Descripción |
 |----------|------|-------------|
 | `authenticated` | `bool` | Si el usuario está autenticado |
-| `user_id` | `Optional[str]` | Composite `{tenant_id}:{principal_id}` (resolved by TenantContextMiddleware, SPEC_06, from the JWT `sub` + tenant context); NEVER a bare principal, NEVER None, NEVER "anonymous" |
+| `user_id` | `Optional[str]` | Composite `{tenant_id}:{principal_id}` (emitido en el `sub` del JWT en issuance vía `resolve_user_id()`, SPEC_04 / SPEC_06 §3.1, y estampado por `AuthMiddleware`; en dev mode estampado por `TenantContextMiddleware`); NEVER a bare principal, NEVER None, NEVER "anonymous" |
 | `session_id` | `Optional[str]` | Session ID del claim |
 | `scopes` | `List[str]` | Scopes del token |
 | `audience` | `Optional[str]` | Claim `aud` |
 | `token` | `str` | JWT raw |
-| `authorization_enabled` | `bool` | Si RBAC está activo |
-| `user_isolation_enabled` | `bool` | Si aislamiento está activo |
+| `authorization_enabled` | `bool` | Si RBAC/Auth está activo |
+| `user_isolation_enabled` | `bool` | Si aislamiento está activo (`user_isolation=True`) |
 | `accessible_resource_ids` | `Set[str]` | IDs de recurso accesibles (listings) |
-| `is_admin` | `bool` | Si tiene `admin_scope` |
+| `is_admin` | `bool` | Si tiene `admin_scope` (`agent_os:admin`) |
 
 ### 1.5 Respuestas de Error
 
 | Status | Causa |
 |--------|-------|
-| `401 Unauthorized` | Token ausente o inválido |
-| `401 Unauthorized` | Token expirado |
+| `401 Unauthorized` | Token ausente o inválido (firma, formato) |
+| `401 Unauthorized` | Token expirado (`exp` en el pasado) |
 | `401 Unauthorized` | Audience inválido (token no es para este AgentOS) |
 | `403 Forbidden` | Scopes insuficientes para la operación |
+| `404 Not Found` | Recurso perteneciente a otro tenant (masking nativo con `user_isolation=True`) |
 
 ---
 
@@ -323,7 +287,7 @@ Los scopes viven en el claim `scopes` del JWT. Son jerárquicos.
 | `resource:action` | `agents:read` | Acceso a todos los recursos de un tipo |
 | `resource:<id>:action` | `agents:my-agent:run` | Acceso a un recurso específico |
 | `resource:*:action` | `agents:*:read` | Wildcard (equivale a global) |
-| `agent_os:admin` | - | Acceso total a todos los endpoints |
+| `agent_os:admin` | - | Acceso total a todos los endpoints y bypass de isolation (short-circuit a `None` en `get_scoped_user_id`) |
 
 **Restricción**: el scoping per-recurso (`resource:<id>:action`) aplica **solo** a `agents`, `teams`, `workflows`. El resto (sessions, memories, knowledge, traces) usa scopes globales únicamente.
 
@@ -459,7 +423,7 @@ Sin estos, los scopes finos no tienen efecto porque el usuario no puede alcanzar
 ### 2.3 ScopeEnforcer
 
 ```python
-# yaml-agno/src/security/scope_enforcer.py
+# yaml-agno/src/yaml_agno/security/scope_enforcer.py
 
 from typing import List
 from fastapi import Request, HTTPException
@@ -467,7 +431,7 @@ from fastapi import Request, HTTPException
 class ScopeEnforcer:
     """
     Verifica scopes requeridos contra los scopes del request.state.
-    Soporta wildcard agents:*:action y admin bypass.
+    Soporta wildcard agents:*:action y admin bypass nativo.
     """
 
     def __init__(self, admin_scope: str = "agent_os:admin"):
@@ -521,7 +485,7 @@ Los roles son bundles de scopes asignados a usuarios. yaml-agno define los tres 
 ### 3.2 Mapeo Rol → Scopes
 
 ```python
-# yaml-agno/src/security/rbac.py
+# yaml-agno/src/yaml_agno/security/rbac.py
 
 from typing import Dict, List, Set
 from pydantic import BaseModel, Field
@@ -640,41 +604,31 @@ security:
 
 > @ai-directive BUILD ON TOP: Per-user data isolation is OWNED by AgentOS, NOT
 > reimplemented by yaml-agno. Verified in `agno/os/middleware/jwt.py` and
-> `agno/os/middleware/user_scope.py` (agno v2.6.18):
->   - `JWTMiddleware(user_isolation=True)` sets `request.state.user_isolation_enabled`.
->   - `agno.os.middleware.user_scope` provides the helpers every scoped endpoint
->     MUST call: `get_scoped_user_id(request)`, `resolve_db_and_scope(...)`,
+> `agno/os/middleware/user_scope.py` (agno 2.8.7):
+>   - `AuthorizationConfig(user_isolation=True)` activates `AuthMiddleware` and sets `request.state.user_isolation_enabled`.
+>   - `agno.os.middleware.user_scope` provides the native helpers every scoped endpoint
+>     calls: `get_scoped_user_id(request)`, `resolve_db_and_scope(...)`,
 >     `enforce_owner_on_entity(...)`.
-> yaml-agno does NOT define its own `UserIsolationEnforcer` (removed in iter4 —
-> it duplicated the native flow). The earlier `request.state.user_id` coercion
-> is performed by the native helpers, not by a yaml-agno class.
+> yaml-agno does NOT define its own `UserIsolationEnforcer` class. Zero yaml-agno code
+> exists in the JWT authentication or scoping path.
 
 ### 4.1 Concepto y flujo nativo
 
 La autorización controla **qué operaciones** puede hacer un caller. El
 aislamiento per-user controla **qué filas** puede ver y escribir. En yaml-agno
-se activa declarando `security.jwt.user_isolation: true` (§8.1), lo que
-`build_jwt_middleware` reenvía como `user_isolation=True` al `JWTMiddleware`
-nativo de Agno.
+`user_isolation=True` es un invariant inmutable impuesto por `AuthorizationAdapter` (S5a.0)
+y requerido al arrancar en producción vía `run_server` (VQ010).
 
-Flujo nativo (verified, `agno/os/middleware/user_scope.py`):
+Flujo nativo (verified, `agno/os/middleware/user_scope.py` y `agno/os/middleware/jwt.py`):
 
-1. `JWTMiddleware` extrae el claim `sub` (configurable vía `user_id_claim`) y
-   lo deja en `request.state.user_id`.
-2. **TenantContextMiddleware (SPEC_06 §3)** corre después y resuelve el
-   `user_id` al formato composite `{tenant_id}:{principal_id}` requerido por
-   SPEC_04 (resolve_user_id). El `sub` del JWT NO se usa bare como user_id de
-   persistencia — siempre el composite.
-3. Cuando `user_isolation=True`, cada endpoint user-scoped llama a
-   `get_scoped_user_id(request)` (devuelve el composite para no-admins, o
-   `None` para admins / cuando el flag está off) y a
-   `resolve_db_and_scope(...)` para threadear el `user_id` en cada DB read.
-4. Los writes pasan por `enforce_owner_on_entity(...)` que coacciona/valida
-   `user_id` al composite del caller (no-admin no puede atribuir filas a otro).
+1. **Composite en Token Emission**: El token issuer (dev helper en tests; Keycloak/IdP en S5b) emite la identidad composite `"{tenant_id}:{principal_id}"` directamente en el claim `sub` del JWT usando `resolve_user_id()` (SPEC_04 §1.4 / SPEC_06 §3.1; VQ012).
+2. **Validación y Estampado Nativo**: `AuthMiddleware` de Agno (`jwt.py:1039,1060`) valida la firma del token, verifica que `sub` no sea un principal reservado (`is_reserved_principal`, `jwt.py:1048-1050`), y estampa `request.state.user_id = sub`.
+3. **Ausencia de Middleware Intermedio**: `TenantContextMiddleware` NO se monta en el stack ASGI en modo JWT (JD-01 structural mutual exclusion).
+4. **Threading en Consultas**: Cuando `user_isolation=True`, cada endpoint user-scoped llama a `get_scoped_user_id(request)` (`user_scope.py:105-132`), el cual devuelve el composite `request.state.user_id` para no-admins, o `None` para admins (`scopes=["agent_os:admin"]`).
+5. **Aislamiento en DB**: Las consultas filtran `WHERE user_id = scoped_user_id`. Intentos de acceder a recursos de otro tenant devuelven 404 (masking nativo). Los writes ejecutan `enforce_owner_on_entity(...)` que coacciona `user_id` al composite del caller.
 
 ```python
-# Example of a yaml-agno endpoint using the NATIVE AgentOS helpers
-# (NOT a reimplemented enforcer):
+# Example of an Agno endpoint using the NATIVE AgentOS helpers:
 from agno.os.middleware.user_scope import get_scoped_user_id, resolve_db_and_scope
 
 @router.get("/sessions")
@@ -689,29 +643,28 @@ async def list_sessions(request: Request, db = Depends(...)):
 |-----------|------------------------------------------|
 | Reads (sessions, memory, traces) | `get_scoped_user_id` devuelve el composite del caller; filas de otros no se retornan |
 | Writes (sessions, memories, traces) | `enforce_owner_on_entity` coacciona el composite del caller; no se puede atribuir a otro |
+| Cross-tenant session/run fetch | Devuelve 404 Not Found (native masking) |
 | Cancel / resume / continue | Requiere `session_id` y `resolve_db_and_scope` verifica ownership del run |
 | WebSocket reconnect | Requiere `session_id` (y `workflow_id`) para no-admins |
 
 ### 4.3 Admin Bypass (native)
 
 `get_scoped_user_id` devuelve `None` cuando el caller tiene `admin_scope`
-(default `agent_os:admin`, configurable vía `JWTMiddleware(admin_scope=...)`).
-Con `None`, la query no se filtra por `user_id` y el admin ve todo.
-Customizable con `admin_scope="ops:admin"`.
+(default `agent_os:admin`, `jwt.py:736`, `user_scope.py:116-117`).
+Con `None`, la query no se filtra por `user_id` y el admin ve todas las sesiones y recursos
+de todos los tenants (comportamiento validado en L-03 T5).
 
 ### 4.4 Requisito de DB
 
 El aislamiento requiere una DB que registre `user_id` composite en filas.
-PostgreSQL recomendado para producción (ver SPEC_03). Sin `user_id` en filas,
-el aislamiento no tiene efecto.
+PostgreSQL recomendado para producción (ver SPEC_03); SQLite nativo auto-provisionado en tests. Sin `user_id` en filas, el aislamiento no tiene efecto.
 
 ### 4.5 Origen del composite user_id
 
 > @ai-directive: el `user_id` que el aislamiento native usa SIEMPRE proviene del
-> composite `{tenant_id}:{principal_id}`. El `sub` del JWT es el `principal_id`
-> bruto; TenantContextMiddleware (SPEC_06) lo combina con el `tenant_id`
-> resuelto por TenantResolver (SPEC_03). yaml-agno nunca persiste un `sub` bare
-> ni un "anonymous". Esto es consistente con SPEC_04 resolve_user_id.
+> composite `{tenant_id}:{principal_id}` emitido en el claim `sub` del JWT en emisión
+> mediante `resolve_user_id(memory_cfg=None, principal_id=..., tenant_id=...)` (SPEC_04 §1.4).
+> yaml-agno nunca persiste un `sub` bare ni un "anonymous". Esto es consistente con VQ012.
 
 ---
 
@@ -727,7 +680,7 @@ el aislamiento no tiene efecto.
 ### 5.1 CORS
 
 ```python
-# yaml-agno/src/security/cors.py
+# yaml-agno/src/yaml_agno/security/cors.py
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -758,7 +711,7 @@ class CorsConfigurator:
 ### 5.2 Security Headers Middleware
 
 ```python
-# yaml-agno/src/security/security_headers.py
+# yaml-agno/src/yaml_agno/security/security_headers.py
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -881,7 +834,7 @@ curl -X POST http://localhost:8000/agents/my-agent/runs \
 ### 6.3 EndpointRegistry
 
 ```python
-# yaml-agno/src/api/endpoint_registry.py
+# yaml-agno/src/yaml_agno/api/endpoint_registry.py
 
 from typing import List, Optional
 import re
@@ -1025,8 +978,6 @@ scope_mappings = {
 }
 ```
 
-**Nota**: las rutas built-in (`/agents`, `/teams`, `/workflows`) re-chequean scopes contra su namespace nativo. Mapear `GET /agents` a `custom:read` no otorga acceso porque el handler requiere `agents:read`. La libertad total aplica solo a rutas nuevas.
-
 ---
 
 ## 7. AUDIT TRAIL
@@ -1036,7 +987,7 @@ scope_mappings = {
 Todo evento de auth/authorization se registra para auditoría.
 
 ```python
-# yaml-agno/src/security/audit.py
+# yaml-agno/src/yaml_agno/security/audit.py
 
 from datetime import datetime, timezone
 from typing import Optional
@@ -1065,44 +1016,36 @@ class AuditLogger:
     async def log(self, event: AuditEvent) -> None:
         # INSERT en audit_events (ver SPEC_03)
         ...
-
-# Eventos registrados:
-# - auth.success:   JWT valido, request autorizado
-# - auth.failed:    401 (token ausente/expirado/invalido/audience)
-# - authz.denied:   403 (scopes insuficientes)
-# - isolation.coerced: user_id coaccionado al sub del caller
 ```
 
 ### 7.2 Flujo de un Request con Auth
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
+    participant C as Client (Bearer sub="tenant-a:alice")
     participant R as RateLimiter (SPEC_06)
-    participant J as JWTMiddleware (Agno native)
-    participant T as TenantContextMiddleware (SPEC_06)
-    participant E as ScopeEnforcer
-    participant H as Handler
-    participant A as AuditLogger
+    participant AM as AuthMiddleware (Agno native, jwt.py)
+    participant H as Handler / Native Router
+    participant GS as get_scoped_user_id (user_scope.py)
+    participant DB as Database (Agno DB / Storage)
 
-    C->>R: POST /agents/x/runs (Bearer JWT)
+    C->>R: POST /agents/my-agent/runs (Bearer JWT)
     R->>R: check tenant/IP buckets
-    R->>J: pass
-    J->>J: decode + verify sig/exp/aud
-    J->>J: extract scopes, sub
-    J->>T: request.state.user_id = sub
-    T->>T: resolve composite {tenant}:{principal}
-    T->>E: request.state.user_id = composite
-    E->>E: enforce required scopes (EndpointRegistry)
-    alt scopes insuficientes
-        E-->>C: 403 Forbidden
-        E->>A: log authz.denied
-    else ok
-        E->>H: handler
-        H->>H: get_scoped_user_id (Agno native user_scope)
-        H-->>C: 200 result
-        H->>A: log auth.success
+    R->>AM: pass (TenantContextMiddleware NOT in stack)
+    AM->>AM: decode + verify sig/exp/aud
+    AM->>AM: check is_reserved_principal(sub)
+    AM->>AM: stamp request.state.user_id = sub, scopes, admin_scope
+    AM->>H: pass request
+    H->>GS: get_scoped_user_id(request)
+    alt non-admin
+        GS-->>H: "tenant-a:alice"
+        H->>DB: execute with user_id="tenant-a:alice"
+    else admin (scopes=["agent_os:admin"])
+        GS-->>H: None (unscoped)
+        H->>DB: execute with user_id=None (all rows)
     end
+    DB-->>H: result
+    H-->>C: 200 result (or 404 for cross-tenant resource)
 ```
 
 ---
@@ -1172,7 +1115,7 @@ rbac:
       scopes:
         - config:read
         - agents:read
-        - agents:*:run
+        - agents:*:run          # wildcard: correr cualquier agente
         - evals:read
         - evals:write
         - traces:read
@@ -1182,12 +1125,12 @@ rbac:
         - config:read
         - metrics:read
         - traces:read
+        - traces:search
       description: "Solo observabilidad"
 
   users:
-    # user_id is the principal_id; tenant dimension is resolved at request time
-    # by TenantContextMiddleware (SPEC_06) -> composite {tenant_id}:{principal_id}.
-    # The same principal may map to different roles across tenants.
+    # user_id is the principal_id; tenant dimension is resolved at token issuance
+    # (SPEC_04/SPEC_06) -> composite {tenant_id}:{principal_id} in sub.
     - user_id: alice@corp.com      # principal
       roles: [administrator]
     - user_id: bob@corp.com
@@ -1226,7 +1169,7 @@ api:
 ### 8.4 Pydantic Models de Config
 
 ```python
-# yaml-agno/src/config/security_config.py
+# yaml-agno/src/yaml_agno/models/config/security_config.py
 
 from typing import Optional, List, Union
 from pydantic import BaseModel, Field
@@ -1249,7 +1192,7 @@ class JwtConfig(BaseModel):
     audience: Optional[Union[str, List[str]]] = None
     verify_audience: bool = False
     admin_scope: str = "agent_os:admin"
-    user_isolation: bool = False
+    user_isolation: bool = True
     excluded_routes: List[str] = Field(default_factory=lambda: [
         "/", "/health", "/liveness", "/readiness",
         "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect",
@@ -1274,11 +1217,6 @@ class RoleDef(BaseModel):
     description: str = ""
 
 class UserDef(BaseModel):
-    # principal_id; the effective key is composite {tenant_id}:{principal_id}
-    # resolved by TenantContextMiddleware (SPEC_06). The tenant dimension lives
-    # on the tenant registry (SPEC_03 TenantResolver), NOT duplicated here —
-    # UserDef binds a principal to roles WITHIN a tenant scope established at
-    # request time. A principal may hold different roles in different tenants.
     user_id: str
     roles: List[str] = Field(default_factory=list)
 
@@ -1325,23 +1263,23 @@ class SecurityConfig(BaseModel):
 ```gherkin
 Scenario 1: Golden Path - JWT valido autoriza request
   GIVEN auth_mode=jwt y authorization=true
-  AND un JWT firmado con RS256 conteniendo {sub: "alice", scopes: ["agents:run", "agents:read"]}
+  AND un JWT firmado con HS256 conteniendo {sub: "tenant-a:alice", scopes: ["agents:run", "agents:read"]}
   WHEN POST /agents/my-agent/runs con header Authorization: Bearer <jwt>
-  THEN el JWTMiddleware extrae y verifica la firma
-  AND request.state.user_id es "alice"
+  THEN AuthMiddleware de Agno extrae y verifica la firma
+  AND request.state.user_id es "tenant-a:alice"
   AND request.state.scopes contiene "agents:run"
-  AND el ScopeEnforcer permite la operacion
-  AND el handler ejecuta con user_id coaccionado a "alice"
+  AND get_scoped_user_id(request) devuelve "tenant-a:alice"
+  AND el handler ejecuta scoped a "tenant-a:alice"
   AND la respuesta es 200
   Y se loguea audit event auth.success
 ```
 
 ```gherkin
 Scenario 2: Token ausente -> 401
-  GIVEN auth_mode=jwt
+  GIVEN auth_mode=jwt y authorization=true
   WHEN POST /agents/my-agent/runs sin header Authorization
   THEN la respuesta es 401 Unauthorized
-  AND el detalle menciona "Missing JWT token"
+  AND el detalle menciona token ausente o inválido
   Y se loguea audit event auth.failed
 ```
 
@@ -1350,7 +1288,7 @@ Scenario 3: Token expirado -> 401
   GIVEN un JWT con exp en el pasado
   WHEN el request llega
   THEN la respuesta es 401 Unauthorized
-  AND el detalle menciona "Token expired"
+  AND el detalle menciona expiración
 ```
 
 ```gherkin
@@ -1404,42 +1342,41 @@ Scenario 9: admin_scope bypassa verificacion
   WHEN POST /agents/my-agent/runs
   THEN el ScopeEnforcer bypassa (admin)
   AND la respuesta es 200
-  Y user_isolation NO aplica (admin ve todo)
+  Y user_isolation devuelve None (admin ve todo)
 ```
 
 ### 10.3 Per-User Isolation
 
 ```gherkin
-Scenario 10: Non-admin solo ve sus sesiones
-  GIVEN user_isolation=true
-  AND alice (no-admin) pide GET /sessions
-  THEN solo se retornan sesiones con user_id="alice"
-  AND las sesiones de bob no aparecen
+Scenario 10: Non-admin solo ve sus sesiones (L-03 T1/T2)
+  GIVEN authorization=true y user_isolation=true
+  AND alice con token sub="tenant-a:alice" pide GET /sessions
+  THEN solo se retornan sesiones con user_id="tenant-a:alice"
+  AND las sesiones de "tenant-b:alice" no aparecen
+  AND un GET a una sesion de tenant-b devuelve 404
 ```
 
 ```gherkin
-Scenario 11: Write coacciona user_id al sub del caller
-  GIVEN user_isolation=true
-  AND alice (no-admin) hace POST /sessions con body user_id="bob"
-  WHEN el UserIsolationEnforcer procesa
-  THEN la sesion se persiste con user_id="alice"
-  Y se loguea audit event isolation.coerced
+Scenario 11: Writes atribuidos al caller composite sub
+  GIVEN authorization=true y user_isolation=true
+  AND alice con token sub="tenant-a:alice" ejecuta POST /agents/x/runs
+  THEN la sesion y run se persisten con user_id="tenant-a:alice"
 ```
 
 ```gherkin
-Scenario 12: Admin bypassa isolation
-  GIVEN user_isolation=true
+Scenario 12: Admin bypassa isolation (L-03 T5)
+  GIVEN authorization=true y scopes=["agent_os:admin"]
   AND admin hace GET /sessions
-  THEN se retornan TODAS las sesiones (sin scope por user_id)
+  THEN get_scoped_user_id devuelve None y se retornan TODAS las sesiones de todos los tenants
 ```
 
 ```gherkin
 Scenario 13: Cancel run requiere ownership
-  GIVEN user_isolation=true
+  GIVEN authorization=true y user_isolation=true
   AND alice hace POST /agents/x/runs/r1/cancel
-  AND el run r1 pertenece a bob
+  AND el run r1 pertenece a bob (tenant-b:bob)
   THEN la verificacion de ownership falla
-  Y la respuesta es 403 Forbidden
+  Y la respuesta es 404 o 403
 ```
 
 ### 10.4 Basic Auth y CORS
@@ -1476,7 +1413,7 @@ Scenario 16: Security headers presentes
 Strict TDD RED/GREEN/REFACTOR.
 
 ### TASK_001: BasicAuthMiddleware
-- **File**: `yaml-agno/src/security/basic_auth.py`
+- **File**: `yaml-agno/src/yaml_agno/security/basic_auth.py`
 - **Test**: `tests/unit/security/test_basic_auth.py`
 - **RED**:
   ```python
@@ -1494,86 +1431,27 @@ Strict TDD RED/GREEN/REFACTOR.
       with pytest.raises(HTTPException) as e:
           await mw(req)
       assert e.value.status_code == 401
-
-  async def test_basic_auth_missing_key():
-      mw = BasicAuthMiddleware(security_key="secret")
-      req = FakeRequest(headers={})
-      with pytest.raises(HTTPException) as e:
-          await mw(req)
-      assert e.value.status_code == 401
   ```
 - **GREEN**: Implementar `BasicAuthMiddleware`.
 - **Commit**: `feat(security): add basic auth middleware`
 
-### TASK_002: Configure Agno JWTMiddleware (decode + populate state)
-- **@ai-directive**: yaml-agno does NOT reimplement JWTMiddleware (owned by `agno.os.middleware.jwt`). This task wires yaml-agno config to Agno's middleware via `build_jwt_middleware` and asserts the OBSERVABLE behavior (state population, 401 on expired, excluded routes), not internal methods.
-- **File**: `yaml-agno/src/security/jwt_config.py`
-- **Test**: `tests/unit/security/test_jwt_middleware.py`
-- **RED**:
-  ```python
-  # Tests mount the Agno JWTMiddleware (built by yaml-agno) on a test ASGI app
-  # and assert observable behavior. They do NOT call __call__/_decode directly.
-  async def test_jwt_valid_populates_state(app_with_jwt):
-      token = make_jwt(sub="alice", scopes=["agents:read"], key=KEY, algorithm="HS256")
-      resp = await app_with_jwt(headers={"Authorization": f"Bearer {token}"})
-      assert resp.state["user_id"] == "alice"
-      assert "agents:read" in resp.state["scopes"]
+### TASK_002: AuthorizationAdapter whitelist & Agno AuthorizationConfig build
+- **@ai-directive**: yaml-agno does NOT reimplement JWTMiddleware (owned by `agno.os.middleware.jwt`). `AuthorizationAdapter` translates `AuthorizationSettings` into Agno's `AuthorizationConfig` with strict whitelist validation and `user_isolation=True` invariant (S5a.0 / `openspec/specs/agentos-authorization-build/spec.md`).
+- **File**: `yaml-agno/src/yaml_agno/agentos/authorization_adapter.py`
+- **Test**: `tests/unit/agentos/test_authorization_adapter.py`
+- **RED**: Assert unknown keys raise `AuthorizationBuildError`, `basic_auth` is rejected with pointer to `BasicAuthMiddleware`, and valid config constructs `AuthorizationConfig(user_isolation=True)`.
+- **GREEN**: Implement `AuthorizationAdapter` whitelist and secret resolution.
+- **Commit**: `feat(agentos): add AuthorizationAdapter with strict whitelist`
 
-  async def test_jwt_expired_401(app_with_jwt):
-      token = make_jwt(exp=past_timestamp, key=KEY, algorithm="HS256")
-      resp = await app_with_jwt(headers={"Authorization": f"Bearer {token}"}, expect=401)
-      assert resp.status_code == 401
-  ```
-- **GREEN**: Implement `build_jwt_middleware(app, jwt_config)` that configures Agno's `JWTMiddleware`. The function MUST accept `app` (FastAPI) as the required first positional arg and forward it to `JWTMiddleware(app, ...)` — `JWTMiddleware` subclasses `BaseHTTPMiddleware` whose `__init__` calls `super().__init__(app)`, so omitting `app` raises `TypeError`. Do NOT define a local JWTMiddleware class.
-- **Commit**: `feat(security): wire yaml-agno config to Agno JWTMiddleware`
-
-### TASK_003: JWT token sources (header/cookie/both) via Agno config
-- **File**: `yaml-agno/src/security/jwt_config.py`
-- **Test**: `tests/unit/security/test_jwt_token_source.py`
-- **RED**:
-  ```python
-  async def test_token_from_cookie(app_factory):
-      token = make_jwt(sub="alice", key=KEY, algorithm="HS256")
-      app = app_factory(token_source="cookie", cookie_name="access_token")
-      resp = await app(cookies={"access_token": token})
-      assert resp.state["user_id"] == "alice"
-
-  async def test_token_both_header_first(app_factory):
-      # header present AND cookie present; header wins
-      ...
-  ```
-- **GREEN**: Map yaml-agno `token_source` (header/cookie/both) to Agno's `TokenSource` in `build_jwt_middleware`. No local token-extraction code.
-- **Commit**: `feat(security): map token_source config to Agno TokenSource`
-
-### TASK_004: Multiple verification keys + audience via Agno config
-- **File**: `yaml-agno/src/security/jwt_config.py`
-- **Test**: `tests/unit/security/test_jwt_multi_key.py`
-- **RED**:
-  ```python
-  async def test_multi_key_tries_in_order(app_factory):
-      app = app_factory(verification_keys=[KEY_A, KEY_B])
-      token_b = make_jwt(key=KEY_B, algorithm="HS256", sub="x")
-      resp = await app(headers={"Authorization": f"Bearer {token_b}"})
-      assert resp.state["user_id"] == "x"
-
-  async def test_audience_mismatch_401(app_factory):
-      app = app_factory(audience="my-os", verify_audience=True)
-      token = make_jwt(aud="other-os", key=KEY, algorithm="HS256")
-      resp = await app(headers={"Authorization": f"Bearer {token}"}, expect=401)
-      assert resp.status_code == 401
-  ```
-- **GREEN**: Pass `verification_keys` (list) and `audience`/`verify_audience` through to Agno's `JWTMiddleware` in `build_jwt_middleware`. No local key-loop or audience code.
-- **Commit**: `feat(security): pass multi-key and audience to Agno JWTMiddleware`
-
-### TASK_005: ScopeEnforcer
-- **File**: `yaml-agno/src/security/scope_enforcer.py`
+### TASK_003: ScopeEnforcer
+- **File**: `yaml-agno/src/yaml_agno/security/scope_enforcer.py`
 - **Test**: `tests/unit/security/test_scope_enforcer.py`
 - **RED**:
   ```python
   def test_enforce_sufficient():
       enforcer = ScopeEnforcer()
       req = FakeRequest(scopes=["agents:read"])
-      enforcer.enforce(req, ["agents:read"])   # no raise
+      enforcer.enforce(req, ["agents:read"])
 
   def test_enforce_insufficient_403():
       enforcer = ScopeEnforcer()
@@ -1581,22 +1459,12 @@ Strict TDD RED/GREEN/REFACTOR.
       with pytest.raises(HTTPException) as e:
           enforcer.enforce(req, ["agents:run"])
       assert e.value.status_code == 403
-
-  def test_enforce_admin_bypass():
-      enforcer = ScopeEnforcer()
-      req = FakeRequest(scopes=["agent_os:admin"])
-      enforcer.enforce(req, ["agents:run"])   # no raise
-
-  def test_enforce_wildcard():
-      enforcer = ScopeEnforcer()
-      req = FakeRequest(scopes=["agents:*:run"])
-      enforcer.enforce(req, ["agents:my-agent:run"])   # no raise
   ```
 - **GREEN**: Implementar `ScopeEnforcer` con wildcard y admin bypass.
 - **Commit**: `feat(security): add scope enforcer`
 
-### TASK_006: EndpointRegistry required_scopes
-- **File**: `yaml-agno/src/api/endpoint_registry.py`
+### TASK_004: EndpointRegistry required_scopes
+- **File**: `yaml-agno/src/yaml_agno/api/endpoint_registry.py`
 - **Test**: `tests/unit/api/test_endpoint_registry.py`
 - **RED**:
   ```python
@@ -1605,21 +1473,12 @@ Strict TDD RED/GREEN/REFACTOR.
 
   def test_sessions_get_requires_read():
       assert EndpointRegistry.required_scopes("GET", "/sessions") == ["sessions:read"]
-
-  def test_unknown_route_none():
-      assert EndpointRegistry.required_scopes("GET", "/nope") is None
-
-  def test_eval_runs_post():
-      assert EndpointRegistry.required_scopes("POST", "/eval-runs") == ["evals:write"]
-
-  def test_traces_search():
-      assert EndpointRegistry.required_scopes("POST", "/traces/search") == ["traces:read"]
   ```
 - **GREEN**: Implementar catálogo de mappings.
 - **Commit**: `feat(api): add endpoint scope registry`
 
-### TASK_007: RBACManager scopes_for
-- **File**: `yaml-agno/src/security/rbac.py`
+### TASK_005: RBACManager scopes_for
+- **File**: `yaml-agno/src/yaml_agno/security/rbac.py`
 - **Test**: `tests/unit/security/test_rbac.py`
 - **RED**:
   ```python
@@ -1628,55 +1487,12 @@ Strict TDD RED/GREEN/REFACTOR.
       scopes = mgr.scopes_for(["member"])
       assert "agents:read" in scopes
       assert "agents:delete" not in scopes
-
-  def test_rbac_administrator_has_delete():
-      scopes = RBACManager().scopes_for(["administrator"])
-      assert "agents:delete" in scopes
-
-  def test_rbac_custom_role():
-      mgr = RBACManager(custom_roles={"custom": {"config:read"}})
-      assert mgr.has_role("custom")
-      assert "config:read" in mgr.scopes_for(["custom"])
-
-  def test_rbac_multiple_roles_union():
-      scopes = RBACManager().scopes_for(["viewer", "developer"])
-      assert "agents:write" in scopes   # de developer
-      assert "metrics:read" in scopes   # comun
   ```
 - **GREEN**: Implementar `RBACManager` con roles default y custom.
 - **Commit**: `feat(security): add rbac manager`
 
-### TASK_008: Native AgentOS user_isolation integration (no enforcer class)
-- **@ai-directive**: yaml-agno does NOT implement its own isolation enforcer (removed in iter4). `user_isolation` is NATIVE to AgentOS via `JWTMiddleware(user_isolation=True)` + `agno.os.middleware.user_scope` helpers. This task verifies the INTEGRATION: that `build_jwt_middleware` forwards `user_isolation=True`, and that yaml-agno endpoints delegate to the native `get_scoped_user_id` / `resolve_db_and_scope` instead of a local enforcer.
-- **File**: `yaml-agno/src/security/jwt_config.py` (wiring) + `yaml-agno/src/api/` (endpoint delegates)
-- **Test**: `tests/unit/security/test_user_isolation_integration.py`
-- **RED**:
-  ```python
-  def test_build_jwt_middleware_forwards_user_isolation(app):
-      mw = build_jwt_middleware(app, verification_keys=[KEY], algorithm="HS256",
-                                user_isolation=True)
-      # The native JWTMiddleware stores the flag; verify it propagates.
-      assert mw.user_isolation is True
-
-  def test_no_local_enforcer_class_exists():
-      # Regression: ensure the iter3 UserIsolationEnforcer was removed.
-      import importlib, pathlib
-      pkg = pathlib.Path("yaml-agno/src/security")
-      assert not (pkg / "user_isolation.py").exists(), \
-          "UserIsolationEnforcer must not exist; isolation is native AgentOS"
-
-  async def test_endpoint_uses_native_get_scoped_user_id(mocker):
-      # A yaml-agno session-listing endpoint calls get_scoped_user_id, not a local class.
-      scoped = mocker.patch("agno.os.middleware.user_scope.get_scoped_user_id",
-                            return_value="acme:alice")
-      ...
-      assert scoped.called
-  ```
-- **GREEN**: Wire `user_isolation` through `build_jwt_middleware`; ensure endpoints call the native helpers. Delete any stale `user_isolation.py` enforcer.
-- **Commit**: `feat(security): delegate user_isolation to native AgentOS user_scope`
-
-### TASK_009: CorsConfigurator
-- **File**: `yaml-agno/src/security/cors.py`
+### TASK_006: CorsConfigurator
+- **File**: `yaml-agno/src/yaml_agno/security/cors.py`
 - **Test**: `tests/unit/security/test_cors.py`
 - **RED**:
   ```python
@@ -1684,16 +1500,12 @@ Strict TDD RED/GREEN/REFACTOR.
       c = CorsConfigurator(allowed_origins=["https://app.example.com"])
       assert "https://os.agno.com" in c.allowed_origins
       assert "https://app.example.com" in c.allowed_origins
-
-  def test_cors_dedup():
-      c = CorsConfigurator(allowed_origins=["https://os.agno.com"])
-      assert c.allowed_origins.count("https://os.agno.com") == 1
   ```
 - **GREEN**: Implementar `CorsConfigurator`.
 - **Commit**: `feat(security): add cors configurator`
 
-### TASK_010: SecurityHeadersMiddleware
-- **File**: `yaml-agno/src/security/security_headers.py`
+### TASK_007: SecurityHeadersMiddleware
+- **File**: `yaml-agno/src/yaml_agno/security/security_headers.py`
 - **Test**: `tests/unit/security/test_security_headers.py`
 - **RED**:
   ```python
@@ -1703,156 +1515,68 @@ Strict TDD RED/GREEN/REFACTOR.
       assert resp.headers["X-Content-Type-Options"] == "nosniff"
       assert resp.headers["X-Frame-Options"] == "DENY"
       assert "Strict-Transport-Security" in resp.headers
-
-  async def test_csp_custom():
-      app = build_test_app(SecurityHeadersMiddleware, csp="default-src 'self'")
-      resp = await app.get("/anything")
-      assert resp.headers["Content-Security-Policy"] == "default-src 'self'"
   ```
 - **GREEN**: Implementar `SecurityHeadersMiddleware`.
 - **Commit**: `feat(security): add security headers middleware`
 
-### TASK_011: AuditLogger
-- **File**: `yaml-agno/src/security/audit.py`
-- **Test**: `tests/unit/security/test_audit.py`
-- **RED**:
-  ```python
-  async def test_audit_log_persists():
-      logger = AuditLogger(db=FakeDb())
-      event = AuditEvent(event_type="auth.success", user_id="alice",
-                         method="POST", path="/agents/x/runs", status_code=200)
-      await logger.log(event)
-      assert len(logger.db.events) == 1
-      assert logger.db.events[0].event_type == "auth.success"
+### TASK_008: Native AgentOS user_isolation integration
+- **@ai-directive**: `user_isolation` is NATIVE to AgentOS via `AuthMiddleware` + `get_scoped_user_id` helpers (`agno.os.middleware.user_scope`). This task verifies that `AuthorizationConfig(user_isolation=True)` threads the composite `sub` into every user-scoped query, and that no local enforcer class exists.
+- **File**: `yaml-agno/src/yaml_agno/api/app.py`
+- **Test**: `tests/unit/api/test_app_jwt_mode.py`
+- **RED**: Assert JD-01 mutual exclusion raises `ValueError`, `authorization_config` is forwarded, and `TenantContextMiddleware` is not mounted.
+- **GREEN**: Wire `authorization_config` and JD-01 guard in `YamlAgentOS`.
+- **Commit**: `feat(api): authorization_config kwarg + JD-01 guard`
 
-  def test_audit_event_defaults():
-      e = AuditEvent(event_type="authz.denied")
-      assert e.id is not None
-      assert e.timestamp is not None
-  ```
-- **GREEN**: Implementar `AuditEvent` y `AuditLogger`.
-- **Commit**: `feat(security): add audit logger`
-
-### TASK_012: SecurityConfig y JwtConfig Pydantic
-- **File**: `yaml-agno/src/config/security_config.py`
-- **Test**: `tests/unit/config/test_security_config.py`
-- **RED**:
-  ```python
-  def test_security_config_jwt_parse():
-      cfg = SecurityConfig.model_validate({
-          "auth_mode": "jwt",
-          "jwt": {
-              "algorithm": "RS256",
-              "verification_keys": ["KEY"],
-              "authorization": True,
-              "user_isolation": True,
-          },
-      })
-      assert cfg.auth_mode == "jwt"
-      assert cfg.jwt.authorization is True
-      assert cfg.jwt.user_isolation is True
-
-  def test_jwt_excluded_routes_defaults():
-      cfg = JwtConfig()
-      assert "/health" in cfg.excluded_routes
-      assert "/openapi.json" in cfg.excluded_routes
-  ```
-- **GREEN**: Implementar modelos de config.
-- **Commit**: `feat(config): add security config models`
-
-### TASK_013: Integración end-to-end JWT + scope + isolation
-- **File**: `tests/integration/security/test_e2e_auth.py`
-- **Test**: mismo archivo
-- **RED**:
-  ```python
-  async def test_e2e_jwt_scope_isolation(client_with_security):
-      # alice con agents:run y user_isolation
-      token = make_jwt(sub="alice", scopes=["agents:run", "sessions:read"],
-                       key=KEY, algorithm="HS256")
-      resp = await client_with_security.post(
-          "/agents/x/runs",
-          headers={"Authorization": f"Bearer {token}"},
-          data={"message": "hi", "user_id": "bob"},   # intenta atribuir a bob
-      )
-      assert resp.status_code == 200
-      # verificar que la sesion se creo con user_id="alice" (coaccionado)
-      sess = await client_with_security.get("/sessions",
-              headers={"Authorization": f"Bearer {token}"})
-      assert all(s["user_id"] == "alice" for s in sess.json())
-
-  async def test_e2e_forbidden_missing_scope(client_with_security):
-      token = make_jwt(sub="alice", scopes=["agents:read"],   # solo read
-                       key=KEY, algorithm="HS256")
-      resp = await client_with_security.post("/agents/x/runs",
-              headers={"Authorization": f"Bearer {token}"})
-      assert resp.status_code == 403
-  ```
-- **GREEN**: Cablear middleware + enforcer + isolation en la app FastAPI.
-- **Commit**: `feat(security): wire auth pipeline end to end`
+### TASK_009: L-03 End-to-End JWT Multi-Tenant Isolation Suite
+- **File**: `tests/integration/api/test_jwt_isolation_l03.py`
+- **Test**: Matrix T1–T7 (disjoint session buckets, cross-tenant 404 masking, memory isolation, run masking, admin sees all, dev-header regression, 401 negatives).
+- **RED**: Test scenarios against `YamlAgentOS(authorization=True, authorization_config=...)`.
+- **GREEN**: All 7 integration scenarios pass against the native pipeline.
+- **Commit**: `test(auth): L-03 multi-tenant isolation suite`
 
 ---
 
 ## 12. SUPUESTOS TÉCNICOS ADOPTADOS
 
 ### [Decisión 1] JWT como auth de producción; Basic Auth solo dev
-`OS_SECURITY_KEY` está deprecado para producción. JWT con RS256 (asimétrico) es el default porque permite verificación con public key sin exponer el secreto de firma.
+`OS_SECURITY_KEY` está deprecado para producción. JWT con RS256/HS256 es el default porque permite verificación de firma y scoping sin compartir secretos de emisión.
 
 ### [Decisión 2] Scopes jerárquicos con wildcard solo en agents/teams/workflows
-El scoping per-recurso (`resource:<id>:action`) es poderoso pero complejo. Limitarlo a los tres recursos "runneables" mantiene el modelo manejable. Sessions/memories/knowledge/traces usan scopes globales + aislamiento per-user.
+El scoping per-recurso (`resource:<id>:action`) aplica a los tres recursos ejecutables. Sessions/memories/knowledge/traces usan scopes globales + aislamiento per-user.
 
-### [Decisión 3] user_isolation opt-in (NATIVE AgentOS)
-Off por defecto porque requiere DB con `user_id` composite en filas. On en producción multi-tenant. La fuente de verdad del `user_id` es el composite `{tenant_id}:{principal_id}` derivado por TenantContextMiddleware (SPEC_06) a partir del `sub` del JWT — nunca el `sub` bare. El mecanismo de scoping (read/write coercion, ownership) es NATIVO de AgentOS (`agno.os.middleware.user_scope`); yaml-agno solo lo activa y cablea.
+### [Decisión 3] user_isolation ALWAYS ON en producción (Opción C Híbrido, S5a.1)
+El composite `user_id = f"{tenant_id}:{principal_id}"` se emite directamente en el claim `sub` del JWT en emisión mediante `resolve_user_id()` (VQ012). Agno 2.8.7 `AuthMiddleware` valida el token y estampa `request.state.user_id = sub`. `AuthorizationConfig(user_isolation=True)` es un invariant inmutable (VQ010) que garantiza que todas las queries se filtren por el composite, eliminando el NULL-bucket footgun sin código adicional de yaml-agno en el path JWT. S5b Keycloak escape hatch documentado vía `user_id_claim` (`jwt.py:547`).
 
-### [Decisión 4] Admin bypass explicito
-`agent_os:admin` bypassa scopes Y isolation. Es deliberado: los ops necesitan ver todo para debugging. Customizable via `admin_scope`.
+### [Decisión 4] Admin bypass explícito nativo
+`agent_os:admin` es el admin_scope nativo de Agno (`jwt.py:736`). `get_scoped_user_id` retorna `None` para callers con este scope (`user_scope.py:116-117`), permitiendo a los operadores ver sesiones y recursos de todos los tenants.
 
 ### [Decisión 5] CORS merged con defaults Agno
-`cors_allowed_origins` se mergea con los dominios default de Agno (`os.agno.com`). Esto permite que el dashboard de Agno funcione sin config adicional.
+`cors_allowed_origins` se mergea con los dominios default de Agno (`os.agno.com`).
 
 ### [Decisión 6] Rate limiting delegado a SPEC_06
-No se redefine el `RateLimiter`. Se referencia SPEC_06 §4.2 (`RateLimitMiddleware`, 100 req/min tenant, 20 req/min IP) registrado en `YamlAgentOS.get_app()`. Esto evita duplicación.
+Se referencia SPEC_06 §4.2 (`RateLimitMiddleware`, 100 req/min tenant, 20 req/min IP) registrado en `YamlAgentOS.get_app()`.
 
 ### [Decisión 7] Audit trail siempre on para denegaciones
-`auth.failed`, `authz.denied`, e `isolation.coerced` se loguean siempre (incluso con `audit.enabled=false` para esos tres). Los éxitos son configurables.
+`auth.failed`, `authz.denied`, e `isolation.coerced` se loguean siempre.
 
 ---
 
 ## 13. PREGUNTAS DE CALIBRACIÓN ESTRATÉGICA
 
 ### [Pregunta 1] ¿Key rotation strategy?
-`verification_keys` es una lista, pero la rotación real (revocar key vieja) requiere proceso.
-Implica:
-- **JWKS + kid**: rotación automática, requiere endpoint JWKS.
-- **Lista manual**: simple, propenso a ventanas de vulnerabilidad.
-Trade-off: automatización vs simplicidad operacional.
+`verification_keys` es una lista, pero la rotación real requiere proceso (JWKS con `kid` recomendado para rotación automática).
 
 ### [Pregunta 2] ¿Token lifetime?
-¿JWT de corta duración (15 min) + refresh, o larga duración (24h)?
-Implica:
-- **Corto + refresh**: más seguro, más complejidad.
-- **Largo**: más simple, mayor ventana si se compromete.
-Los docs no especifican; depende del IDP.
+JWTs de corta duración (15 min) + refresh token recomendado para producción multi-tenant.
 
 ### [Pregunta 3] ¿Custom scope mappings para IDP de terceros?
-WorkOS usa `permissions`, Auth0 `scope`, Okta `scp`. ¿Mapear automáticamente o requerir config explicita?
-Implica:
-- **Auto-detect**: menos config, magia.
-- **Explicit `scopes_claim`**: más control, más verbosidad.
+Agno soporta `scopes_claim` configurable; Keycloak mapea roles/scopes a claims estándar.
 
 ### [Pregunta 4] ¿Granularidad del audit trail?
-¿Loguear todos los `auth.success` o solo denegaciones?
-Implica:
-- **Todo**: trazabilidad completa, alto volumen de log.
-- **Solo denegaciones**: suficiente para forense, bajo volumen.
+Loguear denegaciones y coerciones como baseline; éxitos según configuración de carga.
 
 ### [Pregunta 5] ¿RBAC dinámico vs estático?
-¿Los roles custom se cargan de YAML (estático, reinicio para cambiar) o de DB/control plane (dinámico)?
-Implica: flexibilidad vs simplicidad. El control plane de Agno maneja roles dinámicamente; self-hosted puede usar YAML.
+Roles base definidos en configuración; extensión dinámica delegada a Casbin/S5a.
 
 ### [Pregunta 6] ¿WebSocket auth?
-Los docs mencionan que el reconnect de WebSocket requiere `session_id` para no-admins. ¿Validar JWT en handshake WS o en cada frame?
-Implica: complejidad vs granularidad.
-
----
-
-*¿Deseas profundizar la especificación técnica al **Nivel 6** de algún componente (ej. JWKS lookup, CSP avanzada, o el mapeo de un IDP específico como WorkOS/Auth0) o autorizar la ejecución de estas tareas por parte del equipo de agentes?*
+El reconnect de WebSocket requiere `session_id` validado por ownership para no-admins.
