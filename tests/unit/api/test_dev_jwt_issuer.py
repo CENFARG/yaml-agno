@@ -20,6 +20,7 @@ import yaml_agno.memory
 from tests.integration.helpers.dev_jwt_issuer import DevJwtIssuer
 
 pytest_plugins = ["tests.integration.helpers.conftest"]
+pytestmark = pytest.mark.unit
 
 TEST_KEY = "dev-secret-signing-key-for-unit-tests-only-48bytes"
 
