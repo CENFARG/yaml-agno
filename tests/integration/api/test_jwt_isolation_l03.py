@@ -9,6 +9,7 @@ Matrix cases in this file:
 - T2: Cross-tenant session 404 native masking (task 3.2)
 - T3: Memory isolation between tenants (task 3.3)
 - T4: Cross-tenant run 404 native masking (task 3.4)
+- T5: Admin with agent_os:admin scope sees sessions across all tenants (task 3.5)
 """
 
 from __future__ import annotations
@@ -275,3 +276,68 @@ class TestJwtIsolationL03:
         )
         assert sess_runs_list_b.status_code == 404
         assert "not found" in sess_runs_list_b.json().get("detail", "").lower()
+
+    def test_t5_admin_sees_all(
+        self,
+        l03_client: TestClient,
+        alice_a_headers: dict[str, str],
+        alice_b_headers: dict[str, str],
+        admin_headers: dict[str, str],
+    ) -> None:
+        """T5: Admin token with agent_os:admin scope lists sessions across all tenants."""
+        # 1. Execute run as alice under tenant-a
+        run_resp_a = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Tenant A session for admin test", "stream": "false"},
+            headers=alice_a_headers,
+        )
+        assert run_resp_a.status_code == 200, run_resp_a.text
+        session_id_a = run_resp_a.json().get("session_id")
+        assert session_id_a is not None
+
+        # 2. Execute run as alice under tenant-b
+        run_resp_b = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Tenant B session for admin test", "stream": "false"},
+            headers=alice_b_headers,
+        )
+        assert run_resp_b.status_code == 200, run_resp_b.text
+        session_id_b = run_resp_b.json().get("session_id")
+        assert session_id_b is not None
+        assert session_id_b != session_id_a
+
+        # 3. Alice under tenant-a lists sessions -> sees only session_id_a
+        sess_resp_a = l03_client.get("/sessions", headers=alice_a_headers)
+        assert sess_resp_a.status_code == 200
+        sess_data_a = sess_resp_a.json()
+        assert sess_data_a["meta"]["total_count"] == 1
+        assert [s["session_id"] for s in sess_data_a["data"]] == [session_id_a]
+        assert [s["user_id"] for s in sess_data_a["data"]] == ["tenant-a:alice"]
+
+        # 4. Alice under tenant-b lists sessions -> sees only session_id_b
+        sess_resp_b = l03_client.get("/sessions", headers=alice_b_headers)
+        assert sess_resp_b.status_code == 200
+        sess_data_b = sess_resp_b.json()
+        assert sess_data_b["meta"]["total_count"] == 1
+        assert [s["session_id"] for s in sess_data_b["data"]] == [session_id_b]
+        assert [s["user_id"] for s in sess_data_b["data"]] == ["tenant-b:alice"]
+
+        # 5. Admin lists sessions -> sees BOTH tenant-a and tenant-b sessions
+        sess_resp_admin = l03_client.get("/sessions", headers=admin_headers)
+        assert sess_resp_admin.status_code == 200
+        sess_data_admin = sess_resp_admin.json()
+        assert sess_data_admin["meta"]["total_count"] == 2
+        admin_sess_ids = {s["session_id"] for s in sess_data_admin["data"]}
+        assert session_id_a in admin_sess_ids
+        assert session_id_b in admin_sess_ids
+        admin_user_ids = {s["user_id"] for s in sess_data_admin["data"]}
+        assert admin_user_ids == {"tenant-a:alice", "tenant-b:alice"}
+
+        # 6. Admin can read individual sessions from both tenants directly
+        get_admin_a = l03_client.get(f"/sessions/{session_id_a}", headers=admin_headers)
+        assert get_admin_a.status_code == 200
+        assert get_admin_a.json()["session_id"] == session_id_a
+
+        get_admin_b = l03_client.get(f"/sessions/{session_id_b}", headers=admin_headers)
+        assert get_admin_b.status_code == 200
+        assert get_admin_b.json()["session_id"] == session_id_b
