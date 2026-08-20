@@ -8,6 +8,7 @@ Matrix cases in this file:
 - T1: Disjoint session buckets per composite (task 3.1)
 - T2: Cross-tenant session 404 native masking (task 3.2)
 - T3: Memory isolation between tenants (task 3.3)
+- T4: Cross-tenant run 404 native masking (task 3.4)
 """
 
 from __future__ import annotations
@@ -206,3 +207,71 @@ class TestJwtIsolationL03:
         assert len(list_data_a2["data"]) == 1
         assert list_data_a2["data"][0]["memory_id"] == memory_id_a
         assert list_data_a2["data"][0]["user_id"] == "tenant-a:alice"
+
+    def test_t4_cross_tenant_run_404(
+        self,
+        l03_client: TestClient,
+        alice_a_headers: dict[str, str],
+        alice_b_headers: dict[str, str],
+    ) -> None:
+        """T4: Alice under tenant-b reading tenant-a's run_id receives 404 (native masking).
+
+        Validates both run lookup surfaces in Agno 2.8.7:
+        1. /agents/{agent_id}/runs/{run_id}?session_id={session_id}
+        2. /sessions/{session_id}/runs/{run_id} and /sessions/{session_id}/runs
+        """
+        # 1. Execute run as alice under tenant-a
+        run_resp_a = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Confidential run for tenant A", "stream": "false"},
+            headers=alice_a_headers,
+        )
+        assert run_resp_a.status_code == 200, run_resp_a.text
+        run_data_a = run_resp_a.json()
+        run_id_a = run_data_a.get("run_id")
+        session_id_a = run_data_a.get("session_id")
+        assert run_id_a is not None
+        assert session_id_a is not None
+        assert run_data_a.get("user_id") == "tenant-a:alice"
+
+        # 2. alice under tenant-a can read her own run via /agents/{agent_id}/runs/{run_id} -> 200
+        agent_run_resp_a = l03_client.get(
+            f"/agents/l03-agent/runs/{run_id_a}?session_id={session_id_a}",
+            headers=alice_a_headers,
+        )
+        assert agent_run_resp_a.status_code == 200
+        assert agent_run_resp_a.json()["run_id"] == run_id_a
+
+        # 3. alice under tenant-a can read her own run via /sessions/{session_id}/runs/{run_id} -> 200
+        sess_run_resp_a = l03_client.get(
+            f"/sessions/{session_id_a}/runs/{run_id_a}",
+            headers=alice_a_headers,
+        )
+        assert sess_run_resp_a.status_code == 200
+        assert sess_run_resp_a.json()["run_id"] == run_id_a
+
+        # 4. alice under tenant-b attempts to read tenant-a's run via /agents/{agent_id}/runs/{run_id} -> 404
+        agent_run_resp_b = l03_client.get(
+            f"/agents/l03-agent/runs/{run_id_a}?session_id={session_id_a}",
+            headers=alice_b_headers,
+        )
+        assert agent_run_resp_b.status_code == 404
+        error_detail_agent = agent_run_resp_b.json().get("detail", "")
+        assert "not found" in error_detail_agent.lower()
+
+        # 5. alice under tenant-b attempts to read tenant-a's run via /sessions/{session_id}/runs/{run_id} -> 404
+        sess_run_resp_b = l03_client.get(
+            f"/sessions/{session_id_a}/runs/{run_id_a}",
+            headers=alice_b_headers,
+        )
+        assert sess_run_resp_b.status_code == 404
+        error_detail_sess = sess_run_resp_b.json().get("detail", "")
+        assert "not found" in error_detail_sess.lower()
+
+        # 6. alice under tenant-b attempts to list runs via /sessions/{session_id}/runs -> 404
+        sess_runs_list_b = l03_client.get(
+            f"/sessions/{session_id_a}/runs",
+            headers=alice_b_headers,
+        )
+        assert sess_runs_list_b.status_code == 404
+        assert "not found" in sess_runs_list_b.json().get("detail", "").lower()
