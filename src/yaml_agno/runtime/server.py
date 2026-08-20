@@ -1,4 +1,4 @@
-"""Runtime server entry point (SPEC_06 slice A).
+"""Runtime server entry point (SPEC_06 slice A, S5a.1 WU3).
 
 Thin wrapper around ``YamlAgentOS`` that loads the agent source, builds the
 FastAPI app, and (optionally) runs it under uvicorn. Two public functions:
@@ -7,8 +7,10 @@ FastAPI app, and (optionally) runs it under uvicorn. Two public functions:
   returns the wired app without starting a server. Use this from integration
   tests and from external ASGI runners (gunicorn, etc.).
 - ``run_server(config_path=None, agents=None, host="127.0.0.1", port=8000,
-  server_factory=None, **kwargs) -> None`` — constructs a ``uvicorn.Server`` via
-  the injectable ``server_factory`` and calls ``.run()``. Tests inject a fake
+  server_factory=None, **kwargs) -> None`` — production entry point. Strictly
+  enforces VQ010 refuse-to-start contract: raises ``RuntimeError`` unless
+  ``authorization=True`` is explicitly provided. Constructs a ``uvicorn.Server``
+  via the injectable ``server_factory`` and calls ``.run()``. Tests inject a fake
   factory to assert the server is constructed correctly without binding a TCP
   port.
 
@@ -92,6 +94,11 @@ def run_server(
 ) -> None:
     """Build the app and run it under uvicorn.
 
+    Strictly enforces VQ010 (refuse-to-start): refuses to start and raises
+    ``RuntimeError`` unless ``authorization=True`` is explicitly provided in
+    ``yaml_agentos_kwargs``. For dev and non-JWT test workflows, use
+    ``create_app()`` instead.
+
     Args:
         config_path: Optional path to a YAML agent-definition file. Mutually
             exclusive with ``agents``.
@@ -103,8 +110,21 @@ def run_server(
             to construct the server. Defaults to a ``uvicorn.Server`` builder.
             Tests inject a fake to avoid binding a TCP port.
         **yaml_agentos_kwargs: Extra keyword arguments forwarded to
-            ``YamlAgentOS.__init__``.
+            ``YamlAgentOS.__init__``. Must include ``authorization=True``
+            (and corresponding ``authorization_config``) for production.
+
+    Raises:
+        RuntimeError: If ``authorization=True`` is not passed in
+            ``yaml_agentos_kwargs`` (VQ010 refuse-to-start guard).
     """
+    if yaml_agentos_kwargs.get("authorization") is not True:
+        raise RuntimeError(
+            "Production entry point 'run_server' refuses to start without explicit "
+            "'authorization=True' (VQ010). Configure native JWT authorization with "
+            "AuthorizationConfig(user_isolation=True, ...) to start the server. "
+            "For dev/test workflows without JWT, use create_app() instead."
+        )
+
     app = create_app(
         config_path=config_path,
         agents=agents,
