@@ -88,3 +88,38 @@ class TestJwtIsolationL03:
         assert len(sessions_a2) == 1
         assert sessions_a2[0]["session_id"] == session_id_a
         assert sessions_a2[0]["user_id"] == "tenant-a:alice"
+
+    def test_t2_cross_tenant_session_404(
+        self,
+        l03_client: TestClient,
+        alice_a_headers: dict[str, str],
+        alice_b_headers: dict[str, str],
+    ) -> None:
+        """T2: Alice under tenant-b reading tenant-a's session_id receives 404 (native masking)."""
+        # 1. Create a session as alice under tenant-a
+        run_resp_a = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Confidential tenant A message", "stream": "false"},
+            headers=alice_a_headers,
+        )
+        assert run_resp_a.status_code == 200, run_resp_a.text
+        session_id_a = run_resp_a.json().get("session_id")
+        assert session_id_a is not None
+
+        # 2. alice under tenant-a can read her own session -> 200
+        get_resp_a = l03_client.get(
+            f"/sessions/{session_id_a}",
+            headers=alice_a_headers,
+        )
+        assert get_resp_a.status_code == 200
+        assert get_resp_a.json()["session_id"] == session_id_a
+        assert get_resp_a.json()["user_id"] == "tenant-a:alice"
+
+        # 3. alice under tenant-b attempts to read tenant-a's session -> 404
+        get_resp_b = l03_client.get(
+            f"/sessions/{session_id_a}",
+            headers=alice_b_headers,
+        )
+        assert get_resp_b.status_code == 404
+        error_detail = get_resp_b.json().get("detail", "")
+        assert "not found" in error_detail.lower()
