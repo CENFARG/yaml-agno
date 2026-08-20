@@ -86,9 +86,9 @@ class TestYamlAgentOSInit:
         assert os_app.authorization is False
 
     def test_init_forwards_authorization_true(self) -> None:
-        """Scenario 8: explicit ``authorization=True`` is forwarded to the parent."""
+        """Scenario 8: explicit ``authorization=True`` is forwarded to the parent (with mount_tenant_context=False per JD-01)."""
         agent = _build_test_agent()
-        os_app = YamlAgentOS(agents=[agent], authorization=True)
+        os_app = YamlAgentOS(agents=[agent], authorization=True, mount_tenant_context=False)
 
         assert os_app.authorization is True
 
