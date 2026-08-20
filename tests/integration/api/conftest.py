@@ -46,7 +46,14 @@ __all__ = [
 ]
 
 # Standard scopes for regular user tokens in L-03 tests
-USER_SCOPES = ["agents:run", "agents:read", "sessions:read", "sessions:write"]
+USER_SCOPES = [
+    "agents:run",
+    "agents:read",
+    "sessions:read",
+    "sessions:write",
+    "memories:read",
+    "memories:write",
+]
 
 
 @pytest.fixture
