@@ -19,9 +19,31 @@ from agno.os.config import AuthorizationConfig
 from fastapi.testclient import TestClient
 
 from tests.integration.helpers import DevJwtIssuer, StaticReplyModel
+from tests.integration.helpers.conftest import (
+    authorization_config,
+    dev_jwt_issuer,
+    dev_jwt_signing_key,
+    dev_token,
+)
 from yaml_agno.api.app import YamlAgentOS
 
-pytest_plugins = ["tests.integration.helpers.conftest"]
+__all__ = [
+    "USER_SCOPES",
+    "admin_headers",
+    "admin_token",
+    "alice_a_headers",
+    "alice_a_token",
+    "alice_b_headers",
+    "alice_b_token",
+    "authorization_config",
+    "dev_jwt_issuer",
+    "dev_jwt_signing_key",
+    "dev_token",
+    "l03_agent",
+    "l03_app",
+    "l03_client",
+    "l03_db",
+]
 
 # Standard scopes for regular user tokens in L-03 tests
 USER_SCOPES = ["agents:run", "agents:read", "sessions:read", "sessions:write"]
