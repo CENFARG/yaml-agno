@@ -8,10 +8,12 @@ via an injectable factory and invokes ``.run()`` exactly once.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from agno.agent import Agent
+from agno.os.config import AuthorizationConfig
 from fastapi import FastAPI
 
 from yaml_agno.runtime.server import create_app, run_server
@@ -55,6 +57,8 @@ class TestCreateApp:
 
         Verified by hitting the inherited ``GET /agents`` endpoint, which Agno
         populates from the agents list forwarded to ``super().__init__``.
+        In dev mode, requests pass an ``X-Tenant-Id`` header and the app is
+        configured with a ``memory_cfg`` principal fallback.
         """
         from fastapi.testclient import TestClient
 
@@ -67,11 +71,14 @@ class TestCreateApp:
             encoding="utf-8",
         )
 
-        app = create_app(config_path=str(yaml_file))
+        app = create_app(
+            config_path=str(yaml_file),
+            memory_cfg=SimpleNamespace(system_user_id="dev-user"),
+        )
 
         assert isinstance(app, FastAPI)
         client: Any = TestClient(app)
-        response = client.get("/agents")
+        response = client.get("/agents", headers={"X-Tenant-Id": "dev-tenant"})
 
         assert response.status_code == 200
         agent_names = {entry["name"] for entry in response.json()}
@@ -81,7 +88,9 @@ class TestCreateApp:
 class TestRunServer:
     """RED→GREEN tests for ``runtime.run_server`` with injectable factory."""
 
-    def test_run_server_uses_injected_server_factory(self) -> None:
+    def test_run_server_uses_injected_server_factory(
+        self, authorization_config: AuthorizationConfig
+    ) -> None:
         """Scenario 11: ``server_factory`` is invoked once with app + host + port."""
         captured: dict[str, Any] = {}
 
@@ -106,6 +115,9 @@ class TestRunServer:
             host="127.0.0.1",
             port=0,
             server_factory=fake_factory,
+            authorization=True,
+            authorization_config=authorization_config,
+            mount_tenant_context=False,
         )
 
         assert isinstance(captured["app"], FastAPI)
