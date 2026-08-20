@@ -66,8 +66,8 @@ Conftest: `tests/integration/api/conftest.py` — `l03_app` fixture (`YamlAgentO
 - [x] 3.3 **T3** memories isolated: B list/read of A's memory → empty/404. Commit: `test(auth): L-03 T3 memory isolation (S5a.1)`
 - [x] 3.4 **T4** alice/B fetches alice/A's run in session → **404** (runs masked). Commit: `test(auth): L-03 T4 cross-tenant run 404 (S5a.1)`
 - [x] 3.5 **T5** admin (`scopes=["agent_os:admin"]`) lists BOTH tenants' sessions. Commit: `test(auth): L-03 T5 admin sees all (S5a.1)`
-- [ ] 3.6 **T6** dev-header app (`authorization=False`, `mount_tenant_context=True`, separate instance) still green — `X-Tenant-Id` path regression. Commit: `test(auth): L-03 T6 dev-header path regression (S5a.1)`
-- [ ] 3.7 **T7** negatives: no token / invalid signature / expired token → **401**. Commit: `test(auth): L-03 T7 auth negatives 401 (S5a.1)`
+- [x] 3.6 **T6** dev-header app (`authorization=False`, `mount_tenant_context=True`, separate instance) still green — `X-Tenant-Id` path regression. Commit: `test(auth): L-03 T6 dev-header path regression (S5a.1)`
+- [x] 3.7 **T7** negatives: no token / invalid signature / expired token → **401**. Commit: `test(auth): L-03 T7 auth negatives 401 (S5a.1)`
 
 Each: `python -m pytest tests/integration/api/test_jwt_isolation_l03.py -q` (green).
 
