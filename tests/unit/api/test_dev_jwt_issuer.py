@@ -77,7 +77,7 @@ def test_dev_jwt_issuer_rejects_colon_in_principal_id() -> None:
 def test_dev_jwt_issuer_rejects_reserved_principals(tenant_id: str, principal_id: str) -> None:
     """Fail-fast if sub or principal resolves to a system-reserved principal."""
     issuer = DevJwtIssuer(TEST_KEY)
-    with pytest.raises(ValueError, match="[Rr]eserved|[Cc]olon|tenant_id|principal_id"):
+    with pytest.raises(ValueError, match=r"[Rr]eserved|[Cc]olon|tenant_id|principal_id"):
         issuer.mint(tenant_id, principal_id)
 
 
