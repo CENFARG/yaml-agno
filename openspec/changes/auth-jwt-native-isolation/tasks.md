@@ -44,7 +44,7 @@ Unit boundary rule: if a unit's actual diff exceeds 400 lines at merge time, SPL
 - [x] 1.1 **RED** Write `tests/unit/api/test_dev_jwt_issuer.py`: composite built via `resolve_user_id` (no inline `f"{}:{}"`); fail-fast on `:` in tenant and in principal; fail-fast on reserved principals (`sa:x`, `__scheduler__`, `__oauth__:x`); claims `sub`/`scopes`/`iat`/`exp`; `auth_header()` shape. `python -m pytest tests/unit/api/test_dev_jwt_issuer.py -q` → ImportError. Commit: `test(auth): RED DevJwtIssuer contract tests (S5a.1)`
 - [x] 1.2 **GREEN** Create `tests/integration/helpers/__init__.py` + `dev_jwt_issuer.py` — `DevJwtIssuer.mint()` + `auth_header()`, delegates to `resolve_user_id()`, guards via `is_reserved_principal`, HS256 via PyJWT. Tests green. Commit: `feat(tests): DevJwtIssuer HS256 helper (S5a.1)`
 - [x] 1.3 Create `tests/integration/helpers/conftest.py` fixtures: `dev_jwt_signing_key` (session, `secrets.token_urlsafe(48)`), `authorization_config` (`AuthorizationConfig(verification_keys=[key], algorithm="HS256", user_isolation=True)`), `dev_token` factory. Commit: `test(auth): signing-key + authorization fixtures for L-03 (S5a.1)`
-- [ ] 1.4 Create `tests/integration/helpers/static_reply_model.py` — no-network `Model` subclass (public `agno.models.base.Model` extension point) returning a canned reply. Commit: `test(auth): StaticReplyModel no-network model (S5a.1)`
+- [x] 1.4 Create `tests/integration/helpers/static_reply_model.py` — no-network `Model` subclass (public `agno.models.base.Model` extension point) returning a canned reply. Commit: `test(auth): StaticReplyModel no-network model (S5a.1)`
 - [ ] 1.5 Verify: `python -m pytest tests/unit/api/test_dev_jwt_issuer.py tests/integration -q` green; `ruff check tests/` clean. No commit.
 
 ## Phase 2 — Wiring YamlAgentOS (RED → GREEN)
@@ -61,8 +61,8 @@ Unit boundary rule: if a unit's actual diff exceeds 400 lines at merge time, SPL
 
 Conftest: `tests/integration/api/conftest.py` — `l03_app` fixture (`YamlAgentOS(agents=[StaticReplyAgent], authorization=True, authorization_config=..., mount_tenant_context=False, db=None)`), `l03_client`, token fixtures `alice_a`/`alice_b`/`admin_token`.
 
-- [ ] 3.1 Scaffold `tests/integration/api/test_jwt_isolation_l03.py` + conftest; **T1** same `alice` under tenants A/B → disjoint session buckets. Commit: `test(auth): L-03 T1 disjoint session buckets (S5a.1)`
-- [ ] 3.2 **T2** alice/B reads alice/A's session id → **404** (native masking). Commit: `test(auth): L-03 T2 cross-tenant session 404 (S5a.1)`
+- [x] 3.1 Scaffold `tests/integration/api/test_jwt_isolation_l03.py` + conftest; **T1** same `alice` under tenants A/B → disjoint session buckets. Commit: `test(auth): L-03 T1 disjoint session buckets (S5a.1)`
+- [x] 3.2 **T2** alice/B reads alice/A's session id → **404** (native masking). Commit: `test(auth): L-03 T2 cross-tenant session 404 (S5a.1)`
 - [ ] 3.3 **T3** memories isolated: B list/read of A's memory → empty/404. Commit: `test(auth): L-03 T3 memory isolation (S5a.1)`
 - [ ] 3.4 **T4** alice/B fetches alice/A's run in session → **404** (runs masked). Commit: `test(auth): L-03 T4 cross-tenant run 404 (S5a.1)`
 - [ ] 3.5 **T5** admin (`scopes=["agent_os:admin"]`) lists BOTH tenants' sessions. Commit: `test(auth): L-03 T5 admin sees all (S5a.1)`
