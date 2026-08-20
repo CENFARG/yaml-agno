@@ -24,7 +24,6 @@ import pytest
 from pytest_mock import MockerFixture
 
 from yaml_agno.agentos.authorization_adapter import (
-    AuthorizationAdapter,
     AuthorizationBuildError,
 )
 from yaml_agno.models.config.agentos_config import AuthorizationSettings
