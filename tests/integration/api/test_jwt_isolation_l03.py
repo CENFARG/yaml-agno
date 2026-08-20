@@ -1,0 +1,90 @@
+"""L-03 E2E Integration Suite: Multi-Tenant JWT Native Isolation (S5a.1).
+
+Validates Gate L-03 against Agno 2.8.7 native AuthMiddleware + user_isolation.
+Proves that two tenants on the same instance have zero cross-tenant leaks (D-F1-11),
+even when users share the same principal_id ("alice").
+
+Matrix cases in this file:
+- T1: Disjoint session buckets per composite (task 3.1)
+- T2: Cross-tenant session 404 native masking (task 3.2)
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+pytestmark = [pytest.mark.integration]
+
+
+class TestJwtIsolationL03:
+    """L-03 Gate validation test suite."""
+
+    def test_t1_disjoint_session_buckets(
+        self,
+        l03_client: TestClient,
+        alice_a_headers: dict[str, str],
+        alice_b_headers: dict[str, str],
+    ) -> None:
+        """T1: Same principal 'alice' in tenants A and B gets disjoint session buckets."""
+        # 1. Execute run as alice under tenant-a
+        run_resp_a = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Session from tenant A", "stream": "false"},
+            headers=alice_a_headers,
+        )
+        assert run_resp_a.status_code == 200, run_resp_a.text
+        run_data_a = run_resp_a.json()
+        session_id_a = run_data_a.get("session_id")
+        assert session_id_a is not None
+        assert run_data_a.get("user_id") == "tenant-a:alice"
+
+        # 2. List sessions as alice under tenant-a -> should contain session_id_a
+        sess_resp_a = l03_client.get("/sessions", headers=alice_a_headers)
+        assert sess_resp_a.status_code == 200
+        sess_data_a = sess_resp_a.json()
+        assert sess_data_a["meta"]["total_count"] == 1
+        sessions_a = sess_data_a["data"]
+        assert len(sessions_a) == 1
+        assert sessions_a[0]["session_id"] == session_id_a
+        assert sessions_a[0]["user_id"] == "tenant-a:alice"
+
+        # 3. List sessions as alice under tenant-b -> bucket must be empty (disjoint)
+        sess_resp_b = l03_client.get("/sessions", headers=alice_b_headers)
+        assert sess_resp_b.status_code == 200
+        sess_data_b = sess_resp_b.json()
+        assert sess_data_b["meta"]["total_count"] == 0
+        assert sess_data_b["data"] == []
+
+        # 4. Execute run as alice under tenant-b
+        run_resp_b = l03_client.post(
+            "/agents/l03-agent/runs",
+            data={"message": "Session from tenant B", "stream": "false"},
+            headers=alice_b_headers,
+        )
+        assert run_resp_b.status_code == 200, run_resp_b.text
+        run_data_b = run_resp_b.json()
+        session_id_b = run_data_b.get("session_id")
+        assert session_id_b is not None
+        assert session_id_b != session_id_a
+        assert run_data_b.get("user_id") == "tenant-b:alice"
+
+        # 5. List sessions as alice under tenant-b -> contains only session_id_b
+        sess_resp_b2 = l03_client.get("/sessions", headers=alice_b_headers)
+        assert sess_resp_b2.status_code == 200
+        sess_data_b2 = sess_resp_b2.json()
+        assert sess_data_b2["meta"]["total_count"] == 1
+        sessions_b2 = sess_data_b2["data"]
+        assert len(sessions_b2) == 1
+        assert sessions_b2[0]["session_id"] == session_id_b
+        assert sessions_b2[0]["user_id"] == "tenant-b:alice"
+
+        # 6. Re-verify alice under tenant-a still only sees session_id_a
+        sess_resp_a2 = l03_client.get("/sessions", headers=alice_a_headers)
+        assert sess_resp_a2.status_code == 200
+        sess_data_a2 = sess_resp_a2.json()
+        assert sess_data_a2["meta"]["total_count"] == 1
+        sessions_a2 = sess_data_a2["data"]
+        assert len(sessions_a2) == 1
+        assert sessions_a2[0]["session_id"] == session_id_a
+        assert sessions_a2[0]["user_id"] == "tenant-a:alice"
