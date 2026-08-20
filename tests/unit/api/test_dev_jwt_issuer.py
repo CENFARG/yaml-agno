@@ -9,13 +9,17 @@ Verifies the test-only dev JWT issuer helper:
 """
 
 import datetime
+from collections.abc import Callable
 
 import jwt
 import pytest
+from agno.os.config import AuthorizationConfig
 from pytest_mock import MockerFixture
 
 import yaml_agno.memory
 from tests.integration.helpers.dev_jwt_issuer import DevJwtIssuer
+
+pytest_plugins = ["tests.integration.helpers.conftest"]
 
 TEST_KEY = "dev-secret-signing-key-for-unit-tests-only-48bytes"
 
@@ -107,3 +111,26 @@ def test_dev_jwt_issuer_empty_signing_key_rejected() -> None:
     """DevJwtIssuer refuses empty signing keys."""
     with pytest.raises(ValueError, match="signing_key"):
         DevJwtIssuer("")
+
+
+def test_dev_jwt_signing_key_fixture(dev_jwt_signing_key: str) -> None:
+    """dev_jwt_signing_key fixture returns a random 48-byte URL-safe string."""
+    assert isinstance(dev_jwt_signing_key, str)
+    assert len(dev_jwt_signing_key) >= 48
+
+
+def test_authorization_config_fixture(
+    authorization_config: AuthorizationConfig, dev_jwt_signing_key: str
+) -> None:
+    """authorization_config fixture provides HS256 config with verification key and user_isolation."""
+    assert authorization_config.verification_keys == [dev_jwt_signing_key]
+    assert authorization_config.algorithm == "HS256"
+    assert authorization_config.user_isolation is True
+
+
+def test_dev_token_factory_fixture(dev_token: Callable[..., str], dev_jwt_signing_key: str) -> None:
+    """dev_token fixture mints valid tokens with the session key."""
+    token = dev_token("tenant-x", "user-y", scopes=["agents:run"])
+    payload = jwt.decode(token, dev_jwt_signing_key, algorithms=["HS256"])
+    assert payload["sub"] == "tenant-x:user-y"
+    assert payload["scopes"] == ["agents:run"]
