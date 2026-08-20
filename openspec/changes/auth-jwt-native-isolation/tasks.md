@@ -37,7 +37,7 @@ Unit boundary rule: if a unit's actual diff exceeds 400 lines at merge time, SPL
 
 ## Phase 0 — Baseline
 
-- [ ] 0.1 On `main`, clean tree. Verify `agno==2.8.7` and `from agno.os.middleware.jwt import is_reserved_principal` imports. Run `python -m pytest -m unit -q` → green baseline. No commit.
+- [x] 0.1 On `main`, clean tree. Verify `agno==2.8.7` and `from agno.os.middleware.jwt import is_reserved_principal` imports. Run `python -m pytest -m unit -q` → green baseline. No commit.
 
 ## Phase 1 — Dev issuer helper (test-only, with own unit tests)
 
@@ -45,7 +45,7 @@ Unit boundary rule: if a unit's actual diff exceeds 400 lines at merge time, SPL
 - [x] 1.2 **GREEN** Create `tests/integration/helpers/__init__.py` + `dev_jwt_issuer.py` — `DevJwtIssuer.mint()` + `auth_header()`, delegates to `resolve_user_id()`, guards via `is_reserved_principal`, HS256 via PyJWT. Tests green. Commit: `feat(tests): DevJwtIssuer HS256 helper (S5a.1)`
 - [x] 1.3 Create `tests/integration/helpers/conftest.py` fixtures: `dev_jwt_signing_key` (session, `secrets.token_urlsafe(48)`), `authorization_config` (`AuthorizationConfig(verification_keys=[key], algorithm="HS256", user_isolation=True)`), `dev_token` factory. Commit: `test(auth): signing-key + authorization fixtures for L-03 (S5a.1)`
 - [x] 1.4 Create `tests/integration/helpers/static_reply_model.py` — no-network `Model` subclass (public `agno.models.base.Model` extension point) returning a canned reply. Commit: `test(auth): StaticReplyModel no-network model (S5a.1)`
-- [ ] 1.5 Verify: `python -m pytest tests/unit/api/test_dev_jwt_issuer.py tests/integration -q` green; `ruff check tests/` clean. No commit.
+- [x] 1.5 Verify: `python -m pytest tests/unit/api/test_dev_jwt_issuer.py tests/integration -q` green; `ruff check tests/` clean. No commit.
 
 ## Phase 2 — Wiring YamlAgentOS (RED → GREEN)
 
@@ -55,7 +55,7 @@ Unit boundary rule: if a unit's actual diff exceeds 400 lines at merge time, SPL
 - [x] 2.4 **GREEN** `src/yaml_agno/runtime/server.py`: first statement in `run_server` refuses unless `yaml_agentos_kwargs.get("authorization") is True` → `RuntimeError`. Tests green. Commit: `feat(runtime): VQ010 run_server refuse without authorization (S5a.1)`
 - [x] 2.5 **RED** `tests/unit/api/middleware/test_tenant_context.py`: remove JD-01 JWT-precedence class + `_stamp_jwt_claims_middleware` + `_build_jwt_test_app` (claims no longer read); keep golden-path/fail-fast/delegation suites. Suite green. Commit: `test(middleware): drop dead JWT-claim extraction tests (S5a.1)`
 - [x] 2.6 **GREEN** `src/yaml_agno/api/middleware/tenant_context.py`: dev-only contract — remove `_extract_tenant_id` claim logic + `_extract_raw_user_id`; header → `resolve_user_id` only; update module/class docstrings. Suite green. Commit: `refactor(middleware): dev-only header contract, drop tenant_claim/user_sub (S5a.1)`
-- [ ] 2.7 Verify: `python -m pytest tests/unit -q` green; `ruff check .` + `mypy src/yaml_agno` clean. No commit.
+- [x] 2.7 Verify: `python -m pytest tests/unit -q` green; `ruff check .` + `mypy src/yaml_agno` clean. No commit.
 
 ## Phase 3 — L-03 E2E suite (core; one task per matrix case)
 
@@ -74,15 +74,15 @@ Each: `python -m pytest tests/integration/api/test_jwt_isolation_l03.py -q` (gre
 ## Phase 4 — Docs SPEC_06 / SPEC_19
 
 - [x] 4.1 `specs/SPEC_06_API_AND_AX.md` §3.1 approach rewrite (composite minted into `sub` at issuance; Agno threads natively; delete "middleware extracts `tnt`" narrative); §3.2 middleware = dev/no-JWT only + JD-01 mutual exclusion; §2 `get_app` snippet. Commit: `docs(spec): SPEC_06 §3 JWT-native isolation contract (S5a.1)`
-- [ ] 4.2 `specs/SPEC_19_SECURITY_AUTH_API_SURFACE.md`: supersede `build_jwt_middleware` narrative with AuthorizationAdapter (S5a.0) + agno `build_jwt_middleware_kwargs`; delete "TenantContextMiddleware resolves sub→composite"; admin = native `agent_os:admin`; reference `user_id_claim` escape hatch (`jwt.py:547`). Commit: `docs(spec): SPEC_19 native auth + admin contract (S5a.1)`
-- [ ] 4.3 Grep `specs/` + `src/` for stale `tenant_claim` / `user_sub` / `tnt` middleware refs → none. No commit.
+- [x] 4.2 `specs/SPEC_19_SECURITY_AUTH_API_SURFACE.md`: supersede `build_jwt_middleware` narrative with AuthorizationAdapter (S5a.0) + agno `build_jwt_middleware_kwargs`; delete "TenantContextMiddleware resolves sub→composite"; admin = native `agent_os:admin`; reference `user_id_claim` escape hatch (`jwt.py:547`). Commit: `docs(spec): SPEC_19 native auth + admin contract (S5a.1)`
+- [x] 4.3 Grep `specs/` + `src/` for stale `tenant_claim` / `user_sub` / `tnt` middleware refs → none. No commit.
 
 ## Phase 5 — Final verification
 
-- [ ] 5.1 `python -m pytest -q` → full suite green.
-- [ ] 5.2 `ruff check .` and `mypy src/yaml_agno` → clean.
-- [ ] 5.3 `python scripts/spec_gate.py all` → 0 violations.
-- [ ] 5.4 Greps: **VQ010** `rg -n 'authorization=True|user_isolation' src/yaml_agno/api/ src/yaml_agno/agentos/`; **VQ012** `rg -n 'f"\{tenant_id\}"|resolve_user_id' src/yaml_agno/api/` (no inline composite); CI gate `rg -n "DevJwtIssuer" src/` → exit ≠ 0 (dev helper never in `src/`).
+- [x] 5.1 `python -m pytest -q` → full suite green.
+- [x] 5.2 `ruff check .` and `mypy src/yaml_agno` → clean.
+- [x] 5.3 `python scripts/spec_gate.py all` → 0 violations.
+- [x] 5.4 Greps: **VQ010** `rg -n 'authorization=True|user_isolation' src/yaml_agno/api/ src/yaml_agno/agentos/`; **VQ012** `rg -n 'f"\{tenant_id\}"|resolve_user_id' src/yaml_agno/api/` (no inline composite); CI gate `rg -n "DevJwtIssuer" src/` → exit ≠ 0 (dev helper never in `src/`).
 
 ## Dependency Graph
 
