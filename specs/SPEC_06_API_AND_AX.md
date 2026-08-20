@@ -1,7 +1,7 @@
 ---
 Spec_ID: "SPEC_06"
 Title: "API and AX - YamlAgentOS(AgentOS) Inheritance Layer"
-Version: "0.5.0-iter5"
+Version: "0.6.0-iter6"
 Maturity_Level: "Semilla"
 Status: "Draft"
 Target_Agent: "sdd-apply"
@@ -9,8 +9,8 @@ Context_Tags: ["#FastAPI", "#AgentOS", "#Inheritance", "#REST", "#AX", "#MCP", "
 Dependency_Hashes: ["SPEC_00", "SPEC_01", "SPEC_02", "SPEC_03", "SPEC_04"]
 Group: "G7-ControlPlane-API"
 Read_Order: 18
-Last_Updated: "2026-07-02"
-Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared resolve_user_id() (SPEC_04) to build the composite user_id instead of constructing f'{tenant_id}:{raw_user_id}' inline. resolve_user_id is the single source of truth for the composite format (same resolver for HTTP and autonomous runs). No other behavior change. Iter 4 (inheritance reformulation). Replaces parallel AgentOS composition with YamlAgentOS(AgentOS) subclass pattern: yaml-agno now INHERITS AgentOS and overrides get_app() to register extensions via app.include_router()/app.add_middleware() after super().get_app(). Adds composite user_id multi-tenancy (tenant_id:raw_user_id) layered on AgentOS native user_isolation (AuthorizationConfig). Resolves 10 corrections: inherit-not-compose; composite user_id + user_isolation always-on (NULL-bucket footgun documented via FODA); no gaps/ folder (SOTA src/api/ layout); readiness probe decoupled from optional external adapters; config loading consumes core-cenf-py ConfigManager; backend sanitization/validation mandatory directive; AX discovery via native MCP server (mcp_server) instead of parallel REST endpoint; reinforce AgentOS coding patterns."
+Last_Updated: "2026-08-19"
+Revision_Note: "Iter 6 (S5a.1 - JWT-native isolation contract). Option C hybrid ratified in design.md: composite identity '{tenant_id}:{principal_id}' is MINTED directly into the JWT 'sub' claim at emission time via resolve_user_id() (dev issuer in tests/integration/helpers/dev_jwt_issuer.py; in S5b Keycloak will decide token mapper vs user_id_claim). Agno 2.8.7 native AuthMiddleware validates JWT -> stamps request.state.user_id = sub -> get_scoped_user_id threads composite into every user-scoped read/write (zero yaml-agno code in the JWT path). Eliminates obsolete narrative of middleware extracting tenant_claim/user_sub claims. TenantContextMiddleware is restricted to dev/no-JWT mode ONLY (X-Tenant-Id header -> resolve_user_id). Establishes JD-01 structural mutual exclusion (YamlAgentOS raises ValueError if authorization=True and mount_tenant_context=True). Updates §2 get_app snippet with explicit authorization_config kwarg and conditional middleware mount. Validates VQ010 (always-on production auth via run_server) and VQ012 (single composite resolver via resolve_user_id). Iter 5: TenantContextMiddleware delegates to resolve_user_id() (SPEC_04) to build composite. Iter 4: Inheritance reformulation YamlAgentOS(AgentOS)."
 ---
 
 # SPEC_06_API_AND_AX
@@ -20,7 +20,7 @@ Revision_Note: "Iter 5. TenantContextMiddleware now DELEGATES to the shared reso
 > yaml-agno adds ONLY what AgentOS lacks:
 >
 > 1. **Wiring YAML -> AgentOS** — translate YAML files into the `agents=[...]` / `teams=[...]` / `workflows=[...]` lists that `YamlAgentOS(...)` consumes. This is yaml-agno's CORE job. Config is loaded via `core-cenf-py` `ConfigManager` (no direct `os.environ`).
-> 2. **Multi-tenant via composite user_id + native user_isolation** — a `TenantContextMiddleware` extracts `tenant_id` + principal from the request, then DELEGATES to the shared `resolve_user_id()` (SPEC_04 §1.4) to set `request.state.user_id` to the composite `"{tenant_id}:{principal_id}"` BEFORE Agno handlers read it; `AuthorizationConfig(user_isolation=True)` threads that composite through every scoped DB read. `resolve_user_id` is shared with SPEC_04 (memory); same composite for HTTP and autonomous runs. `authorization=True` + `user_isolation=True` are ALWAYS ON (never None — avoids the NULL-bucket footgun).
+> 2. **Multi-tenant via composite user_id + native user_isolation** — in production JWT mode (`authorization=True`), the composite `"{tenant_id}:{principal_id}"` is minted into the JWT `sub` at issuance (via `resolve_user_id()`, SPEC_04 §1.4; VQ012); Agno's native `AuthMiddleware` validates the token and stamps `request.state.user_id = sub`, and `AuthorizationConfig(user_isolation=True)` threads that composite through every scoped DB read/write (zero yaml-agno code on the JWT path). In dev/non-JWT mode (`authorization=False` + `mount_tenant_context=True`), `TenantContextMiddleware` extracts `tenant_id` from the `X-Tenant-Id` header and delegates to `resolve_user_id()`. JD-01 enforces structural mutual exclusion between JWT mode and `TenantContextMiddleware`. `authorization=True` + `user_isolation=True` are ALWAYS ON in production (enforced at startup by `run_server`, VQ010) to avoid the NULL-bucket footgun.
 > 3. **Readiness + Liveness routers** — AgentOS ships only `GET /health`. yaml-agno adds DB-gated readiness and process liveness as factory routers (`get_readiness_router` / `get_liveness_router`) in the SAME style as `get_health_router`.
 > 4. **Rate-limit middleware** — AgentOS has zero rate limiting. yaml-agno adds `RateLimitMiddleware` keyed on the composite user_id.
 >
@@ -113,18 +113,20 @@ def load_site_from_config(cfg: ConfigManager) -> dict[str, Any]:
 
 ```python
 # yaml-agno/src/api/app.py
-"""YamlAgentOS: yaml-agno's AgentOS subclass.
+\"\"\"YamlAgentOS: yaml-agno's AgentOS subclass (SPEC_06 slice A+B, S5a.1).
 
 Inherits AgentOS (agno/os/app.py:221). Overrides get_app() to register the few
 extensions AgentOS lacks (§4) AFTER super().get_app() has mounted every native
 router. Native toggles (authorization, mcp_server, a2a_interface) are
 passed to super().__init__, NOT to AgnoAPISettings.
-"""
+\"\"\"
 
 from typing import Any, Optional
 
 from agno.app import AgentOS
 from agno.os.config import AuthorizationConfig
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 from yaml_agno.config.loader import load_site_from_config
 from yaml_agno.factory.agent_factory import build_agents
@@ -134,79 +136,139 @@ from yaml_agno.db.session import resolve_agentos_db          # SPEC_03
 from yaml_agno.api.health import get_readiness_router, get_liveness_router
 from yaml_agno.api.middleware.tenant_context import TenantContextMiddleware
 from yaml_agno.api.middleware.rate_limit import RateLimitMiddleware
+from yaml_agno.memory.user_identity import UserIdentityResolutionError
 
 
 class YamlAgentOS(AgentOS):
-    """yaml-agno's subclass of AgentOS.
+    \"\"\"yaml-agno's subclass of AgentOS.
 
     Inherits every native router, middleware, and behaviour from AgentOS and
     adds only the genuine extensions (multi-tenant context, readiness/liveness,
-    rate-limit). authorization=True + user_isolation=True are ALWAYS ON.
+    rate-limit).
+
+    Supports two mutually exclusive authentication and tenant isolation modes (JD-01):
+    1. JWT Mode (Production / L-03): authorization=True and authorization_config
+       passed with user_isolation=True. Native Agno AuthMiddleware validates JWT
+       and scopes operations from composite sub. TenantContextMiddleware is NOT mounted.
+    2. Dev Header Mode (Non-production): authorization=False + mount_tenant_context=True.
+       TenantContextMiddleware extracts X-Tenant-Id header and delegates to resolve_user_id.
 
     @ai-directive: this class MUST NOT define its own /run, /sessions, or
     /agents config routes. All execution routes come from the inherited
     AgentOS.get_app(). Extensions are registered in get_app() after super().
-    """
+    \"\"\"
 
-    def __init__(self, cfg, base_app: Any = None) -> None:
-        """Initialize YamlAgentOS from the core-cenf-py ConfigManager.
+    def __init__(
+        self,
+        cfg=None,
+        *,
+        agents: Any = None,
+        config_path: str | None = None,
+        authorization: bool = False,
+        authorization_config: AuthorizationConfig | None = None,
+        mount_health: bool = True,
+        mount_tenant_context: bool = True,
+        memory_cfg: Any = None,
+        base_app: Any = None,
+        **agentos_kwargs: Any,
+    ) -> None:
+        \"\"\"Initialize YamlAgentOS from ConfigManager or agent sources.
 
         Args:
             cfg: core-cenf-py ConfigManager (never os.environ).
-            base_app: Optional base FastAPI app forwarded to AgentOS.
+            agents: Optional list of pre-built agents.
+            config_path: Optional path to YAML agent definitions.
+            authorization: Enable native AgentOS JWT authorization.
+            authorization_config: AuthorizationConfig with user_isolation=True.
+            mount_health: Mount /health/liveness and /health/readiness.
+            mount_tenant_context: Mount TenantContextMiddleware (dev only).
+            memory_cfg: YAML memory block for principal fallback.
+            base_app: Optional base FastAPI app.
+            **agentos_kwargs: Forwarded to super().__init__.
 
-        @ai-directive: authorization=True and user_isolation=True are
-        NON-NEGOTIABLE and ALWAYS ON. Letting user_id be None triggers the
-        NULL-bucket footgun (§3). Never disable either.
-        """
-        site = load_site_from_config(cfg)
-        agents = build_agents(site)
-        teams = build_teams(site)
-        workflows = build_workflows(site)
-        agentos_db = resolve_agentos_db(site)
+        @ai-directive: in production, authorization=True and user_isolation=True
+        are NON-NEGOTIABLE and ALWAYS ON (enforced by run_server, VQ010). Letting
+        user_id be None triggers the NULL-bucket footgun (§3). JD-01 enforces
+        mutual exclusion: authorization=True with mount_tenant_context=True raises
+        ValueError.
+        \"\"\"
+        if authorization and mount_tenant_context:
+            raise ValueError(
+                "JD-01 mutual exclusion: 'authorization=True' (JWT mode) and "
+                "'mount_tenant_context=True' (dev-header middleware) cannot be used together."
+            )
 
-        enable_mcp = cfg.get_string("yaml_agno.mcp.enabled") == "true"
-        enable_a2a = cfg.get_string("yaml_agno.a2a.enabled") == "true"
+        if cfg is not None:
+            site = load_site_from_config(cfg)
+            agents = build_agents(site)
+            teams = build_teams(site)
+            workflows = build_workflows(site)
+            agentos_db = resolve_agentos_db(site)
+            enable_mcp = cfg.get_string("yaml_agno.mcp.enabled") == "true"
+            enable_a2a = cfg.get_string("yaml_agno.a2a.enabled") == "true"
+        else:
+            teams = agentos_kwargs.pop("teams", None)
+            workflows = agentos_kwargs.pop("workflows", None)
+            agentos_db = agentos_kwargs.pop("db", None)
+            enable_mcp = agentos_kwargs.pop("mcp_server", False)
+            enable_a2a = agentos_kwargs.pop("a2a_interface", False)
+
+        self._mount_health = mount_health
+        self._mount_tenant_context = mount_tenant_context
+        self._memory_cfg = memory_cfg
 
         super().__init__(
             agents=agents,
             teams=teams,
             workflows=workflows,
             db=agentos_db,
-            # Native MCP server carries run_agent/run_team/run_workflow over MCP
-            # (os/mcp.py:227-264). AX discovery path is MCP, not a parallel REST
-            # endpoint (§5).
             mcp_server=enable_mcp,
             a2a_interface=enable_a2a,
-            # Multi-tenancy ALWAYS ON: composite user_id + native user_isolation.
-            authorization=True,
-            authorization_config=AuthorizationConfig(user_isolation=True),
+            authorization=authorization,
+            authorization_config=authorization_config,
             base_app=base_app,
+            **agentos_kwargs,
         )
 
     def get_app(self) -> Any:
-        """Return the FastAPI app with native routers plus yaml-agno extensions.
+        \"\"\"Return the FastAPI app with native routers plus yaml-agno extensions.
 
         Overrides AgentOS.get_app (app.py:884). Calls super().get_app() so the
         inherited lifespan, exception handlers, DB auto-discovery, JWT/RBAC,
         CORS, and trailing-slash middleware are preserved, then registers the
         extensions AgentOS lacks.
 
+        In dev mode (authorization=False, mount_tenant_context=True),
+        TenantContextMiddleware is mounted. In JWT mode (authorization=True),
+        Agno's native AuthMiddleware handles auth and user isolation, and
+        TenantContextMiddleware is NOT mounted (JD-01).
+
         @ai-directive: register extensions ONLY here, AFTER super().get_app().
         Do NOT override _add_built_in_routes or _add_router — those are
         AgentOS internals and super().get_app() already calls them.
-        """
+        \"\"\"
         app = super().get_app()
 
         # Extension routers (factory style, same pattern as get_health_router).
-        app.include_router(get_readiness_router(db=self.db))
-        app.include_router(get_liveness_router())
+        if self._mount_health:
+            app.include_router(get_readiness_router(db=self.db))
+            app.include_router(get_liveness_router())
 
-        # Extension middleware. Starlette: middleware registered LAST runs FIRST
-        # (outermost). TenantContextMiddleware must set request.state.user_id
-        # BEFORE native handlers run, so it is added AFTER RateLimitMiddleware.
+        # Extension middleware.
         app.add_middleware(RateLimitMiddleware)
-        app.add_middleware(TenantContextMiddleware)
+
+        # TenantContextMiddleware mounted ONLY in dev/non-JWT mode (JD-01).
+        if self._mount_tenant_context and not self.authorization:
+            app.add_middleware(TenantContextMiddleware, memory_cfg=self._memory_cfg)
+
+            @app.exception_handler(UserIdentityResolutionError)
+            async def _tenant_context_error_handler(
+                request: Request, exc: UserIdentityResolutionError
+            ) -> JSONResponse:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": str(exc)},
+                )
 
         return app
 ```
@@ -219,101 +281,140 @@ class YamlAgentOS(AgentOS):
 
 ### 3.1 The approach (chosen, FODA-documented)
 
-Agno has NO `tenant_id` column anywhere; its own idiom (`teams/_session.py:52` docstring) calls `user_id` "the user_id for tenant isolation", and `user_id` is used as an opaque equality filter throughout the data layer (~40x in `postgres.py`). Therefore yaml-agno reuses `user_id` as the tenant boundary — but makes it COMPOSITE: `request.state.user_id = f"{tenant_id}:{raw_user_id}"`.
+Agno has NO `tenant_id` column anywhere; its own idiom (`teams/_session.py:52` docstring) calls `user_id` "the user_id for tenant isolation", and `user_id` is used as an opaque equality filter throughout the data layer (~40x in `postgres.py`). Therefore yaml-agno reuses `user_id` as the tenant boundary — but makes it COMPOSITE: `user_id = f"{tenant_id}:{principal_id}"`.
 
-A `TenantContextMiddleware` extracts `tenant_id` from the JWT `tnt` claim or the `X-Tenant-Id` header and the principal (raw user id) from the JWT `sub`, then DELEGATES to the shared `resolve_user_id(memory_cfg, principal_id, tenant_id)` (SPEC_04 §1.4) to obtain the composite string and sets `request.state.user_id` to it BEFORE any Agno handler reads it. `resolve_user_id` is the ONLY place the composite format `"{tenant_id}:{principal_id}"` lives — the middleware does NOT build `f"{tenant_id}:{raw_user_id}"` inline. `AuthorizationConfig(user_isolation=True)` (`os/config.py:125`) makes Agno's `get_scoped_user_id(request)` (`user_scope.py:78`) return that composite for non-admins, so EVERY user-scoped DB read auto-filters by `tenant:principal`. yaml-agno enables `authorization=True` + `user_isolation=True` ALWAYS.
+Under the ratified **Option C (hybrid)** architecture (S5a.1):
+1. **JWT Mode (Production / L-03)**: The composite identity `"{tenant_id}:{principal_id}"` is **MINTED in the `sub` claim of the JWT at emission time** via `resolve_user_id(memory_cfg=None, principal_id=..., tenant_id=...)` (SPEC_04 §1.4; VQ012).
+   - In dev/integration tests, `tests/integration/helpers/dev_jwt_issuer.py` mints HS256 tokens with `sub="{tenant_id}:{principal_id}"` + scopes (`scopes=["..."]`).
+   - In production (S5b), identity providers like Keycloak will configure a token mapper or use Agno's `user_id_claim` parameter (`jwt.py:547`) to emit the composite identity.
+   - Agno 2.8.7's native `AuthMiddleware` (`jwt.py:1039,1060`) validates the JWT signature/expiration, rejects reserved principals (`sa:`, `__scheduler__`, `__oauth__:`), and stamps `request.state.user_id = sub`.
+   - `AuthorizationConfig(user_isolation=True)` activates `get_scoped_user_id(request)` (`user_scope.py:105-132`), which threads `request.state.user_id` into EVERY user-scoped DB read and write.
+   - Admin principals (`scopes=["agent_os:admin"]`) short-circuit `get_scoped_user_id()` to `None` (`user_scope.py:116-117`), granting unscoped access across all tenants.
+   - **Zero yaml-agno code in the JWT path**: no custom JWT middleware, no claim rewriting, no monkeypatching. The obsolete narrative where middleware parsed a custom tenant claim from JWT or extracted identity claims is completely eliminated.
+2. **Dev Header Mode (Non-production)**: When JWT auth is disabled (`authorization=False` + `mount_tenant_context=True`), `TenantContextMiddleware` extracts `tenant_id` from the `X-Tenant-Id` header and delegates to `resolve_user_id()`.
+3. **JD-01 Structural Mutual Exclusion**: `YamlAgentOS(authorization=True, mount_tenant_context=True)` raises `ValueError`. When `authorization=True` is active, `TenantContextMiddleware` is NEVER mounted in the ASGI stack.
 
 #### FODA
 
 | | Item |
 |---|---|
-| **Fortalezas** | (1) Zero schema change — no new column, no migration. (2) Aligns with Agno's own idiom (user_id IS the tenant isolation key). (3) Reuses AgentOS ownership machinery: `user_isolation` coerces `user_id` on writes, enforces session/run ownership, threads the JWT sub on every user-scoped read, requires `session_id` for non-admins. |
-| **Oportunidades** | (1) Composite key is opaque to Agno, so any future Agno version keeps working without adapter changes. (2) Works uniformly across agents/teams/workflows/sessions/memory routers. |
-| **Debilidades** | (1) No native tenant-level aggregation or prefix queries — an admin UI sees each `tenant:user` as a distinct row (no GROUP BY tenant). (2) Composite string is a presentation leak; dashboards must split on `:` themselves. |
-| **Amenazas** | (1) **NULL-bucket footgun (CRITICAL)**: Agno upsert conflict clauses use `(user_id == X) OR (user_id IS NULL)` (`postgres.py:1023,1062,1101,1197,1256,1315`). A row whose `user_id` is NULL matches EVERY tenant. This is why `authorization=True` + `user_isolation=True` MUST be ALWAYS ON — user_isolation guarantees the JWT sub is threaded on every write, so user_id is NEVER None. Disabling isolation even once collapses all tenants into one bucket. |
+| **Fortalezas** | (1) Zero schema change — no new column, no migration. (2) Zero yaml-agno code in the JWT path — reuses Agno 2.8.7 native `AuthMiddleware` + `user_isolation` pipeline directly. (3) Single composite resolver — `resolve_user_id()` (SPEC_04) is the single source of truth for composite `{tenant_id}:{principal_id}` (VQ012). (4) Reuses AgentOS ownership machinery: `user_isolation` coerces `user_id` on writes, enforces session/run ownership, threads the JWT sub on every user-scoped read. |
+| **Oportunidades** | (1) Future-proof against Agno upgrades because it builds on top of public contracts (`sub` claim, `AuthorizationConfig`, `user_isolation`). (2) S5b Keycloak integration cleanly plugs in via standard token mappers or `user_id_claim` (`jwt.py:547`). (3) Works uniformly across agents/teams/workflows/sessions/memory routers. |
+| **Debilidades** | (1) No native tenant-level aggregation or prefix queries — an admin UI sees each `tenant:user` as a distinct row (no GROUP BY tenant without application-level splitting). (2) Composite string is a presentation leak; dashboards must split on `:` themselves. |
+| **Amenazas** | (1) **NULL-bucket footgun (CRITICAL)**: Agno upsert conflict clauses use `(user_id == X) OR (user_id IS NULL)` (`postgres.py:1023,1062,1101,1197,1256,1315`). A row whose `user_id` is NULL matches EVERY tenant. This is why `run_server` enforces `authorization=True` at startup (VQ010) and `user_isolation=True` MUST be ALWAYS ON — user_isolation guarantees the JWT sub is threaded on every write, so user_id is NEVER None. (2) Reserved-principal collision: composite `sub` must not collide with reserved principals (`sa:`, `__scheduler__`, `__oauth__:`), enforced via `is_reserved_principal` at issuance. |
 
-### 3.2 TenantContextMiddleware
+### 3.2 TenantContextMiddleware (Dev / No-JWT Path ONLY)
+
+In dev mode (`authorization=False` and `mount_tenant_context=True`), `TenantContextMiddleware` extracts `tenant_id` from the `X-Tenant-Id` header, then DELEGATES composite construction to the shared `resolve_user_id()` (SPEC_04 §1.4) so that the composite format lives in ONE place.
+
+In production JWT mode (`authorization=True`), this middleware is NOT mounted (JD-01 structural mutual exclusion). Agno 2.8.7's native `AuthMiddleware` validates the JWT and stamps `request.state.user_id` directly from the composite `sub` claim, and `user_isolation=True` scopes native operations.
 
 ```python
 # yaml-agno/src/api/middleware/tenant_context.py
-"""TenantContextMiddleware: composite user_id for Agno native user_isolation.
+"""TenantContextMiddleware: dev-only composite user_id resolver (SPEC_06 §3.2, S5a.1).
 
-Agno has no tenant_id concept; it scopes native runs on request.state.user_id
-(agents/router.py:616, teams/router.py:588) and AuthorizationConfig.user_isolation
-(os/config.py:125) threads that value on every user-scoped DB read/write. This
-middleware extracts tenant_id + principal from the request, then DELEGATES the
+In dev mode (authorization=False and mount_tenant_context=True), this
+middleware extracts tenant_id from the X-Tenant-Id header and DELEGATES
 composite construction to the shared resolve_user_id() (SPEC_04 §1.4) so that
-the composite format lives in ONE place (HTTP and autonomous runs alike).
+the composite format lives in ONE place.
+
+In production JWT mode (authorization=True), this middleware is NOT mounted
+(JD-01 structural mutual exclusion). Agno 2.8.7's native AuthMiddleware validates
+the JWT and stamps request.state.user_id directly from the composite sub
+claim, and user_isolation=True scopes native operations.
+
+@ai-directive: this middleware is for dev/non-JWT paths only. It extracts
+tenant_id from the X-Tenant-Id header, then DELEGATES to the shared
+resolve_user_id() (SPEC_04) to build the composite. It does NOT construct
+f"{tenant_id}:{raw_user_id}" inline — resolve_user_id is the single source
+of truth for the composite format. It does NOT add a tenant_id column to
+agno_* tables (Agno does not support one), does NOT apply Postgres RLS, and
+does NOT open a DB session. Per SPEC_03 §5 and SPEC_04 §3.3: tenant isolation of
+yaml-agno's OWN config rows is explicit WHERE filters on yamlagno_* tables;
+tenant_id on agno_* tables is the composite user_id only.
 """
 
 from typing import Any, Optional
+from collections.abc import Awaitable, Callable
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from yaml_agno.memory.user_identity import resolve_user_id  # SPEC_04 §1.4
+from yaml_agno.memory.user_identity import (  # SPEC_04 §1.4
+    UserIdentityResolutionError,
+    resolve_user_id,
+)
 
 
 class TenantContextMiddleware(BaseHTTPMiddleware):
     """Set request.state.user_id to the composite "{tenant_id}:{principal_id}".
 
-    @ai-directive: this middleware extracts tenant_id + principal from the
-    request, then DELEGATES to the shared resolve_user_id() (SPEC_04) to build
-    the composite. It does NOT construct f"{tenant_id}:{raw_user_id}" inline —
-    resolve_user_id is the single source of truth for the composite format. It
-    does NOT add a tenant_id column to agno_* tables (Agno does not support one),
-    does NOT apply Postgres RLS, and does NOT open a DB session. Per SPEC_03 §5
-    and SPEC_04 §3.3: tenant isolation of yaml-agno's OWN config rows is
-    explicit WHERE filters on yamlagno_* tables; tenant_id on agno_* tables is
-    the composite user_id only. A contextvar (set_tenant_id) is telemetry-only.
+    This middleware extracts tenant_id from the X-Tenant-Id header, then
+    DELEGATES to the shared resolve_user_id() (SPEC_04) to build the
+    composite. The composite format lives ONLY in resolve_user_id; this
+    middleware never builds f"{tenant_id}:{raw_user_id}" inline.
+
+    Used ONLY in dev/non-JWT mode. Mutually exclusive with JWT authorization
+    (JD-01).
+
+    Attributes:
+        memory_cfg: YAML memory: block (SPEC_02 *Config). Carries
+            system_user_id used by resolve_user_id as the principal.
     """
 
-    def __init__(self, app, memory_cfg: Any = None) -> None:
+    def __init__(self, app: Any, memory_cfg: Any = None) -> None:
         """Initialize with the YAML memory block (for system_user_id fallback).
 
         Args:
             app: The ASGI app (passed by add_middleware).
-            memory_cfg: YAML ``memory:`` block (SPEC_02 *Config). Carries
-                ``system_user_id`` used by resolve_user_id when no human principal
-                is present on the request.
+            memory_cfg: YAML memory: block (SPEC_02 *Config). Carries
+                system_user_id used by resolve_user_id when no human
+                principal is present on the request.
         """
         super().__init__(app)
         self.memory_cfg = memory_cfg
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        """Delegate to resolve_user_id and stamp request.state for native handlers.
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Delegate to resolve_user_id and stamp request.state.
+
+        A missing/empty tenant_id is an authentication failure: the
+        composite user_id cannot be built and a NULL bucket must never
+        reach Agno. resolve_user_id raises UserIdentityResolutionError in
+        that case. We catch it HERE and return 401 with a structured JSON body.
 
         Args:
-            request: Incoming request; may carry JWT claims or X-Tenant-Id.
+            request: Incoming request carrying X-Tenant-Id header.
             call_next: Next ASGI handler.
 
         Returns:
-            The downstream response. Native AgentOS handlers and
-            get_scoped_user_id read request.state.user_id for scoping.
+            The downstream response, or a 401 JSONResponse when the
+            tenant cannot be resolved.
         """
         tenant_id = self._extract_tenant_id(request)
-        principal_id = self._extract_raw_user_id(request)
-        # Single source of truth: resolve_user_id (SPEC_04) builds the composite
-        # and fails fast if tenant_id or principal is missing. Never None.
-        request.state.user_id = resolve_user_id(
-            memory_cfg=self.memory_cfg,
-            principal_id=principal_id,
-            tenant_id=tenant_id,
-            context=None,
-        )
+
+        # Single source of truth: resolve_user_id (SPEC_04) builds the
+        # composite and fails fast if tenant_id is missing. Never None.
+        try:
+            request.state.user_id = resolve_user_id(
+                memory_cfg=self.memory_cfg,
+                principal_id=None,
+                tenant_id=tenant_id,
+                context=None,
+            )
+        except UserIdentityResolutionError as exc:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": str(exc)},
+            )
         return await call_next(request)
 
-    def _extract_tenant_id(self, request: Request) -> Optional[str]:
-        """Extract tenant_id from JWT 'tnt' claim or X-Tenant-Id header."""
-        # JWT parsing delegated to Agno's JWT middleware when authorization=True;
-        # this reads the validated claim populated on request.state.
-        return getattr(request.state, "tenant_claim", None) or request.headers.get(
-            "X-Tenant-Id"
-        )
-
-    def _extract_raw_user_id(self, request: Request) -> Optional[str]:
-        """Extract the principal (raw user id) from the JWT 'sub' claim."""
-        return getattr(request.state, "user_sub", None)
+    @staticmethod
+    def _extract_tenant_id(request: Request) -> Optional[str]:
+        """Extract tenant_id from X-Tenant-Id header."""
+        return request.headers.get("X-Tenant-Id")
 ```
 
 > **Cross-ref**: `resolve_user_id` is shared with SPEC_04 (memory); same composite `"{tenant_id}:{principal_id}"` for HTTP and autonomous runs. The middleware is the HTTP entry point; autonomous/workflow runs call `resolve_user_id` directly with the YAML `tenant_id` field.
@@ -592,18 +693,26 @@ AND the status field is "not_ready"
 AND checks.postgres is false
 ```
 
-#### Scenario 3: TenantContextMiddleware composes user_id for native scoping
+#### Scenario 3: JWT-native multi-tenant isolation and Dev Header fallback
 
 ```gherkin
-GIVEN a request carries JWT with tenant claim tnt=tenant_42 and sub=user_7
-WHEN the TenantContextMiddleware resolves the request
-THEN the middleware delegates to the shared resolve_user_id() (SPEC_04 §1.4)
-AND request.state.user_id is set to "tenant_42:user_7" (the composite "{tenant_id}:{principal_id}")
-AND the middleware does NOT construct the composite inline (resolve_user_id is the single source of truth)
+GIVEN a request carries a valid JWT with composite sub="tenant_42:user_7"
+AND YamlAgentOS is initialized with authorization=True and authorization_config with user_isolation=True
+WHEN Agno's native AuthMiddleware processes the request
+THEN request.state.user_id is set to "tenant_42:user_7" directly from the JWT sub claim
+AND TenantContextMiddleware is NOT mounted in the application stack (JD-01)
 AND no tenant_id column is added to agno_* tables
 AND no RLS policy is applied
-AND the downstream native POST /agents/{agent_id}/runs handler sees request.state.user_id == "tenant_42:user_7"
 AND get_scoped_user_id returns "tenant_42:user_7" for non-admins
+AND downstream native handlers scope data to "tenant_42:user_7"
+
+GIVEN a request arrives with header X-Tenant-Id: tenant_42 without JWT auth
+AND YamlAgentOS is initialized in dev mode (authorization=False, mount_tenant_context=True)
+WHEN TenantContextMiddleware processes the request
+THEN the middleware extracts tenant_42 from the X-Tenant-Id header
+AND delegates to the shared resolve_user_id() (SPEC_04 §1.4)
+AND request.state.user_id is set to "tenant_42:<system_user_id>"
+AND the middleware does NOT construct the composite inline
 ```
 
 #### Scenario 4: Rate limit protects native runs
@@ -725,10 +834,10 @@ AND every user-scoped DB read carries the composite user_id filter
 - **GREEN**: Implement `RateLimitMiddleware` (token bucket per composite user_id + IP).
 - **Commit**: `feat: add rate-limit middleware keyed on composite user_id`
 
-#### TASK_005: Implement TenantContextMiddleware (composite user_id)
+#### TASK_005: Implement TenantContextMiddleware (dev header mode) and JD-01 guard
 
-- **File**: `yaml-agno/src/api/middleware/tenant_context.py`
-- **Test**: `tests/unit/api/middleware/test_tenant_context.py`
+- **File**: `yaml-agno/src/api/middleware/tenant_context.py`, `yaml-agno/src/api/app.py`
+- **Test**: `tests/unit/api/middleware/test_tenant_context.py`, `tests/unit/api/test_app_jwt_mode.py`
 - **RED**:
   ```python
   async def test_tenant_context_composes_user_id(app_with_tenant_context):
@@ -737,16 +846,15 @@ AND every user-scoped DB read carries the composite user_id filter
           "/health",
           headers={"X-Tenant-Id": "tenant_42"},
       )
-      # request.state.user_id must be "tenant_42:{sub}" for native routers,
-      # verified via a spy handler that reads request.state.user_id.
+      # request.state.user_id must be "tenant_42:{system_user_id}"
 
-  async def test_user_id_never_none(app_with_tenant_context):
-      # Guards the NULL-bucket footgun: user_id must never be None.
-      client = app_with_tenant_context()
-      # ... assert no request reaches a handler with user_id is None ...
+  def test_jd01_mutual_exclusion_raises_error():
+      # JD-01: authorization=True with mount_tenant_context=True must raise ValueError
+      with pytest.raises(ValueError, match="JD-01"):
+          YamlAgentOS(authorization=True, mount_tenant_context=True)
   ```
-- **GREEN**: Implement `TenantContextMiddleware` extracting `tenant_id` + principal from the request, then DELEGATING to the shared `resolve_user_id()` (SPEC_04 §1.4) to set `request.state.user_id` to the composite `"{tenant_id}:{principal_id}"`. The middleware does NOT build the composite inline; NO RLS, NO tenant_id column.
-- **Commit**: `feat: add TenantContextMiddleware (delegates to resolve_user_id for composite user_id)`
+- **GREEN**: Implement `TenantContextMiddleware` extracting `tenant_id` from `X-Tenant-Id` header and DELEGATING to `resolve_user_id()` (SPEC_04 §1.4). Add JD-01 mutual exclusion check in `YamlAgentOS.__init__`.
+- **Commit**: `feat: add TenantContextMiddleware (dev header mode) with JD-01 exclusion`
 
 #### TASK_006: Document native wire contract (no JSON/{name})
 
@@ -780,23 +888,22 @@ AND every user-scoped DB read carries the composite user_id filter
 - **GREEN**: Confirm all execution routes come from inherited `AgentOS.get_app()`; no yaml-agno duplicate.
 - **Commit**: `test: assert no yaml-agno-owned duplicate execution routes`
 
-#### TASK_008: Assert user_isolation always on + never-None user_id
+#### TASK_008: Assert user_isolation always on + native JWT isolation (L-03 gate)
 
-- **File**: `tests/contract/test_multi_tenant_guards.py`
+- **File**: `tests/integration/api/test_jwt_isolation_l03.py`, `src/yaml_agno/runtime/server.py`
 - **RED**:
   ```python
-  def test_user_isolation_always_on(cfg):
-      os_app = YamlAgentOS(cfg)
-      assert os_app.authorization is True
-      assert os_app.authorization_config.user_isolation is True
+  def test_run_server_refuses_without_authorization():
+      # VQ010: run_server must refuse to start unless authorization=True
+      with pytest.raises(RuntimeError, match="authorization=True"):
+          run_server(agents=[])
 
-  async def test_no_handler_sees_none_user_id(app_with_tenant_context):
-      # The NULL-bucket footgun: a None user_id matches every tenant.
-      # Assert no authenticated request reaches a handler with user_id None.
+  def test_l03_cross_tenant_isolation_404(l03_client, token_alice_a, token_alice_b):
+      # Alice under tenant B attempting to access tenant A's session receives 404
       pass
   ```
-- **GREEN**: Add contract guards for `authorization=True`, `user_isolation=True`, and never-None `request.state.user_id`.
-- **Commit**: `test: assert multi-tenant guards (user_isolation on, user_id never None)`
+- **GREEN**: `run_server` enforces `authorization=True` (VQ010). L-03 matrix proves zero cross-tenant leaks with Agno 2.8.7 native scoping.
+- **Commit**: `test: assert multi-tenant isolation and VQ010 run_server refusal`
 
 ---
 
@@ -820,11 +927,11 @@ AND every user-scoped DB read carries the composite user_id filter
 
 **Resolución**: yaml-agno NO introduce su propio namespace `/api/v1/`. Hereda los routers nativos de AgentOS tal cual (`POST /agents/{agent_id}/runs`, etc.). Inventar un prefijo `/api/v1/` own crearía un shim de re-ruteo innecesario y rompería la fidelidad al sistema. Las extensiones propias (readiness, liveness) se montan sin prefijo de versión, siguiendo el mismo estilo de AgentOS (p. ej. `GET /health` no lleva versión).
 
-### [Pregunta 4] Multi-tenancy — RESUELTO: composite user_id + native user_isolation
+### [Pregunta 4] Multi-tenancy — RESUELTO: composite user_id in JWT sub + native user_isolation (S5a.1)
 
 **¿Cómo aislar datos por tenant sin tocar el schema de Agno?**
 
-**Resolución**: composite `user_id = f"{tenant_id}:{raw_user_id}"` seteado por `TenantContextMiddleware` sobre `request.state.user_id`, con `AuthorizationConfig(user_isolation=True)` SIEMPRE ON. Agno filtra cada lectura user-scoped por ese composite. Sin columna `tenant_id`, sin RLS, sin migraciones. Ver FODA en §3.1 y la advertencia del NULL-bucket.
+**Resolución**: En producción (JWT activo), el composite `user_id = f"{tenant_id}:{principal_id}"` se emite directamente en el claim `sub` del JWT (VQ012). Agno 2.8.7 `AuthMiddleware` valida el token y estampa `request.state.user_id = sub`, y `AuthorizationConfig(user_isolation=True)` filtra automáticamente cada consulta user-scoped por ese composite (cero código yaml-agno en el path JWT). En entornos dev sin JWT (`authorization=False`), `TenantContextMiddleware` resuelve `X-Tenant-Id` delegando a `resolve_user_id()`. Ambas modalidades son mutuamente excluyentes (JD-01). Sin columna `tenant_id` en tablas `agno_*`, sin RLS, sin migraciones. Ver FODA en §3.1 y la advertencia del NULL-bucket.
 
 ### [Pregunta 5] AX discovery — RESUELTO: native MCP server
 

@@ -73,7 +73,7 @@ Each: `python -m pytest tests/integration/api/test_jwt_isolation_l03.py -q` (gre
 
 ## Phase 4 — Docs SPEC_06 / SPEC_19
 
-- [ ] 4.1 `specs/SPEC_06_API_AND_AX.md` §3.1 approach rewrite (composite minted into `sub` at issuance; Agno threads natively; delete "middleware extracts `tnt`" narrative); §3.2 middleware = dev/no-JWT only + JD-01 mutual exclusion; §2 `get_app` snippet. Commit: `docs(spec): SPEC_06 §3 JWT-native isolation contract (S5a.1)`
+- [x] 4.1 `specs/SPEC_06_API_AND_AX.md` §3.1 approach rewrite (composite minted into `sub` at issuance; Agno threads natively; delete "middleware extracts `tnt`" narrative); §3.2 middleware = dev/no-JWT only + JD-01 mutual exclusion; §2 `get_app` snippet. Commit: `docs(spec): SPEC_06 §3 JWT-native isolation contract (S5a.1)`
 - [ ] 4.2 `specs/SPEC_19_SECURITY_AUTH_API_SURFACE.md`: supersede `build_jwt_middleware` narrative with AuthorizationAdapter (S5a.0) + agno `build_jwt_middleware_kwargs`; delete "TenantContextMiddleware resolves sub→composite"; admin = native `agent_os:admin`; reference `user_id_claim` escape hatch (`jwt.py:547`). Commit: `docs(spec): SPEC_19 native auth + admin contract (S5a.1)`
 - [ ] 4.3 Grep `specs/` + `src/` for stale `tenant_claim` / `user_sub` / `tnt` middleware refs → none. No commit.
 
