@@ -383,6 +383,17 @@ class TestHelperStaysPrivate:
         assert "_map_authorization_config" not in authorization_adapter.__all__
 
 
+class TestIsolationPredicateStaysPrivate:
+    """Req 5 extension: ``_require_isolated_auth`` is private, never exported."""
+
+    def test_isolation_predicate_stays_private(self) -> None:
+        """The VQ010 predicate exists but is NOT part of the public surface."""
+        import yaml_agno.agentos.authorization_adapter as authorization_adapter
+
+        assert hasattr(authorization_adapter, "_require_isolated_auth") is True
+        assert "_require_isolated_auth" not in authorization_adapter.__all__
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Req 6 — Contract tests assert content (T007e rewrite)
 # ═══════════════════════════════════════════════════════════════════════════
