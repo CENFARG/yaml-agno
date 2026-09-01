@@ -23,9 +23,9 @@ Gitflow (mirrors S5a.1): per WU, branch `feature/vq010-wu{n}` off `main` → foc
 
 ## Phase 1: WU1 — Shared Predicate
 
-- [ ] 1.1 RED: add `TestRequireIsolatedAuth` in `tests/unit/agentos/test_authorization_adapter.py`: `(True,None)`, `(True,isolation=False)`, `(True,implicit)` → message naming VQ010 + `user_isolation`; `(True,isolation=True)` → None; auth None/False/0/1/"true" → None.
-- [ ] 1.2 GREEN: add `_require_isolated_auth(authorization, authorization_config)` in `src/yaml_agno/agentos/authorization_adapter.py` beside `_map_authorization_config`; `is True` both flags; canonical message; `__all__` unchanged.
-- [ ] 1.3 REFACTOR: docstring; Req 5 privacy test; ruff+mypy.
+- [x] 1.1 RED: add `TestRequireIsolatedAuth` in `tests/unit/agentos/test_authorization_adapter.py`: `(True,None)`, `(True,isolation=False)`, `(True,implicit)` → message naming VQ010 + `user_isolation`; `(True,isolation=True)` → None; auth None/False/0/1/"true" → None.
+- [x] 1.2 GREEN: add `_require_isolated_auth(authorization, authorization_config)` in `src/yaml_agno/agentos/authorization_adapter.py` beside `_map_authorization_config`; `is True` both flags; canonical message; `__all__` unchanged.
+- [x] 1.3 REFACTOR: docstring; Req 5 privacy test; ruff+mypy.
 
 ## Phase 2: WU2 — YamlAgentOS Guard
 

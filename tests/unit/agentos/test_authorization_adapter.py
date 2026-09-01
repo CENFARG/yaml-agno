@@ -21,6 +21,7 @@ mere existence (Req 6).
 from __future__ import annotations
 
 import pytest
+from agno.os.config import AuthorizationConfig
 from pytest_mock import MockerFixture
 
 from yaml_agno.agentos.authorization_adapter import (
@@ -382,6 +383,17 @@ class TestHelperStaysPrivate:
         assert "_map_authorization_config" not in authorization_adapter.__all__
 
 
+class TestIsolationPredicateStaysPrivate:
+    """Req 5 extension: ``_require_isolated_auth`` is private, never exported."""
+
+    def test_isolation_predicate_stays_private(self) -> None:
+        """The VQ010 predicate exists but is NOT part of the public surface."""
+        import yaml_agno.agentos.authorization_adapter as authorization_adapter
+
+        assert hasattr(authorization_adapter, "_require_isolated_auth") is True
+        assert "_require_isolated_auth" not in authorization_adapter.__all__
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Req 6 — Contract tests assert content (T007e rewrite)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -469,3 +481,84 @@ class TestDisabledPassthrough:
 
         assert enabled is False
         assert cfg is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# VQ010 — isolation refusal predicate (auth-vq010-isolation-guard, WU1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRequireIsolatedAuth:
+    """VQ010 truth table for the shared isolation-refusal predicate.
+
+    Fires iff ``authorization is True`` AND (``authorization_config is None``
+    OR ``authorization_config.user_isolation is not True``). Strict identity
+    (``is True``) on BOTH flags: truthy non-booleans such as ``1`` or
+    ``"true"`` never satisfy the guard.
+    """
+
+    @staticmethod
+    def _assert_vq010_message(message: str | None) -> None:
+        """Assert a fired refusal names VQ010, user_isolation, and the dev seam."""
+        assert message is not None
+        assert "VQ010" in message
+        assert "user_isolation" in message
+        assert "AuthorizationConfig(user_isolation=True" in message
+        assert "create_app" in message
+
+    def test_true_with_none_config_fires(self) -> None:
+        """(True, None) → refusal message naming VQ010 + user_isolation."""
+        from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
+
+        message = _require_isolated_auth(True, None)
+
+        self._assert_vq010_message(message)
+
+    def test_true_with_explicit_false_isolation_fires(self) -> None:
+        """(True, user_isolation=False) → refusal message."""
+        from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
+
+        cfg = AuthorizationConfig(
+            verification_keys=["vk-1"],
+            algorithm="HS256",
+            user_isolation=False,
+        )
+
+        message = _require_isolated_auth(True, cfg)
+
+        self._assert_vq010_message(message)
+
+    def test_true_with_implicit_default_config_fires(self) -> None:
+        """(True, implicit default) → refusal (Agno defaults user_isolation=False)."""
+        from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
+
+        cfg = AuthorizationConfig()
+
+        assert cfg.user_isolation is not True  # Agno 2.8.7 default: fail-open
+        message = _require_isolated_auth(True, cfg)
+
+        self._assert_vq010_message(message)
+
+    def test_true_with_isolated_config_returns_none(self) -> None:
+        """(True, user_isolation=True) → None (config acceptable)."""
+        from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
+
+        cfg = AuthorizationConfig(
+            verification_keys=["vk-1"],
+            algorithm="HS256",
+            user_isolation=True,
+        )
+
+        assert _require_isolated_auth(True, cfg) is None
+
+    @pytest.mark.parametrize(
+        "authorization",
+        [None, False, 0, 1, "true"],
+    )
+    def test_non_strict_true_authorization_returns_none(
+        self, authorization: object
+    ) -> None:
+        """authorization not strictly True → None (dev path / guard untouched)."""
+        from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
+
+        assert _require_isolated_auth(authorization, None) is None  # type: ignore[arg-type]
