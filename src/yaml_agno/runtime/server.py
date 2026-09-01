@@ -21,11 +21,12 @@ inside production code and keeps ``run_server`` unit-testable.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import uvicorn
 from fastapi import FastAPI
 
+from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
 from yaml_agno.api.app import AgentEntry, YamlAgentOS
 
 __all__ = ["create_app", "run_server"]
@@ -115,7 +116,10 @@ def run_server(
 
     Raises:
         RuntimeError: If ``authorization=True`` is not passed in
-            ``yaml_agentos_kwargs`` (VQ010 refuse-to-start guard).
+            ``yaml_agentos_kwargs`` (VQ010 refuse-to-start guard), or if
+            ``authorization=True`` is not paired with an ``authorization_config``
+            whose ``user_isolation`` is strictly ``True`` (VQ010 isolation
+            refusal, raised BEFORE ``create_app`` is invoked).
     """
     if yaml_agentos_kwargs.get("authorization") is not True:
         raise RuntimeError(
@@ -124,6 +128,13 @@ def run_server(
             "AuthorizationConfig(user_isolation=True, ...) to start the server. "
             "For dev/test workflows without JWT, use create_app() instead."
         )
+
+    refusal = _require_isolated_auth(
+        cast("bool", yaml_agentos_kwargs.get("authorization")),
+        yaml_agentos_kwargs.get("authorization_config"),
+    )
+    if refusal is not None:
+        raise RuntimeError(refusal)
 
     app = create_app(
         config_path=config_path,
