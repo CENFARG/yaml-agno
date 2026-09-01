@@ -46,6 +46,6 @@ Gitflow (mirrors S5a.1): per WU, branch `feature/vq010-wu{n}` off `main` → foc
 
 ## Phase 5: WU5 — VQ010 Text + Gates
 
-- [ ] 5.1 "VQ010 query tightened": tighten `.chats/decisions.yaml` VQ010 from presence-only grep to refusal wording (guard + `user_isolation is not True` + refusal exceptions).
-- [ ] 5.2 Mirror in `DECISIONES.md` D-F1-10 (Spanish narrative).
-- [ ] 5.3 Gates + `--no-ff` merge: `python -m pytest -m unit -q` (840+), `ruff check .`, `mypy src/yaml_agno`, `python scripts/spec_gate.py all` (34/34).
+- [x] 5.1 "VQ010 query tightened": tighten `.chats/decisions.yaml` VQ010 from presence-only grep to refusal wording (guard + `user_isolation is not True` + refusal exceptions).
+- [x] 5.2 Mirror in `DECISIONES.md` D-F1-10 (Spanish narrative).
+- [x] 5.3 Gates + `--no-ff` merge: `python -m pytest -m unit -q` (840+), `ruff check .`, `mypy src/yaml_agno`, `python scripts/spec_gate.py all` (34/34).
