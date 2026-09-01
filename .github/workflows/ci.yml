@@ -47,3 +47,34 @@ jobs:
 
       - name: Run tests
         run: pytest -m "unit and not integration" -q
+
+  # Integration job (PROPOSED): runs the L-03 JWT isolation integration suite
+  # (tests/integration/ — self-contained: DevJwtIssuer + StaticReplyModel + tmp SQLite,
+  # no external services). Locally validated: `python -m pytest -m integration -q` -> 7 passed.
+  # The GitHub Actions runtime itself has NOT been executed (no CI validation available
+  # from this environment). Not merged blindly: kept on feature/ci-l03-integration
+  # until a maintainer runs CI once and confirms green.
+  integration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # Same private-dependency requirement as lint-test (core-cenf-py via git+https).
+      - name: Inject git credentials for private dependency
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.GIT_AUTH_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install package (editable, with dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run integration tests (L-03 JWT isolation)
+        run: pytest -m integration -q
