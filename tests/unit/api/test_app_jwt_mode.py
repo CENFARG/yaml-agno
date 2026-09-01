@@ -169,13 +169,13 @@ class TestIsolationRefusal:
 
     @pytest.mark.parametrize(
         "authorization_config",
-        [None, _make_authorization_config(False), _make_authorization_config(False)],
-        ids=["none-config", "explicit-false", "implicit-default"],
+        [None, _make_authorization_config(False)],
+        ids=["none-config", "explicit-false"],
     )
     def test_yamlagentos_refuses_unisolated_construction(
         self, authorization_config: AuthorizationConfig | None
     ) -> None:
-        """(True, None/explicit-False/implicit-default) → ValueError naming VQ010."""
+        """(True, None/explicit-False) → ValueError naming VQ010."""
         agent = _build_test_agent()
 
         with pytest.raises(ValueError, match="VQ010"):
@@ -235,8 +235,8 @@ class TestIsolationRefusal:
 
     def test_dev_path_unchanged(self) -> None:
         """No-auth create_app still boots: FastAPI app + X-Tenant-Id request → 200."""
-        from fastapi.testclient import TestClient
         from fastapi import FastAPI
+        from fastapi.testclient import TestClient
 
         agent = _build_test_agent()
         app = create_app(

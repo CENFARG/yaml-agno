@@ -41,9 +41,9 @@ from agno.os.config import AuthorizationConfig
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
 from yaml_agno.api.health import get_liveness_router, get_readiness_router
 from yaml_agno.api.middleware.tenant_context import TenantContextMiddleware
-from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
 from yaml_agno.factories.agent_factory import AgentFactory
 from yaml_agno.memory.user_identity import UserIdentityResolutionError
 from yaml_agno.models.config.agent_config import AgentConfig
