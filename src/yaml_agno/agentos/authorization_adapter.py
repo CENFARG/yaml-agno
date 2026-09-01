@@ -126,6 +126,49 @@ def _map_authorization_config(
     return True, AuthorizationConfig(**kwargs)
 
 
+def _require_isolated_auth(
+    authorization: bool,
+    authorization_config: AuthorizationConfig | None,
+) -> str | None:
+    """Return the VQ010 refusal message, or None when the config is acceptable.
+
+    Shared isolation predicate (VQ010, D-F1-02) for every authenticated startup
+    entry point: fires iff ``authorization is True`` AND (``authorization_config
+    is None`` OR ``authorization_config.user_isolation is not True``). Agno
+    defaults ``user_isolation`` to ``False``, which would boot an
+    authenticated-but-unisolated server (Judgment Day CRITICAL #3120).
+
+    Strict identity (``is True``) on BOTH flags: truthy non-booleans such as
+    ``1`` or ``"true"`` do NOT satisfy the guard. An ``authorization`` other
+    than ``True`` returns None — the dev path (``authorization=False``) stays
+    unchanged and ``run_server`` keeps its own refuse-to-start guard.
+
+    Call sites raise their own exception type from the returned message:
+    ``YamlAgentOS.__init__`` raises ``ValueError`` (JD-01 convention);
+    ``run_server`` raises ``RuntimeError`` (existing VQ010 tests).
+
+    Args:
+        authorization: Authorization flag as forwarded to Agno.
+        authorization_config: ``AuthorizationConfig`` or None.
+
+    Returns:
+        The canonical VQ010 refusal message when authenticated startup would
+        be unisolated, or None when the configuration is acceptable.
+    """
+    if authorization is not True:
+        return None
+    if authorization_config is not None and authorization_config.user_isolation is True:
+        return None
+    return (
+        "VQ010 isolation refusal: authorization=True requires an "
+        "AuthorizationConfig with user_isolation=True. Agno defaults "
+        "user_isolation to False, which boots an authenticated-but-unisolated "
+        "server. Pass authorization_config=AuthorizationConfig("
+        "user_isolation=True, ...). For dev/test workflows without JWT, use "
+        "create_app() with authorization=False."
+    )
+
+
 def _resolve_value(
     value: Any,
     secret_manager: Callable[[str], str] | None,
