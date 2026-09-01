@@ -35,9 +35,9 @@ Gitflow (mirrors S5a.1): per WU, branch `feature/vq010-wu{n}` off `main` → foc
 
 ## Phase 3: WU3 — run_server Guard
 
-- [ ] 3.1 RED: in `tests/unit/runtime/test_run_server_auth.py` add "run_server refuses missing config" + "refuses non-isolated config" (explicit-False/implicit) → `RuntimeError` VQ010 pre-`create_app`, never `FileNotFoundError`; "rejects truthy authorization" (`"true"`).
-- [ ] 3.2 GREEN: in `src/yaml_agno/runtime/server.py` keep guard `:120-126` verbatim; predicate → `RuntimeError` before `create_app` (`:128`); keep `**yaml_agentos_kwargs`.
-- [ ] 3.3 RED+GREEN+REFACTOR: "run_server boots valid isolated config": FakeServer `run()` once; shared VQ010 assertion helper.
+- [x] 3.1 RED: in `tests/unit/runtime/test_run_server_auth.py` add "run_server refuses missing config" + "refuses non-isolated config" (explicit-False/implicit) → `RuntimeError` VQ010 pre-`create_app`, never `FileNotFoundError`; "rejects truthy authorization" (`"true"`).
+- [x] 3.2 GREEN: in `src/yaml_agno/runtime/server.py` keep guard `:120-126` verbatim; predicate → `RuntimeError` before `create_app` (`:128`); keep `**yaml_agentos_kwargs`.
+- [x] 3.3 RED+GREEN+REFACTOR: "run_server boots valid isolated config": FakeServer `run()` once; shared VQ010 assertion helper.
 
 ## Phase 4: WU4 — Factory Invariant (test-only)
 
