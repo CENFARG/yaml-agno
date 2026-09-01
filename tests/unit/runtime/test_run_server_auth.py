@@ -111,3 +111,69 @@ class TestRunServerAuthGuard:
         assert server.host == "127.0.0.1"
         assert server.port == 8000
         assert server.run_count == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# VQ010 — isolation refusal (auth-vq010-isolation-guard, WU3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRunServerIsolationGuard:
+    """VQ010: run_server refuses authenticated-but-unisolated startup.
+
+    Defense-in-depth: the isolation predicate runs in ``run_server`` BEFORE
+    ``create_app`` (a ``RuntimeError`` naming VQ010 proves the refusal
+    happened pre-build; a ``ValueError`` from ``YamlAgentOS`` would prove it
+    happened too late, and ``FileNotFoundError`` would prove it never ran).
+    """
+
+    def test_run_server_refuses_missing_config(self) -> None:
+        """(True, authorization_config=None) → RuntimeError VQ010, never FileNotFoundError."""
+        with pytest.raises(RuntimeError, match="VQ010") as exc_info:
+            run_server(
+                config_path="/nonexistent/path/that/does/not/exist.yaml",
+                authorization=True,
+                authorization_config=None,
+                server_factory=FakeServer,
+            )
+
+        assert not isinstance(exc_info.value, FileNotFoundError)
+
+    @pytest.mark.parametrize(
+        "user_isolation",
+        [False, None],
+        ids=["explicit-false", "implicit-default"],
+    )
+    def test_run_server_refuses_non_isolated_config(
+        self, user_isolation: bool | None
+    ) -> None:
+        """(True, user_isolation=False/unset) → RuntimeError VQ010 pre-create_app."""
+        agent = _build_test_agent()
+        authorization_config = (
+            AuthorizationConfig(user_isolation=user_isolation)
+            if user_isolation is not None
+            else AuthorizationConfig()
+        )
+
+        assert authorization_config.user_isolation is not True
+
+        with pytest.raises(RuntimeError, match="VQ010"):
+            run_server(
+                agents=[agent],
+                authorization=True,
+                authorization_config=authorization_config,
+                mount_tenant_context=False,
+                server_factory=FakeServer,
+            )
+
+    def test_run_server_rejects_truthy_authorization(self) -> None:
+        """authorization='true' → RuntimeError VQ010 (only ``is True`` passes)."""
+        agent = _build_test_agent()
+
+        with pytest.raises(RuntimeError, match="VQ010"):
+            run_server(
+                agents=[agent],
+                authorization="true",  # type: ignore[arg-type]
+                authorization_config=AuthorizationConfig(user_isolation=True),
+                server_factory=FakeServer,
+            )
