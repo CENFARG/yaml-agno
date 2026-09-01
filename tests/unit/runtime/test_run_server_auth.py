@@ -3,6 +3,9 @@
 Verifies that ``run_server`` (the production entry point) strictly enforces VQ010:
 - Refuses to start (raises ``RuntimeError``) when ``authorization=True`` is not passed.
 - Refuses before building the app or attempting to resolve agent sources.
+- Refuses (raises ``RuntimeError``) BEFORE ``create_app`` when ``authorization=True``
+  is not paired with an ``authorization_config`` whose ``user_isolation`` is
+  strictly ``True`` (auth-vq010-isolation-guard, WU3 defense-in-depth).
 - Passes the guard and invokes the injected ``server_factory`` when ``authorization=True``
   is provided with a valid ``authorization_config``.
 """
@@ -25,6 +28,15 @@ pytestmark = pytest.mark.unit
 def _build_test_agent(name: str = "runtime-auth-agent") -> Agent:
     """Build a minimal real agno.Agent for test fixtures."""
     return Agent(name=name, model="openai:gpt-4o")
+
+
+def _assert_vq010_runtime_error(
+    exc_info: pytest.ExceptionInfo[RuntimeError],
+) -> None:
+    """Shared assertion: a RuntimeError refusal names VQ010 + user_isolation."""
+    message = str(exc_info.value)
+    assert "VQ010" in message
+    assert "user_isolation" in message
 
 
 class FakeServer:
@@ -138,6 +150,7 @@ class TestRunServerIsolationGuard:
             )
 
         assert not isinstance(exc_info.value, FileNotFoundError)
+        _assert_vq010_runtime_error(exc_info)
 
     @pytest.mark.parametrize(
         "user_isolation",
@@ -157,7 +170,7 @@ class TestRunServerIsolationGuard:
 
         assert authorization_config.user_isolation is not True
 
-        with pytest.raises(RuntimeError, match="VQ010"):
+        with pytest.raises(RuntimeError, match="VQ010") as exc_info:
             run_server(
                 agents=[agent],
                 authorization=True,
@@ -166,14 +179,45 @@ class TestRunServerIsolationGuard:
                 server_factory=FakeServer,
             )
 
+        _assert_vq010_runtime_error(exc_info)
+
     def test_run_server_rejects_truthy_authorization(self) -> None:
         """authorization='true' → RuntimeError VQ010 (only ``is True`` passes)."""
         agent = _build_test_agent()
 
-        with pytest.raises(RuntimeError, match="VQ010"):
+        with pytest.raises(RuntimeError, match="VQ010") as exc_info:
             run_server(
                 agents=[agent],
                 authorization="true",  # type: ignore[arg-type]
                 authorization_config=AuthorizationConfig(user_isolation=True),
                 server_factory=FakeServer,
             )
+
+        _assert_vq010_runtime_error(exc_info)
+
+    def test_run_server_boots_valid_isolated_config(
+        self, authorization_config: AuthorizationConfig
+    ) -> None:
+        """(True, user_isolation=True) → constructs, FakeServer.run() exactly once."""
+        captured: dict[str, Any] = {}
+
+        def fake_factory(app: FastAPI, host: str, port: int) -> FakeServer:
+            server = FakeServer(app=app, host=host, port=port)
+            captured["server"] = server
+            return server
+
+        agent = _build_test_agent()
+
+        run_server(
+            agents=[agent],
+            authorization=True,
+            authorization_config=authorization_config,
+            mount_tenant_context=False,
+            host="127.0.0.1",
+            port=8000,
+            server_factory=fake_factory,
+        )
+
+        server: FakeServer = captured["server"]
+        assert isinstance(server.app, FastAPI)
+        assert server.run_count == 1

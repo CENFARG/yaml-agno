@@ -21,7 +21,7 @@ inside production code and keeps ``run_server`` unit-testable.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import uvicorn
 from fastapi import FastAPI
@@ -130,7 +130,7 @@ def run_server(
         )
 
     refusal = _require_isolated_auth(
-        yaml_agentos_kwargs.get("authorization"),
+        cast("bool", yaml_agentos_kwargs.get("authorization")),
         yaml_agentos_kwargs.get("authorization_config"),
     )
     if refusal is not None:
