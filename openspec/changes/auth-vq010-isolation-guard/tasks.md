@@ -41,8 +41,8 @@ Gitflow (mirrors S5a.1): per WU, branch `feature/vq010-wu{n}` off `main` → foc
 
 ## Phase 4: WU4 — Factory Invariant (test-only)
 
-- [ ] 4.1 RED: in `tests/unit/factories/test_agentos_factory.py` assert "Factory invariant unchanged": adapter build → `user_isolation is True` (content); no-adapter override → `AuthorizationBuildError`.
-- [ ] 4.2 GREEN/REFACTOR: no factory code (`git diff --exit-code src/yaml_agno/factories/agentos_factory.py`); gates green.
+- [x] 4.1 RED: in `tests/unit/factories/test_agentos_factory.py` assert "Factory invariant unchanged": adapter build → `user_isolation is True` (content); no-adapter override → `AuthorizationBuildError`.
+- [x] 4.2 GREEN/REFACTOR: no factory code (`git diff --exit-code src/yaml_agno/factories/agentos_factory.py`); gates green.
 
 ## Phase 5: WU5 — VQ010 Text + Gates
 
