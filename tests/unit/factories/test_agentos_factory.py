@@ -1066,3 +1066,80 @@ class TestResyncManagerFactoryIntegration:
 
         warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert not any("Slice 3" in str(w) for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# 12. VQ010 factory invariant (auth-vq010-isolation-guard, WU4 — test-only)
+# ---------------------------------------------------------------------------
+
+
+class TestIsolationInvariant:
+    """VQ010: the factory path keeps building isolated authorization configs.
+
+    Approval/invariant tests: the factory code is UNCHANGED by design (the
+    adapter already enforces ``user_isolation=True``); these tests pin that
+    invariant so the new startup guards can never mask a factory drift.
+    """
+
+    def test_adapter_build_yields_user_isolation_true(
+        self,
+        mock_agent_registry,
+        mock_team_registry,
+        mock_workflow_registry,
+        mock_knowledge_registry,
+        mock_interface_registry,
+        mock_db_manager,
+        mocker,
+    ) -> None:
+        """Adapter path: built authorization_config.user_isolation is strictly True."""
+        from yaml_agno.agentos.authorization_adapter import AuthorizationAdapter
+
+        sm = mocker.Mock(side_effect=lambda key: {"JWT_SECRET": "resolved-secret"}[key])
+        auth_adapter = AuthorizationAdapter(secret_manager=sm)
+
+        factory_with_adapter = AgentOSFactory(
+            agent_registry=mock_agent_registry,
+            team_registry=mock_team_registry,
+            workflow_registry=mock_workflow_registry,
+            knowledge_registry=mock_knowledge_registry,
+            interface_registry=mock_interface_registry,
+            db_manager=mock_db_manager,
+            authorization_adapter=auth_adapter,
+        )
+
+        captured: dict = {}
+
+        def _fake_init(self, **kwargs):
+            captured.update(kwargs)
+
+        mocker.patch.object(AgentOS, "__init__", _fake_init)
+
+        config = AgentOSConfig(
+            name="isolated-os",
+            agents=["researcher"],
+            authorization=AuthorizationSettings(
+                enabled=True,
+                config={
+                    "algorithm": "HS256",
+                    "verification_keys": ["${SECRET:JWT_SECRET}"],
+                },
+            ),
+        )
+        factory_with_adapter.build(config)
+
+        assert captured["authorization"] is True
+        assert captured["authorization_config"].user_isolation is True
+
+    def test_no_adapter_user_isolation_override_raises(self, factory) -> None:
+        """Legacy path (no adapter): user_isolation override → AuthorizationBuildError."""
+        config = AgentOSConfig(
+            name="legacy-override-os",
+            agents=["researcher"],
+            authorization=AuthorizationSettings(
+                enabled=True,
+                config={"user_isolation": True},
+            ),
+        )
+
+        with pytest.raises(AuthorizationBuildError, match="user_isolation"):
+            factory.build(config)
