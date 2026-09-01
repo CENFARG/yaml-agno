@@ -29,9 +29,9 @@ Gitflow (mirrors S5a.1): per WU, branch `feature/vq010-wu{n}` off `main` → foc
 
 ## Phase 2: WU2 — YamlAgentOS Guard
 
-- [ ] 2.1 RED: in `tests/unit/api/test_app_jwt_mode.py` add "YamlAgentOS refuses unisolated construction" (None/explicit-False/implicit-default → `ValueError` VQ010, pre-superclass), "YamlAgentOS preserves JD-01", "Dev path unchanged" (no-auth → 200 (`X-Tenant-Id`)).
-- [ ] 2.2 GREEN: in `src/yaml_agno/api/app.py` call predicate after JD-01 (`:189`); `ValueError` before `super().__init__`.
-- [ ] 2.3 RED+GREEN+REFACTOR: "YamlAgentOS accepts isolated config": constructs with `mount_tenant_context=False`; `get_app()` mounts no `TenantContextMiddleware`; shared fixtures.
+- [x] 2.1 RED: in `tests/unit/api/test_app_jwt_mode.py` add "YamlAgentOS refuses unisolated construction" (None/explicit-False/implicit-default → `ValueError` VQ010, pre-superclass), "YamlAgentOS preserves JD-01", "Dev path unchanged" (no-auth → 200 (`X-Tenant-Id`)).
+- [x] 2.2 GREEN: in `src/yaml_agno/api/app.py` call predicate after JD-01 (`:189`); `ValueError` before `super().__init__`.
+- [x] 2.3 RED+GREEN+REFACTOR: "YamlAgentOS accepts isolated config": constructs with `mount_tenant_context=False`; `get_app()` mounts no `TenantContextMiddleware`; shared fixtures.
 
 ## Phase 3: WU3 — run_server Guard
 

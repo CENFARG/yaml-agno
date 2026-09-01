@@ -41,6 +41,7 @@ from agno.os.config import AuthorizationConfig
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from yaml_agno.agentos.authorization_adapter import _require_isolated_auth
 from yaml_agno.api.health import get_liveness_router, get_readiness_router
 from yaml_agno.api.middleware.tenant_context import TenantContextMiddleware
 from yaml_agno.factories.agent_factory import AgentFactory
@@ -167,7 +168,10 @@ class YamlAgentOS(AgentOS):
 
         Raises:
             ValueError: If both ``agents`` and ``config_path`` are provided, or if
-                both ``authorization=True`` and ``mount_tenant_context=True`` are set (JD-01).
+                both ``authorization=True`` and ``mount_tenant_context=True`` are set (JD-01),
+                or if ``authorization=True`` is not paired with an ``AuthorizationConfig``
+                whose ``user_isolation`` is strictly ``True`` (VQ010 isolation refusal,
+                raised BEFORE delegating to the Agno superclass).
             pydantic.ValidationError: If a YAML entry fails ``AgentConfig``
                 validation.
             yaml.YAMLError: If the YAML document at ``config_path`` is
@@ -187,6 +191,10 @@ class YamlAgentOS(AgentOS):
                 "When JWT authorization is active, TenantContextMiddleware must not be mounted "
                 "(set mount_tenant_context=False)."
             )
+
+        refusal = _require_isolated_auth(authorization, authorization_config)
+        if refusal is not None:
+            raise ValueError(refusal)
 
         resolved_agents = self._resolve_agents(agents=agents, config_path=config_path)
 
